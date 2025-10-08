@@ -20,6 +20,7 @@
 #include "common/dnnl_thread.hpp"
 #include "common/type_helpers.hpp"
 #include "common/utils.hpp"
+#include "cpu/aarch64/cpu_isa_traits.hpp"
 #include "cpu/cpu_primitive.hpp"
 #include "cpu/scale_utils.hpp"
 
@@ -480,6 +481,23 @@ status_t brgemm_convolution_fwd_t<isa>::pd_t::init(engine_t *engine) {
     brgemm_descriptors_->resize(brgs_sz_);
 
     const auto &p = attr()->post_ops_;
+
+    // TODO: fix failing post ops for bf16 on sve 128
+    const bool is_bf16
+            = src_type == data_type::bf16 && wei_type == data_type::bf16;
+    if (is_bf16 && get_max_cpu_isa() == sve_128) {
+        for (auto const &entry : p.entry_) {
+            const bool is_failing_po = entry.is_eltwise()
+                    && one_of(entry.eltwise.alg,
+                            // these fail due to label offset being too large
+                            alg_kind::eltwise_tanh, alg_kind::eltwise_gelu_tanh,
+                            alg_kind::eltwise_gelu_erf,
+                            // this po segfaults TODO: check issues with f32
+                            alg_kind::eltwise_log);
+            VDISPATCH_CONV(!is_failing_po, VERBOSE_BAD_ALGORITHM);
+        }
+    }
+
     const int sum_idx = p.find(primitive_kind::sum);
     with_sum = (sum_idx != -1);
 
@@ -648,7 +666,7 @@ status_t brgemm_convolution_fwd_t<isa>::add_po_kernel(
     bcfg->alpha = !is_init && IMPLICATION(jcp.with_sum, jcp.use_buffer);
     bcfg->beta = is_init ? 0 : 1;
     CHECK(safe_ptr_assign(kernels_po_[ker_idx],
-            new jit_brgemm_kernel_post_ops<isa>(jcp, *bcfg, *_pd->attr())));
+            new jit_brgemm_kernel_post_ops_t<isa>(jcp, *bcfg, *_pd->attr())));
     kernels_po_[ker_idx]->create_kernel();
     return status::success;
 }

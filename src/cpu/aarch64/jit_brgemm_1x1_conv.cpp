@@ -79,7 +79,8 @@ status_t brgemm_1x1_convolution_fwd_t<isa>::pd_t::init(engine_t *engine) {
             weights_md_, dst_md_, bias_md_, attr_, dnnl_get_max_threads()));
 
     // brgemm is slower than jit_sve when combined with reorders for shapes where strides < 2
-    if (one_of(data_type::f32, src_type, wei_type)
+    const convolution_desc_t &cd = *desc();
+    if (!cd.use_inversion && one_of(data_type::f32, src_type, wei_type)
             && (jcp_.stride_w < 2 || jcp_.stride_h < 2)) {
         return status::unimplemented;
     }
@@ -89,6 +90,23 @@ status_t brgemm_1x1_convolution_fwd_t<isa>::pd_t::init(engine_t *engine) {
     const float alpha = 1.0;
     const float beta = 1.0;
     const auto &p = attr()->post_ops_;
+
+    // TODO: fix failing post ops for bf16 on sve 128
+    const bool is_bf16
+            = src_type == data_type::bf16 && wei_type == data_type::bf16;
+    if (is_bf16 && get_max_cpu_isa() == sve_128) {
+        for (auto const &entry : p.entry_) {
+            const bool is_failing_po = entry.is_eltwise()
+                    && one_of(entry.eltwise.alg,
+                            // these fail due to label offset being too large
+                            alg_kind::eltwise_tanh, alg_kind::eltwise_gelu_tanh,
+                            alg_kind::eltwise_gelu_erf,
+                            // this po segfaults TODO: check issues with f32
+                            alg_kind::eltwise_log);
+            VDISPATCH_CONV(!is_failing_po, VERBOSE_BAD_ALGORITHM);
+        }
+    }
+
     const int sum_idx = p.find(primitive_kind::sum);
     with_sum = (sum_idx != -1);
     // Check if postop sum datatype is supported

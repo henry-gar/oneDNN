@@ -84,7 +84,7 @@ constexpr Xbyak_aarch64::Operand::Code abi_save_gpr_regs[]
                 Xbyak_aarch64::Operand::X27, Xbyak_aarch64::Operand::X28};
 
 // See "Procedure Call Standsard for the ARM 64-bit Architecture (AArch64)"
-static const Xbyak_aarch64::XReg abi_param1(Xbyak_aarch64::Operand::X0),
+const Xbyak_aarch64::XReg abi_param1(Xbyak_aarch64::Operand::X0),
         abi_param2(Xbyak_aarch64::Operand::X1),
         abi_param3(Xbyak_aarch64::Operand::X2),
         abi_param4(Xbyak_aarch64::Operand::X3),
@@ -95,7 +95,8 @@ static const Xbyak_aarch64::XReg abi_param1(Xbyak_aarch64::Operand::X0),
         abi_not_param1(Xbyak_aarch64::Operand::X15);
 } // namespace
 
-class jit_generator : public Xbyak_aarch64::CodeGenerator, public c_compatible {
+class jit_generator_t : public Xbyak_aarch64::CodeGenerator,
+                        public c_compatible {
 public:
     using c_compatible::operator new;
     using c_compatible::operator new[];
@@ -160,7 +161,9 @@ public:
     constexpr static size_t translator_stack_offset = 1024 * 128;
     constexpr static uint32_t DUMMY_IDX = 99;
 
-    inline size_t get_size_of_abi_save_regs() { return size_of_abi_save_regs; }
+    inline size_t get_size_of_abi_save_regs() const {
+        return size_of_abi_save_regs;
+    }
 
     void preamble() {
         using namespace Xbyak_aarch64::util;
@@ -701,16 +704,15 @@ public:
         L(label_tbl_end);
     }
 
-    DNNL_DISALLOW_COPY_AND_ASSIGN(jit_generator);
+    DNNL_DISALLOW_COPY_AND_ASSIGN(jit_generator_t);
 
-public:
-    jit_generator(void *code_ptr = nullptr, size_t code_size = MAX_CODE_SIZE,
+    jit_generator_t(void *code_ptr = nullptr, size_t code_size = MAX_CODE_SIZE,
             bool use_autogrow = true, cpu_isa_t max_cpu_isa = isa_all)
         : Xbyak_aarch64::CodeGenerator(code_size,
                 (code_ptr == nullptr && use_autogrow) ? Xbyak_aarch64::AutoGrow
                                                       : code_ptr)
         , max_cpu_isa_(max_cpu_isa) {}
-    ~jit_generator() override = default;
+    ~jit_generator_t() override = default;
 
     virtual const char *name() const = 0;
     virtual const char *source_file() const = 0;

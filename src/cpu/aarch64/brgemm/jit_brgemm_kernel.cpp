@@ -62,9 +62,9 @@ namespace aarch64 {
 
 using namespace dnnl::impl::utils;
 
-struct jit_brgemm_kernel_t : public jit_generator {
+struct jit_brgemm_kernel_t : public jit_generator_t {
     jit_brgemm_kernel_t(const brgemm_t &abrg)
-        : jit_generator(nullptr, MAX_CODE_SIZE, true, sve_512)
+        : jit_generator_t(nullptr, MAX_CODE_SIZE, true, sve_512)
         , brg(abrg)
         , postops_injector_(nullptr)
         , max_effective_vregs(
@@ -222,7 +222,7 @@ private:
     PReg ld_full_mask = PReg(2);
     PReg ld_tail_mask = PReg(3);
 
-    ZReg accm(int ld_block, int bd, int ld) {
+    ZReg accm(int ld_block, int bd, int ld) const {
         return ZReg(max_effective_vregs - 1 - (bd * ld_block + ld));
     }
 
@@ -2000,9 +2000,8 @@ brgemm_attr_t::brgemm_attr_t()
     , bd_mask(nullptr)
     , static_offsets(nullptr) {}
 
-brgemm_kernel_common_t::brgemm_kernel_common_t(const brgemm_t abrd) {
-    brgemm_kernel_ = new jit_brgemm_kernel_t(abrd);
-}
+brgemm_kernel_common_t::brgemm_kernel_common_t(const brgemm_t abrd)
+    : brgemm_kernel_(new jit_brgemm_kernel_t(abrd)) {}
 
 status_t brgemm_kernel_common_t::create_kernel() {
     return brgemm_kernel_->create_kernel();
@@ -2012,7 +2011,7 @@ void brgemm_kernel_common_t::operator()(brgemm_kernel_params_t *params) const {
     (*brgemm_kernel_)(params);
 }
 
-const jit_generator *brgemm_kernel_common_t::get_jit_generator() const {
+const jit_generator_t *brgemm_kernel_common_t::get_jit_generator() const {
     return brgemm_kernel_;
 }
 

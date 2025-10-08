@@ -125,9 +125,9 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install scipy
+      - name: Install dependencies
         if: ${{ matrix.config.build == 'Release' }}
-        run: pip install scipy statistics
+        run: pip install scipy statistics gitpython
 
       - name: Clone ACL
         run: ${{ github.workspace }}/oneDNN/.github/automation/aarch64/build_acl.sh
@@ -172,7 +172,7 @@ jobs:
           ONEDNN_ACTION: build
 
       - name: Run oneDNN tests
-        run: ${{ github.workspace }}/oneDNN/.github/automation/aarch64/test.sh ${{ github.workspace }}/test_results.xml
+        run: ${{ github.workspace }}/oneDNN/.github/automation/aarch64/test.sh ${{ github.workspace }}/test_results.xml ${{ github.workspace }}/test_results.log
         working-directory: ${{ github.workspace }}/oneDNN/build
         env:
           CTEST_PARALLEL_LEVEL: 6

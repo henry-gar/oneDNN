@@ -40,7 +40,7 @@ namespace aarch64 {
 using namespace dnnl::impl::utils;
 
 jit_brdgmm_kernel_base_t::jit_brdgmm_kernel_base_t(const brgemm_t &abrd)
-    : jit_generator(nullptr, MAX_CODE_SIZE, true, sve_512)
+    : jit_generator_t(nullptr, MAX_CODE_SIZE, true, sve_512)
     , brg(abrd)
     , simd_w_(cpu_isa_traits<sve_512>::vlen / brg.typesize_C) {
 
@@ -907,9 +907,8 @@ void jit_brdgmm_kernel_base_t::generate() {
     if (is_fast_vnni_int8()) { assert(!"unsupported\n"); }
 }
 
-brdgmm_kernel_t::brdgmm_kernel_t(const brgemm_t abrd) {
-    brgemm_kernel_ = new jit_brdgmm_kernel_base_t(abrd);
-}
+brdgmm_kernel_t::brdgmm_kernel_t(const brgemm_t abrd)
+    : brgemm_kernel_(new jit_brdgmm_kernel_base_t(abrd)) {}
 
 status_t brdgmm_kernel_t::create_kernel() {
     return brgemm_kernel_->create_kernel();
@@ -919,7 +918,7 @@ void brdgmm_kernel_t::operator()(brgemm_kernel_params_t *params) const {
     (*brgemm_kernel_)(params);
 }
 
-const jit_generator *brdgmm_kernel_t::get_jit_generator() const {
+const jit_generator_t *brdgmm_kernel_t::get_jit_generator() const {
     return brgemm_kernel_;
 }
 

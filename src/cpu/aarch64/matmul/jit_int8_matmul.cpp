@@ -81,7 +81,7 @@ using namespace nstl;
 
 using namespace data_type;
 
-struct jit_int8_matmul_kernel_t : public jit_generator {
+struct jit_int8_matmul_kernel_t : public jit_generator_t {
 
     DECLARE_CPU_JIT_AUX_FUNCTIONS(jit_int8_matmul_kernel_t)
 
@@ -121,11 +121,11 @@ struct jit_int8_matmul_kernel_t : public jit_generator {
     call_params_t inp;
 
     void operator()(const call_params_t *p) {
-        return jit_generator::operator()(p);
+        return jit_generator_t::operator()(p);
     }
 
     ZReg loadb(int ld) { return ZReg(ld + 1); }
-    ZReg acc(int bd, int ld) {
+    ZReg acc(int bd, int ld) const {
         return ZReg(bd * brg_.ld_block + ld + brg_.ld_block + 1);
     }
     void zero_regs() {

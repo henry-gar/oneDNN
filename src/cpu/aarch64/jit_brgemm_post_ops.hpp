@@ -51,20 +51,17 @@ struct brgemm_kernel_diff_bias_t {
 
 #define GET_OFF(field) (uint32_t) offsetof(brgemm_kernel_diff_bias_t, field)
 
-struct jit_brgemm_kernel_diff_bias_t : public jit_generator {
+struct jit_brgemm_kernel_diff_bias_t : public jit_generator_t {
     jit_brgemm_kernel_diff_bias_t(
             const jit_brgemm_primitive_conf_t &ajbgp, const brgemm_t &abrg)
         : brg_(abrg)
         , ddst_dt_(ajbgp.dst_dt)
         , bia_dt_(ajbgp.bia_dt)
         , acc_dt_(ajbgp.acc_dt)
+        , ddst_typesize_(types::data_type_size(ddst_dt_))
         , bia_typesize_(types::data_type_size(bia_dt_))
-        , acc_typesize_(types::data_type_size(acc_dt_)) {
-
-        ddst_dt_ = ajbgp.dst_dt;
-        ddst_typesize_ = types::data_type_size(ddst_dt_);
-        mult_ = data_type_vnni_granularity(ddst_dt_);
-    }
+        , acc_typesize_(types::data_type_size(acc_dt_))
+        , mult_(data_type_vnni_granularity(ddst_dt_)) {}
 
     DECLARE_CPU_JIT_AUX_FUNCTIONS(jit_brgemm_kernel_diff_bias_t)
 
@@ -279,9 +276,9 @@ struct brgemm_kernel_post_ops_t {
 };
 
 template <cpu_isa_t isa>
-struct jit_brgemm_kernel_post_ops : public jit_generator {
+struct jit_brgemm_kernel_post_ops_t : public jit_generator_t {
 
-    jit_brgemm_kernel_post_ops(const jit_brgemm_conv_conf_t &ajcp,
+    jit_brgemm_kernel_post_ops_t(const jit_brgemm_conv_conf_t &ajcp,
             const brgemm_t &abrg, const primitive_attr_t &aattr)
         : brg(abrg)
         , jcp(ajcp)
@@ -334,7 +331,7 @@ struct jit_brgemm_kernel_post_ops : public jit_generator {
         bia_typesize_ = (jcp.with_bias) ? types::data_type_size(bia_dt_) : 0;
     }
 
-    ~jit_brgemm_kernel_post_ops() override = default;
+    ~jit_brgemm_kernel_post_ops_t() override = default;
 
     DECLARE_CPU_JIT_AUX_FUNCTIONS(jit_brgemm_kernel_post_ops)
 

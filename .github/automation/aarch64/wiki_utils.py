@@ -97,8 +97,9 @@ def parse_unit(args):
         body = "| :x: | Failed Test |\n" "| :-----------: | :------: |\n"
         for test in failed_tests:
             body += f"| :x: | {test} |\n"
+        body = body[:-1] # Strip the last '\n'
     else:
-        body = ":white_check_mark: unit tests passed\n"
+        body = ":white_check_mark: unit tests passed"
 
     parse(args.out_file, "Unit test results", args.title, body)
 
@@ -120,7 +121,7 @@ def main():
     unit_parser.add_argument(
         "--title", required=True, help="title of unit test run"
     )
-    # xml is the only machine-readable output format from ctest
+    # xml required for machine-readable unit test results
     unit_parser.add_argument(
         "--in-file", required=True, help="xml file storing test results"
     )

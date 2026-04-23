@@ -323,7 +323,7 @@ status_t brgemm_convolution_fwd_t<isa>::pd_t::init(engine_t *engine) {
 
     bool ok = is_fwd() && set_default_alg_kind(alg_kind::convolution_direct)
             && IMPLICATION(is_int8,
-                    one_of(dst_type, s8, u8, s32, f32)
+                    one_of(dst_type, s8, u8, s32, f32, bf16)
                             && one_of(bias_md_.data_type, data_type::undef, f32,
                                     s32, s8, u8))
             && IMPLICATION(!is_int8,

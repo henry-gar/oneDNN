@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -39,8 +39,8 @@ pass_base_t &pass_registry_t::register_pass(const std::string &backend_name,
     // create new pass
     auto find = std::find_if(passes_.begin(), passes_.end(),
             [&pass_name](std::list<pass_base_ptr>::value_type &p) -> bool {
-                return p->get_pass_name() == pass_name;
-            });
+        return p->get_pass_name() == pass_name;
+    });
     if (find != passes_.end()) {
         return **find;
     } else {

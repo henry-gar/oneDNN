@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2024-2025 Intel Corporation
+* Copyright 2024 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -44,8 +44,8 @@ inline auto host_task_impl(H &cgh, F &&f, int) -> decltype(cgh.host_task(f)) {
 }
 
 template <typename H, typename F>
-inline auto host_task_impl(H &cgh, F &&f, long)
-        -> decltype(cgh.codeplay_host_task(f)) {
+inline auto host_task_impl(
+        H &cgh, F &&f, long) -> decltype(cgh.codeplay_host_task(f)) {
     cgh.codeplay_host_task(f);
 }
 
@@ -61,10 +61,6 @@ constexpr auto target_device = ::sycl::target::device;
 template <typename T, int dims>
 using local_accessor = ::sycl::accessor<T, dims,
         ::sycl::access::mode::read_write, ::sycl::access::target::local>;
-
-using ext_intel_gpu_slices = ::sycl::ext::intel::info::device::gpu_slices;
-using ext_intel_gpu_subslices_per_slice
-        = ::sycl::ext::intel::info::device::gpu_subslices_per_slice;
 
 inline const auto &cpu_selector_v = ::sycl::cpu_selector_v;
 inline const auto &gpu_selector_v = ::sycl::gpu_selector_v;

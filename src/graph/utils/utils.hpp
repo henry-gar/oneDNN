@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -68,6 +68,10 @@ using namespace dnnl::impl::utils;
         } break; \
         case graph::data_type::s32: { \
             typedef int32_t DType; \
+            { __VA_ARGS__ } \
+        } break; \
+        case graph::data_type::s64: { \
+            typedef int64_t DType; \
             { __VA_ARGS__ } \
         } break; \
         default: assert(!"unsupported host scalar data type"); \

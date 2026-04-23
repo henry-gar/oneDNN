@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2016-2025 Intel Corporation
+* Copyright 2016 Intel Corporation
 * Copyright 2022-2023 Arm Ltd. and affiliates
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
@@ -205,10 +205,10 @@ protected:
         workspace = test::make_memory(p_workspace_desc, eng);
 
         EXPECT_ANY_THROW(pooling_forward(pool_prim_desc, {}));
-        pooling_forward(pool_prim_desc)
-                .execute(strm,
-                        {{DNNL_ARG_SRC, src}, {DNNL_ARG_DST, dst},
-                                {DNNL_ARG_WORKSPACE, workspace}});
+        pooling_forward prim(pool_prim_desc);
+        prim.execute(strm,
+                {{DNNL_ARG_SRC, src}, {DNNL_ARG_DST, dst},
+                        {DNNL_ARG_WORKSPACE, workspace}});
 
         strm.wait();
 
@@ -239,11 +239,10 @@ protected:
                 ker, dilation, pad_l, pad_r);
         check_prim_desc(pool_bwd_prim_desc);
 
-        pooling_backward(pool_bwd_prim_desc)
-                .execute(strm,
-                        {{DNNL_ARG_DIFF_DST, diff_dst},
-                                {DNNL_ARG_DIFF_SRC, diff_src},
-                                {DNNL_ARG_WORKSPACE, workspace}});
+        pooling_backward prim(pool_bwd_prim_desc);
+        prim.execute(strm,
+                {{DNNL_ARG_DIFF_DST, diff_dst}, {DNNL_ARG_DIFF_SRC, diff_src},
+                        {DNNL_ARG_WORKSPACE, workspace}});
         strm.wait();
 
         check_zero_tail<data_t>(0, diff_src);
@@ -254,7 +253,9 @@ using pooling_bwd_test_float = pooling_bwd_test_t<float>;
 using pool_bwd_test_params_float = pool_bwd_test_params_t;
 
 #define EXPAND_SIZES_3D(...) \
-    5, { __VA_ARGS__ }
+    5, { \
+        __VA_ARGS__ \
+    }
 #define EXPAND_SIZES_2D( \
         mb, ic, ih, iw, oh, ow, kh, kw, dh, dw, padt, padl, strh, strw) \
     4, { \

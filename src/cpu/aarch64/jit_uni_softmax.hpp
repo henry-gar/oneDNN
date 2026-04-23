@@ -1,7 +1,7 @@
 /*******************************************************************************
-* Copyright 2019-2022 Intel Corporation
+* Copyright 2019 Intel Corporation
 * Copyright 2020-2024 FUJITSU LIMITED
-* Copyright 2025 Arm Ltd. and affiliates
+* Copyright 2025-2026 Arm Ltd. and affiliates
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -19,13 +19,11 @@
 #ifndef CPU_AARCH64_JIT_UNI_SOFTMAX_HPP
 #define CPU_AARCH64_JIT_UNI_SOFTMAX_HPP
 
-#include <assert.h>
 #include <memory>
 
 #include "common/c_types_map.hpp"
 #include "common/memory_tracking.hpp"
 #include "common/primitive.hpp"
-#include "common/type_helpers.hpp"
 #include "common/utils.hpp"
 
 #include "cpu/aarch64/cpu_isa_traits.hpp"
@@ -61,9 +59,9 @@ struct jit_uni_softmax_fwd_t : public primitive_t {
 
                 // It is fine to use float here as the kernel uses halfs of
                 // vector registers.
-                const auto blk_size = cpu_isa_traits<isa>::vlen / sizeof(float);
-                // 31 is a general limit, 2 is for unroll_regs_ = 4;
-                const size_t max_stride = (1LL << (31 - 2)) - 1;
+                const int blk_size = simd_elems(data_type_t::dnnl_f32, isa);
+                // 31 is a general limit, 4 is for unroll_regs_ = 16;
+                const size_t max_stride = (1LL << (31 - 4)) - 1;
                 const int last_blk = bd.inner_nblks - 1;
                 return bd.inner_blks[last_blk] == blk_size
                         && bd.inner_idxs[last_blk] == axis()
@@ -76,12 +74,14 @@ struct jit_uni_softmax_fwd_t : public primitive_t {
             const auto src_dt = src_md()->data_type;
             const auto dst_dt = dst_md()->data_type;
             bool ok = mayiuse(isa) && is_fwd() && !has_zero_dim_memory()
-                    && utils::one_of(src_dt, f32, bf16, s8, u8)
-                    && utils::one_of(dst_dt, f32, bf16, s8, u8)
+                    && utils::one_of(src_dt, f32, bf16, f16, s8, u8)
+                    && utils::one_of(dst_dt, f32, bf16, f16, s8, u8)
                     && IMPLICATION(
                             utils::one_of(bf16, src_dt, dst_dt), mayiuse_bf16())
-                    && (mayiuse(sve_512) || mayiuse(sve_256)
-                            || mayiuse(sve_128))
+                    && IMPLICATION(isa == asimd,
+                            utils::one_of(src_dt, f32, f16)
+                                    && utils::one_of(dst_dt, f32, f16)
+                                    && is_softmax())
                     && attr()->has_default_values(skip_mask_t::scales)
                     && attr_scales_ok()
                     && set_default_formats() == status::success;
@@ -96,14 +96,14 @@ struct jit_uni_softmax_fwd_t : public primitive_t {
             init_scratchpad();
 
             return status::success;
-        };
+        }
 
         int nthr_; // To not exceed the limit in execute used for set up.
 
     private:
         void init_scratchpad() {
-            if (utils::one_of(
-                        dst_md()->data_type, data_type::u8, data_type::s8)) {
+            if (utils::one_of(dst_md()->data_type, data_type::u8, data_type::s8,
+                        data_type::bf16, data_type::f16)) {
                 auto scratchpad = scratchpad_registry().registrar();
                 scratchpad.template book<char>(
                         memory_tracking::names::key_softmax_interim_store,
@@ -144,7 +144,7 @@ struct jit_uni_softmax_bwd_t : public primitive_t {
 
                 // It is fine to use float here as the kernel uses halfs of
                 // vector registers.
-                const auto blk_size = cpu_isa_traits<isa>::vlen / sizeof(float);
+                const int blk_size = simd_elems(data_type_t::dnnl_f32, isa);
                 if (dst_d.is_plain())
                     return bd.strides[axis()] == 1;
                 else {
@@ -167,7 +167,6 @@ struct jit_uni_softmax_bwd_t : public primitive_t {
                                            diff_dst_md()->data_type,
                                            diff_src_md()->data_type),
                             mayiuse_bf16())
-                    && (mayiuse(sve_512) || mayiuse(sve_256))
                     && attr()->has_default_values()
                     && set_default_formats() == status::success;
 
@@ -182,7 +181,7 @@ struct jit_uni_softmax_bwd_t : public primitive_t {
             if (!ok) return status::unimplemented;
 
             return status::success;
-        };
+        }
     };
 
     jit_uni_softmax_bwd_t(const pd_t *apd);

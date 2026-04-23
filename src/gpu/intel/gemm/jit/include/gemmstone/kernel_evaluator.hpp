@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -14,8 +14,8 @@
 * limitations under the License.
 *******************************************************************************/
 
-#ifndef GEMMSTONE_GUARD_KERNEL_EVALUATOR_HPP
-#define GEMMSTONE_GUARD_KERNEL_EVALUATOR_HPP
+#ifndef GEMMSTONE_INCLUDE_GEMMSTONE_KERNEL_EVALUATOR_HPP
+#define GEMMSTONE_INCLUDE_GEMMSTONE_KERNEL_EVALUATOR_HPP
 
 #include "gemmstone/config.hpp"
 #include "gemmstone/kernel_catalog.hpp"

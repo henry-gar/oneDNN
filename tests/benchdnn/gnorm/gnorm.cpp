@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -534,8 +534,8 @@ void skip_invalid_prb(const prb_t *prb, res_t *res) {
 
 void setup_cmp(compare::compare_t &cmp, const prb_t *prb, data_kind_t kind,
         const args_t &ref_args) {
-    const bool compare_with_norm = (prb->dir & FLAG_BWD);
-    cmp.set_norm_validation_mode(compare_with_norm);
+    const bool allow_norm_check = (prb->dir & FLAG_BWD);
+    cmp.set_allow_norm_check(allow_norm_check);
 
     const auto dt = prb->dir & FLAG_FWD ? prb->dt[1] : prb->dt[0];
     // Digits must be non-negative for safe left-shifting when `digits_dt`
@@ -568,28 +568,27 @@ void setup_cmp(compare::compare_t &cmp, const prb_t *prb, data_kind_t kind,
     const auto gnorm_add_check =
             [&, kind, prb](
                     const compare::compare_t::driver_check_func_args_t &args) {
-                if (!((prb->dir & FLAG_FWD) && kind == DST && prb->use_sh()))
-                    return false;
+        if (!((prb->dir & FLAG_FWD) && kind == DST && prb->use_sh()))
+            return false;
 
-                const auto &sh = ref_args.find(DNNL_ARG_SHIFT);
-                const auto &dst = ref_args.find(DNNL_ARG_DST);
-                const int64_t c
-                        = dst.get_idx(args.idx, 1 << 1 /* last_dim_mask */);
-                const float beta = sh.get_f32_elem(c);
-                // Using an empirically derived threshold, check if
-                // cancellation error in `|Y| = |a*X - (-b)|` is huge.
-                const float abs_exp = fabsf(args.exp);
-                const float norm_denom = abs_exp > FLT_MIN ? abs_exp : 1.f;
-                const float abs_exp_delta = fabsf(args.exp - beta);
-                bool maybe_cancel_error = abs_exp_delta / norm_denom > 1.f;
-                if (!maybe_cancel_error) return false;
+        const auto &sh = ref_args.find(DNNL_ARG_SHIFT);
+        const auto &dst = ref_args.find(DNNL_ARG_DST);
+        const int64_t c = dst.get_idx(args.idx, 1 << 1 /* last_dim_mask */);
+        const float beta = sh.get_f32_elem(c);
+        // Using an empirically derived threshold, check if
+        // cancellation error in `|Y| = |a*X - (-b)|` is huge.
+        const float abs_exp = fabsf(args.exp);
+        const float norm_denom = abs_exp > FLT_MIN ? abs_exp : 1.f;
+        const float abs_exp_delta = fabsf(args.exp - beta);
+        bool maybe_cancel_error = abs_exp_delta / norm_denom > 1.f;
+        if (!maybe_cancel_error) return false;
 
-                // Check for error in `a * X`
-                float diff_aX = fabsf((args.exp - beta) - (args.got - beta));
-                float rel_diff_aX = diff_aX
-                        / (abs_exp_delta > FLT_MIN ? abs_exp_delta : 1.f);
-                return rel_diff_aX <= args.trh;
-            };
+        // Check for error in `a * X`
+        float diff_aX = fabsf((args.exp - beta) - (args.got - beta));
+        float rel_diff_aX
+                = diff_aX / (abs_exp_delta > FLT_MIN ? abs_exp_delta : 1.f);
+        return rel_diff_aX <= args.trh;
+    };
     cmp.set_driver_check_function(gnorm_add_check);
 }
 
@@ -613,7 +612,7 @@ std::vector<int> supported_exec_args(dir_t dir) {
             DNNL_ARG_DIFF_SRC,
     };
     return (dir & FLAG_FWD) ? exec_fwd_args : exec_bwd_args;
-};
+}
 
 void binary_po_fill_cfg(std::unordered_map<int, fill_cfg_t> &fill_cfg_map,
         int exec_arg, const dnn_mem_t &mem, const attr_t &attr) {
@@ -753,7 +752,7 @@ int doit(const std::vector<benchdnn_dnnl_wrapper_t<dnnl_primitive_t>> &v_prim,
 
     args_t args(mem_map), ref_args(ref_mem_map);
 
-    SAFE(execute_and_wait(prim, args, res), WARN);
+    SAFE(run_execution(prim, args, res), WARN);
 
     check_correctness(prb, get_kinds_to_check(prb), args, ref_args, setup_cmp,
             res, prb->dir);

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2023 Intel Corporation
+* Copyright 2021 Intel Corporation
 * Copyright 2024 FUJITSU LIMITED
 * Copyright 2025 Arm Ltd. and affiliates
 *
@@ -21,6 +21,7 @@
 #include "common/type_helpers.hpp"
 #include "common/utils.hpp"
 #include "cpu/aarch64/jit_generator.hpp"
+#include "xbyak_aarch64/xbyak_aarch64/xbyak_aarch64_reg.h"
 
 #include "cpu/aarch64/matmul/brgemm_matmul_copy_utils.hpp"
 
@@ -39,7 +40,7 @@ using namespace Xbyak_aarch64;
 #define LDR_IMM(reg, addr, off) \
     { \
         const uint64_t IMM12_MASK = ~uint64_t(0xfff); \
-        if (((off)&IMM12_MASK) == 0) { \
+        if (((off) & IMM12_MASK) == 0) { \
             ldr(reg, ptr(addr, off)); \
         } else { \
             add_imm(X_DEFAULT_ADDR, addr, off, X_TMP_0); \
@@ -50,7 +51,7 @@ using namespace Xbyak_aarch64;
 #define STR_IMM(reg, addr, off) \
     { \
         const uint64_t IMM12_MASK = ~uint64_t(0xfff); \
-        if (((off)&IMM12_MASK) == 0) { \
+        if (((off) & IMM12_MASK) == 0) { \
             str(reg, ptr(addr, off)); \
         } else { \
             add_imm(X_DEFAULT_ADDR, addr, off, X_TMP_0); \
@@ -586,7 +587,7 @@ void jit_brgemm_matmul_copy_b_f32_t::copy_16_8_x_n_block(
             continue;
         }
 
-        const opmask_t curr_msk = zero_padding < n_blk_step ? kTail : kFFFF;
+        const opmask_t curr_msk = zero_padding < n_blk_step ? kTail : P_ALL_ONE;
         const int blk_idx = iter % max_regs_available;
         load(blk_idx, k, n, curr_msk);
         add_imm(X_DEFAULT_ADDR, reg_tr_src, tr_src_off, X_TMP_0);
@@ -621,6 +622,7 @@ void jit_brgemm_matmul_copy_b_f32_t::compute_k_loop(int ncolumns) {
 }
 
 void jit_brgemm_matmul_copy_b_f32_t::generate() {
+
     preamble();
     eor(zmm_zero.d, zmm_zero.d, zmm_zero.d);
     LDR_IMM(reg_src, param1, GET_OFF(src));
@@ -751,11 +753,11 @@ private:
 
     void kmovw(Xbyak_aarch64::PReg k, unsigned w) {
         assert(!"under construction");
-    };
+    }
 
     void kmovq(Xbyak_aarch64::PReg k, size_t q) {
         assert(!"under construction");
-    };
+    }
 
     ZReg src_vmm(int i) {
         assert(i >= 0 && i < n_blk_step_);

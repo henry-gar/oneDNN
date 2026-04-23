@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2022 Intel Corporation
+* Copyright 2019 Intel Corporation
 * Copyright 2020-2024 FUJITSU LIMITED
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
@@ -99,6 +99,7 @@ static isa_info_t get_isa_info_t(void) {
     // descending order due to mayiuse check
 #define HANDLE_CASE(cpu_isa) \
     if (mayiuse(cpu_isa)) return isa_info_t(cpu_isa);
+    HANDLE_CASE(sme);
     HANDLE_CASE(sve_512);
     HANDLE_CASE(sve_256);
     HANDLE_CASE(sve_128);

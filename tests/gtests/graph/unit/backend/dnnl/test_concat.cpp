@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -37,7 +37,7 @@ struct concat_params_t {
 class concat_t : public ::testing::TestWithParam<concat_params_t> {
 public:
     void TestConcat() {
-        const auto params
+        const auto &params
                 = ::testing::TestWithParam<concat_params_t>::GetParam();
 
         std::vector<graph::dim_t> src0_dims = params.src0_shape;

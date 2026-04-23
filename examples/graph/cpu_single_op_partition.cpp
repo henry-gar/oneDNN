@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2024-2025 Intel Corporation
+* Copyright 2024 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -17,8 +17,12 @@
 /// @example cpu_single_op_partition.cpp
 /// > Annotated version: @ref graph_cpu_single_op_partition_cpp
 
+/// @page graph_cpu_single_op_partition_cpp_brief
+/// @brief This is an example to demonstrate how to build a simple op graph and run it
+/// on CPU.
+
 /// @page graph_cpu_single_op_partition_cpp Single op partition on CPU
-/// This is an example to demonstrate how to build a simple op graph and run it on CPU.
+/// \copybrief graph_cpu_single_op_partition_cpp_brief
 ///
 /// > Example code: @ref cpu_single_op_partition.cpp
 ///

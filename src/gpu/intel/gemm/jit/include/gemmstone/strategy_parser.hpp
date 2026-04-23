@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -14,8 +14,8 @@
 * limitations under the License.
 *******************************************************************************/
 
-#ifndef GEMMSTONE_GUARD_STRATEGY_PARSER_HPP
-#define GEMMSTONE_GUARD_STRATEGY_PARSER_HPP
+#ifndef GEMMSTONE_INCLUDE_GEMMSTONE_STRATEGY_PARSER_HPP
+#define GEMMSTONE_INCLUDE_GEMMSTONE_STRATEGY_PARSER_HPP
 
 #include "gemmstone/config.hpp"
 #include "gemmstone/problem.hpp"
@@ -25,7 +25,7 @@
 
 GEMMSTONE_NAMESPACE_START
 
-void parseStrategy(const char *str, ngen::HW hw, const GEMMProblem &problem, GEMMStrategy &strategy);
+void parseStrategy(const std::string &str, ngen::HW hw, const GEMMProblem &problem, GEMMStrategy &strategy);
 
 void adjustStrategy(ngen::HW hw, const GEMMProblem &problem, GEMMStrategy &strategy, const char *tags = nullptr);
 

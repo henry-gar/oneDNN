@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -53,13 +53,13 @@ status_t stream_t::init() {
             props = (flags() & stream_flags::in_order)
                     ? ::sycl::property_list {::sycl::property::queue::
                                                      in_order {},
-                            ::sycl::property::queue::enable_profiling {}}
+                              ::sycl::property::queue::enable_profiling {}}
                     : ::sycl::property_list {
-                            ::sycl::property::queue::enable_profiling {}};
+                              ::sycl::property::queue::enable_profiling {}};
         } else {
             props = (flags() & stream_flags::in_order)
-                    ? ::sycl::
-                            property_list {::sycl::property::queue::in_order {}}
+                    ? ::sycl::property_list {::sycl::property::queue::
+                                      in_order {}}
                     : ::sycl::property_list {};
         }
         impl()->set_queue(::sycl::queue(sycl_ctx, sycl_dev, props));
@@ -100,8 +100,8 @@ void stream_t::after_exec_hook() {
 //  not be defined. Some SFINAE is needed to avoid compile errors in this case.
 namespace syclex = ::sycl::ext::oneapi::experimental;
 template <typename Q>
-static auto get_graph_internal(const Q &q, bool &success, int)
-        -> decltype(q.ext_oneapi_get_graph()) {
+static auto get_graph_internal(
+        const Q &q, bool &success, int) -> decltype(q.ext_oneapi_get_graph()) {
     success = true;
     return q.ext_oneapi_get_graph();
 }

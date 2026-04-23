@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -260,20 +260,7 @@ struct jit_uni_dw_convolution_bwd_weights_t : public primitive_t {
         return status::success;
     }
 
-    status_t execute(const exec_ctx_t &ctx) const override {
-        switch (pd()->jcp_.harness) {
-            case harness_nxc:
-                execute_backward_weights_nxc(ctx);
-                execute_reduction_nxc(ctx);
-                break;
-            case harness_mb_reduction:
-                execute_backward_weights(ctx);
-                execute_reduction(ctx);
-                break;
-            default: assert(!"Invalid harness type");
-        }
-        return status::success;
-    }
+    status_t execute(const exec_ctx_t &ctx) const override;
 
 private:
     void execute_backward_weights(const exec_ctx_t &ctx) const;

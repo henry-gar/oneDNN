@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -50,7 +50,7 @@ struct brgemm_convolution_bwd_strided_t : public primitive_t {
 
         status_t init(engine_t *engine);
 
-        int brgs_sz_;
+        int brgs_sz_ {};
         std::shared_ptr<brgemm_containers::brgemm_desc_container_t> brgs_;
 
         jit_brgemm_conv_conf_t jcp_ = utils::zero<decltype(jcp_)>();
@@ -130,9 +130,9 @@ private:
     };
 
     struct brgemm_bwd_thread_ctx_t {
-        brgemm_bwd_thread_ctx_t(brgemm_bwd_exec_ctx_t &brgemm_ctx_, int ithr_,
-                brgemm_batch_element_t *__restrict brg_batch_, char *c_buffer_,
-                char *out_buffer_, char *wsp_tile_)
+        brgemm_bwd_thread_ctx_t(const brgemm_bwd_exec_ctx_t &brgemm_ctx_,
+                int ithr_, brgemm_batch_element_t *__restrict brg_batch_,
+                char *c_buffer_, char *out_buffer_, char *wsp_tile_)
             : brgemm_ctx(brgemm_ctx_)
             , ithr(ithr_)
             , brg_batch(brg_batch_)
@@ -158,7 +158,7 @@ private:
             , dst_zp_vals(nullptr)
             , s8s8_comp_ptr(nullptr) {}
 
-        brgemm_bwd_exec_ctx_t &brgemm_ctx;
+        const brgemm_bwd_exec_ctx_t &brgemm_ctx;
         int ithr;
         brgemm_batch_element_t *__restrict brg_batch;
         char *c_buffer;

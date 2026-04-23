@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2025 Intel Corporation
+* Copyright 2021 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -196,7 +196,8 @@ inline void linear_order_args(compute::kernel_arg_list_t &arg_list, int &argn,
             group_count += k_parallel_groups * k_sliced_phases;
 
             if (tiles_per_phase > 0) {
-                k_sync_slabs = k_parallel_groups + (tiles_per_phase >> 1);
+                k_sync_slabs = (k_parallel_groups + (tiles_per_phase >> 1))
+                        / tiles_per_phase;
                 if (k_sync_slabs > 0) k_sync_slabs--;
                 k_sync_slabs = std::min(k_sync_slabs, (k_padded - 1) / k0);
             }

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2016-2025 Intel Corporation
+* Copyright 2016 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@
 
 #include "common/bfloat16.hpp"
 #include "common/c_types_map.hpp"
+#include "common/compiler_workarounds.hpp"
 #include "common/dnnl_thread.hpp"
 #include "common/memory_tracking.hpp"
 #include "common/type_helpers.hpp"
@@ -76,7 +77,7 @@ status_t ref_batch_normalization_fwd_t<d_type>::execute_forward(
     CHECK(status);
     auto variance = pd()->stats_is_src()
             ? const_cast<acc_data_t *>(
-                    CTX_IN_MEM(const float *, DNNL_ARG_VARIANCE))
+                      CTX_IN_MEM(const float *, DNNL_ARG_VARIANCE))
             : CTX_OUT_CLEAN_MEM(float *, DNNL_ARG_VARIANCE, status);
     CHECK(status);
 
@@ -109,12 +110,12 @@ status_t ref_batch_normalization_fwd_t<d_type>::execute_forward(
     }
 
     const bool with_relu = pd()->with_relu_post_op(is_training);
-    auto maybe_post_op = [&](acc_data_t res) {
+    auto maybe_post_op = [= COMPAT_THIS_CAPTURE](acc_data_t res) {
         if (with_relu) return math::relu_fwd(res, pd()->alpha());
         return res;
     };
 
-    parallel_nd(C, [&](dim_t c) {
+    parallel_nd(C, [=](dim_t c) {
         acc_data_t v_mean = calculate_stats ? 0 : mean[c];
         acc_data_t v_variance = calculate_stats ? 0 : variance[c];
 
@@ -232,7 +233,7 @@ status_t ref_batch_normalization_bwd_t<d_type>::execute_backward(
         return status::success;
     }
 
-    parallel_nd(C, [&](dim_t c) {
+    parallel_nd(C, [=](dim_t c) {
         acc_data_t v_mean = mean[c];
         acc_data_t v_variance = variance[c];
         acc_data_t sqrt_variance

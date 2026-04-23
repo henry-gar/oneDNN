@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -24,13 +24,15 @@
 
 #include "gpu/gpu_utils.hpp"
 
-#include "gpu/intel/block_structure.hpp"
 #include "gpu/intel/compute/dispatch.hpp"
+#include "gpu/intel/compute/kernel_arg_list.hpp"
 
 namespace dnnl {
 namespace impl {
 namespace gpu {
 namespace intel {
+
+struct block_layout_t;
 
 bool memory_desc_ndims_ok(const memory_desc_t *md);
 
@@ -101,6 +103,7 @@ struct attr_info_t {
     bool with_host_src_scale;
     bool with_host_wei_scale;
     bool with_host_dst_scale;
+    bool with_dyn_dst_scale;
     bool with_host_src_zp;
     bool with_host_wei_zp;
     bool with_host_dst_zp;
@@ -183,8 +186,6 @@ struct outer_strides_getter_t {
 
 outer_strides_getter_t get_outer_strides(const memory_desc_wrapper &md);
 
-block_layout_t get_inner_layout(const memory_desc_wrapper &md);
-
 void def_offsets(const dim_t offs[4][MAX_NDIMS],
         compute::kernel_ctx_t &kernel_ctx, const char *str,
         const dim_idx_t ndims);
@@ -200,10 +201,6 @@ void def_data_type(compute::kernel_ctx_t &kernel_ctx, data_type_t dt,
 void def_memory_desc_info(compute::kernel_ctx_t &kernel_ctx,
         const memory_desc_info_t &md_info, const char *prefix,
         bool with_punning = true);
-
-void def_binary_alg_kinds(compute::kernel_ctx_t &kernel_ctx);
-
-void def_eltwise_alg_kinds(compute::kernel_ctx_t &kernel_ctx);
 
 bool post_ops_with_binary_ok(const primitive_attr_t *attr,
         const memory_desc_t &dst_md, const int max_ndims_supported = 2);

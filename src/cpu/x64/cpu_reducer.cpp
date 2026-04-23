@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2017-2025 Intel Corporation
+* Copyright 2017 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -83,7 +83,8 @@ void reduce_balancer_t::balance() {
 
     assert(njobs_per_group_ub <= max_njobs_per_group || nthr_per_group == 1);
     assert(ngroups * nthr_per_group <= nthr_);
-    assert((size_t)njobs_per_group_ub * job_size_ * nthr_ <= max_buffer_size_
+    assert((size_t)njobs_per_group_ub * job_size_ * ngroups * nthr_per_group
+                    <= max_buffer_size_
             || nthr_per_group == 1); /* no reduction buffer overflow */
     assert(IMPLICATION(!allow_nthr_in_group_, nthr_per_group == 1));
 
@@ -160,7 +161,7 @@ struct reducer_2d_driver_f_s_32_t : public reducer_2d_driver_t<data_type> {
     reducer_2d_driver_f_s_32_t(int n_src, size_t src_ld, size_t src_step,
             size_t dst_step, bool nullify_dst)
         : reducer_2d_driver_t<data_type>(
-                n_src, src_ld, src_step, dst_step, nullify_dst, jit_name()) {}
+                  n_src, src_ld, src_step, dst_step, nullify_dst, jit_name()) {}
 
     void nullify_dst(int nloads, int load_len) {
         UNUSED(load_len);

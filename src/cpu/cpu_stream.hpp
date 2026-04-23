@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -38,6 +38,15 @@ struct cpu_stream_t : public stream_t {
 
     dnnl::impl::status_t wait() override {
         // CPU execution is synchronous so return immediately
+#if DNNL_CPU_RUNTIME == DNNL_RUNTIME_THREADPOOL
+        dnnl::threadpool_interop::threadpool_iface *tp;
+        auto rc = this->get_threadpool(&tp);
+        if (rc == status::success && tp) {
+            if (tp->get_flags()
+                    & threadpool_interop::threadpool_iface::ASYNCHRONOUS)
+                tp->wait();
+        }
+#endif
         return dnnl::impl::status::success;
     }
 

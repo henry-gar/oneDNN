@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 * Copyright 2020 Codeplay Software Limited
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
@@ -95,11 +95,11 @@ public:
         return (mem_wrapper.matches_one_of_tag(format_tag::ab, format_tag::abc,
                         format_tag::abcd, format_tag::abcde, format_tag::abcdef)
                 || (with_groups ? mem_wrapper.matches_one_of_tag(
-                            format_tag::gowi, format_tag::gohwi,
-                            format_tag::godhwi)
+                                          format_tag::gowi, format_tag::gohwi,
+                                          format_tag::godhwi)
                                 : mem_wrapper.matches_one_of_tag(
-                                        format_tag::owi, format_tag::ohwi,
-                                        format_tag::odhwi)));
+                                          format_tag::owi, format_tag::ohwi,
+                                          format_tag::odhwi)));
     }
 
     bool using_transformed_filter() const { return filter_needs_transform; }
@@ -226,7 +226,7 @@ public:
                     data_size);
         }
         return status::success;
-    };
+    }
 
     status_t create_and_set_convolution_desc(const convolution_pd_t *pd) {
         // For integer compute, we always enable tensor ops
@@ -299,7 +299,8 @@ public:
     }
 
     virtual void execute(
-            cudnnHandle_t handle, const std::vector<void *> &args) const = 0;
+            cudnnHandle_t handle, const std::vector<void *> &args) const
+            = 0;
 
     void execute_sum(cudnnHandle_t handle, void *x, void *y, float alpha_,
             float beta_) const {

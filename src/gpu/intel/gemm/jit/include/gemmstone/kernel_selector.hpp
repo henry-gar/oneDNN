@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -14,8 +14,8 @@
 * limitations under the License.
 *******************************************************************************/
 
-#ifndef GEMMSTONE_GUARD_KERNEL_SELECTOR_HPP
-#define GEMMSTONE_GUARD_KERNEL_SELECTOR_HPP
+#ifndef GEMMSTONE_INCLUDE_GEMMSTONE_KERNEL_SELECTOR_HPP
+#define GEMMSTONE_INCLUDE_GEMMSTONE_KERNEL_SELECTOR_HPP
 
 #include "gemmstone/config.hpp"
 #include "gemmstone/kernel_catalog.hpp"
@@ -48,8 +48,10 @@ struct MatchParamsBase
     char precisionCExt = 0;
     bool ignoreSizes = false;
     bool ignoreCase = false;
+    bool ReqBDPASDims = false;
     int stepping = 0;
     int alignment[3] = {0, 0, 0};
+    int unrollReq[3] = {1, 1, 1};
     kcatalog::string tags, lateTags;
     int nExtraReqs = 0;
     const StrategyRequirement *extraReqs = nullptr;

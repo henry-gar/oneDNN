@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -65,7 +65,7 @@ struct logical_tensor_wrapper_t {
     property_type_t property_type() const { return lt->property; }
 
     const dims_t &dims() const { return lt->dims; }
-    const dims_t &strides() const { return lt->layout.strides; };
+    const dims_t &strides() const { return lt->layout.strides; }
 
     // convenient method to return a std::vector
     std::vector<dim_t> vdims() const {
@@ -161,7 +161,10 @@ struct logical_tensor_wrapper_t {
     /** For sub-byte data types returns number of elements per byte.
      * For the rest data types returns 1. */
     size_t sub_byte_data_type_multiplier() const {
-        if (utils::one_of(data_type(), data_type::s4, data_type::u4)) return 2;
+        if (utils::one_of(data_type(), data_type::s4, data_type::u4,
+                    dnnl::impl::data_type::f4_e2m1,
+                    dnnl::impl::data_type::f4_e3m0))
+            return 2;
         return 1;
     }
 
@@ -307,6 +310,8 @@ struct logical_tensor_wrapper_t {
     }
 
     size_t hash() const noexcept;
+
+    std::string str() const;
 
 private:
     bool is_identical(

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2018-2025 Intel Corporation
+* Copyright 2018 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -1275,14 +1275,14 @@ static inline void set_thread_opts_pack(int nthrs,
     auto choose_blocking
             = [](dim_t size_z, dim_t &thread_z, int &nthr_z, dim_t block_z_init,
                       dim_t &block_z, dim_t block_align) {
-                  thread_z = utils::div_up(size_z, nthr_z);
-                  auto num_blk = utils::div_up(thread_z, block_z_init);
-                  block_z = utils::div_up(thread_z, num_blk);
-                  block_z = utils::rnd_up(block_z, block_align);
-                  thread_z = num_blk * block_z;
-                  if (thread_z * nthr_z > size_z)
-                      nthr_z = utils::div_up(size_z, thread_z);
-              };
+        thread_z = utils::div_up(size_z, nthr_z);
+        auto num_blk = utils::div_up(thread_z, block_z_init);
+        block_z = utils::div_up(thread_z, num_blk);
+        block_z = utils::rnd_up(block_z, block_align);
+        thread_z = num_blk * block_z;
+        if (thread_z * nthr_z > size_z)
+            nthr_z = utils::div_up(size_z, thread_z);
+    };
 
     auto choose_m_blocking = [&]() {
         auto align = get_vector_length<c_type>();
@@ -1821,7 +1821,7 @@ static dnnl_status_t gemm_threading_driver(
 
                 auto m_padd = (thread_info.copy == copy_type::shared_a)
                         ? get_m_padd_parallel_a(
-                                ithr, m, arg, thread_info.nthrs())
+                                  ithr, m, arg, thread_info.nthrs())
                         : get_m_padd(ithr, m, arg);
                 auto n_padd = get_n_padd(ithr, n, k, arg);
                 auto k_padd = get_k_padd(ithr, k, arg);

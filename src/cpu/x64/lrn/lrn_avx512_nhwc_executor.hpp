@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -32,11 +32,11 @@ class lrn_avx512_nhwc_executor_fwd_t : public i_lrn_executor_t {
 public:
     lrn_avx512_nhwc_executor_fwd_t(const PD_T *pd)
         : ker_(utils::make_unique<
-                lrn::jit_avx512_common_lrn_kernel_fwd_nhwc_t<d_type>>(pd->C(),
-                pd->desc()->prop_kind,
-                pd->desc()->lrn_alpha / pd->desc()->local_size,
-                pd->desc()->lrn_beta, pd->desc()->lrn_k,
-                pd->desc()->local_size))
+                  lrn::jit_avx512_common_lrn_kernel_fwd_nhwc_t<d_type>>(pd->C(),
+                  pd->desc()->prop_kind,
+                  pd->desc()->lrn_alpha / pd->desc()->local_size,
+                  pd->desc()->lrn_beta, pd->desc()->lrn_k,
+                  pd->desc()->local_size))
         , N_(pd->MB())
         , C_(pd->C())
         , H_(pd->H())
@@ -55,7 +55,8 @@ public:
         CHECK(status);
 
         const auto ker = ker_.get();
-        parallel_nd(N_, H_ * W_, [&](dim_t n, dim_t pixel_id) {
+        parallel_nd(
+                N_, H_ * W_, [= COMPAT_THIS_CAPTURE](dim_t n, dim_t pixel_id) {
             typename lrn::jit_avx512_common_lrn_kernel_fwd_t<
                     d_type>::jit_args_fwd_t args;
             const auto offset = n * C_ * H_ * W_ + pixel_id * C_;
@@ -87,9 +88,9 @@ class lrn_avx512_nhwc_executor_bwd_t : public i_lrn_executor_t {
 public:
     lrn_avx512_nhwc_executor_bwd_t(const PD_T *pd)
         : ker_ {utils::make_unique<
-                lrn::jit_avx512_common_lrn_kernel_bwd_nhwc_t<d_type>>(pd->C(),
-                pd->desc()->lrn_alpha / pd->desc()->local_size,
-                pd->desc()->lrn_beta, pd->desc()->local_size)}
+                  lrn::jit_avx512_common_lrn_kernel_bwd_nhwc_t<d_type>>(pd->C(),
+                  pd->desc()->lrn_alpha / pd->desc()->local_size,
+                  pd->desc()->lrn_beta, pd->desc()->local_size)}
         , N_(pd->MB())
         , C_(pd->C())
         , H_(pd->H())
@@ -107,7 +108,8 @@ public:
         auto ws = CTX_IN_MEM(data_t *, DNNL_ARG_WORKSPACE);
 
         const auto ker = ker_.get();
-        parallel_nd(N_, H_ * W_, [&](dim_t n, dim_t pixel_id) {
+        parallel_nd(
+                N_, H_ * W_, [= COMPAT_THIS_CAPTURE](dim_t n, dim_t pixel_id) {
             typename lrn::jit_avx512_common_lrn_kernel_bwd_nhwc_t<
                     d_type>::jit_args_bwd_t args;
             const auto offset = n * C_ * H_ * W_ + pixel_id * C_;

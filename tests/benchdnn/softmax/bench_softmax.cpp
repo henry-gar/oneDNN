@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -53,9 +53,9 @@ void check_correctness(
 int verify_input(const settings_t &s) {
     for_(const auto &i_scales : s.scales)
     for (const auto &e : i_scales.scales) {
-        if (e.second.policy != policy_t::COMMON) {
-            BENCHDNN_PRINT(
-                    0, "%s\n", "ERROR: scales support only `common` policy.");
+        if (!e.second.has_single_element()) {
+            BENCHDNN_PRINT(0, "%s\n",
+                    "ERROR: scales support only a single element input.");
             return FAIL;
         }
     }

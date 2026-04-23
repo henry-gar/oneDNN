@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -29,8 +29,8 @@ namespace conv {
 namespace jit {
 namespace v2 {
 
-stmt_t build_ir(const kernel::options_t &options, const kernel_desc_t &desc,
-        var_manager_t &var_mgr);
+stmt_t build_ir(const dsl::kernel::options_t &options,
+        const kernel_desc_t &desc, var_manager_t &var_mgr);
 
 } // namespace v2
 } // namespace jit

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -71,6 +71,13 @@ struct matmul_pd_t : public primitive_desc_t {
         if (arg == DNNL_ARG_REDUCE)
             return with_reduce() ? arg_usage_t::output : arg_usage_t::unused;
         if (arg == DNNL_ARG_DST) return arg_usage_t::output;
+
+#if DNNL_EXPERIMENTAL_GROUPED_MEMORY
+        if (arg == DNNL_ARG_HINT_MAX_GROUP_SIZE)
+            return memory_desc_wrapper(src_md()).is_grouped_desc()
+                    ? arg_usage_t::input
+                    : arg_usage_t::unused;
+#endif
 
         return primitive_desc_t::arg_usage(arg);
     }
@@ -190,7 +197,9 @@ struct matmul_pd_t : public primitive_desc_t {
     int dst_qmask_M() const { return src_qmask_M(); }
 
     virtual bool attr_scales_ok(const std::vector<int> &supported_args
-            = {DNNL_ARG_SRC, DNNL_ARG_WEIGHTS, DNNL_ARG_DST}) const {
+            = {DNNL_ARG_SRC, DNNL_ARG_WEIGHTS, DNNL_ARG_DST},
+            const std::vector<int> &supported_qmodes
+            = {quantization_mode::static_sazp}) const {
         const auto &scales = attr()->scales_;
         if (scales.has_default_values()) return true;
 
@@ -198,12 +207,20 @@ struct matmul_pd_t : public primitive_desc_t {
         for (int arg : supported_args) {
             if (scales.has_default_values(arg)) { continue; }
 
+            // Fold-left to check if quantization mode is supported
+            bool is_qmode_supported = false;
+            for (auto &qmode : supported_qmodes) {
+                is_qmode_supported = is_qmode_supported
+                        || (scales.get(arg).get_quantization_mode() == qmode);
+            }
+            ok = ok && is_qmode_supported;
+
             const auto &mask = scales.get_mask(arg);
             if (arg == DNNL_ARG_WEIGHTS) {
                 const auto &g0 = scales.get_group(arg, 0);
                 const auto &g1 = scales.get_group(arg, 1);
-                const bool wei_k_group_ok = IMPLICATION(g0 > 1, K() % g1 == 0);
-                const bool wei_n_group_ok = IMPLICATION(g1 > 1, N() % g0 == 0);
+                const bool wei_k_group_ok = IMPLICATION(g0 > 1, K() % g0 == 0);
+                const bool wei_n_group_ok = IMPLICATION(g1 > 1, N() % g1 == 0);
 
                 ok = ok && wei_k_group_ok && wei_n_group_ok;
 
@@ -235,11 +252,12 @@ struct matmul_pd_t : public primitive_desc_t {
             } else if (arg == DNNL_ARG_DST) {
                 ok = ok
                         && utils::one_of(mask, 0, dst_qmask_N(),
-                                dst_qmask_M() + dst_qmask_N());
+                                dst_qmask_M() + dst_qmask_N(),
+                                full_tensor_mask());
                 ok = ok
                         && IMPLICATION(!scales.get(arg).has_default_groups(),
-                                scales.get_group(arg, 1) == 1
-                                        && (M() % scales.get_group(arg, 0))
+                                (M() % scales.get_group(arg, -2)) == 0
+                                        && (N() % scales.get_group(arg, -1))
                                                 == 0);
             } else {
                 assert(!"Unsupported arg");

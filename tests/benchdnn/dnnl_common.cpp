@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2017-2025 Intel Corporation
+* Copyright 2017 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@
 
 #include <algorithm> // for std::reverse and std::copy
 #include <functional> // for std::bind and std::placeholders
+#include <future> // for std::promise and std::future
 #include <list>
 #include <numeric>
 #include <string> // for std::string
@@ -27,17 +28,20 @@
 #include "oneapi/dnnl/dnnl.hpp"
 #if DNNL_GPU_RUNTIME == DNNL_RUNTIME_OCL
 #include "oneapi/dnnl/dnnl_ocl.hpp"
-#elif DNNL_GPU_RUNTIME == DNNL_RUNTIME_DPCPP
+#endif
+#if DNNL_GPU_RUNTIME == DNNL_RUNTIME_DPCPP
 #include "oneapi/dnnl/dnnl_sycl.hpp"
+#endif
+#if DNNL_GPU_RUNTIME == DNNL_RUNTIME_ZE
+#include "oneapi/dnnl/dnnl_ze.hpp"
 #endif
 
 #if DNNL_CPU_THREADING_RUNTIME == DNNL_RUNTIME_THREADPOOL
 #include "oneapi/dnnl/dnnl_threadpool.h"
 #endif
 
-#ifndef DNNL_DISABLE_PRIMITIVE_CACHE
-#include "src/common/primitive_cache.hpp"
-#endif
+// Uses only publicly available types.
+#include "src/common/primitive_cache_test_api.hpp"
 
 #include "cpu/platform.hpp"
 
@@ -54,6 +58,76 @@
 extern "C" dnnl_status_t dnnl_impl_notify_profiling_complete(
         dnnl_stream_t stream);
 
+bool is_cpu(const dnnl_engine_t &engine) {
+    return query_engine_kind(engine) == dnnl_cpu;
+}
+
+bool is_gpu(const dnnl_engine_t &engine) {
+    return query_engine_kind(engine) == dnnl_gpu;
+}
+
+bool is_async(const dnnl_engine_t &engine) {
+#if DNNL_CPU_RUNTIME == DNNL_RUNTIME_THREADPOOL
+    if (is_cpu(engine))
+        return dnnl::testing::get_threadpool()->get_flags()
+                & dnnl::threadpool_interop::threadpool_iface::ASYNCHRONOUS;
+#else
+    if (is_cpu(engine)) return DNNL_CPU_RUNTIME == DNNL_RUNTIME_DPCPP;
+#endif
+    // all supported GPU runtimes are async
+    return is_gpu(engine);
+}
+
+bool is_sycl_engine(const dnnl_engine_t &engine) {
+    if (is_cpu(engine)) return DNNL_CPU_RUNTIME == DNNL_RUNTIME_DPCPP;
+    if (is_gpu(engine)) return DNNL_GPU_RUNTIME == DNNL_RUNTIME_DPCPP;
+    return false;
+}
+
+bool is_opencl_engine(const dnnl_engine_t &engine) {
+    if (is_gpu(engine)) return DNNL_GPU_RUNTIME == DNNL_RUNTIME_OCL;
+    return false;
+}
+
+bool is_ze_engine(const dnnl_engine_t &engine) {
+    if (is_gpu(engine)) return DNNL_GPU_RUNTIME == DNNL_RUNTIME_ZE;
+    return false;
+}
+
+bool is_nvidia_gpu(const dnnl_engine_t &engine) {
+#if defined(DNNL_WITH_SYCL) && DNNL_GPU_VENDOR == DNNL_VENDOR_NVIDIA
+    if (!is_gpu(engine)) return false;
+    constexpr int nvidia_vendor_id = 0x10DE;
+    auto eng = dnnl::engine(engine, true);
+    auto device = dnnl::sycl_interop::get_device(eng);
+    const auto eng_vendor_id
+            = device.get_info<::sycl::info::device::vendor_id>();
+    return eng_vendor_id == nvidia_vendor_id;
+#endif
+    return false;
+}
+
+bool is_amd_gpu(const dnnl_engine_t &engine) {
+#if defined(DNNL_WITH_SYCL) && DNNL_GPU_VENDOR == DNNL_VENDOR_AMD
+    if (!is_gpu(engine)) return false;
+    constexpr int amd_vendor_id = 0x1002;
+    auto eng = dnnl::engine(engine, true);
+    auto device = dnnl::sycl_interop::get_device(eng);
+    const auto eng_vendor_id
+            = device.get_info<::sycl::info::device::vendor_id>();
+    return eng_vendor_id == amd_vendor_id;
+#endif
+    return false;
+}
+
+bool is_generic_gpu(const dnnl_engine_t &engine) {
+#if defined(DNNL_WITH_SYCL) && DNNL_GPU_VENDOR == DNNL_VENDOR_GENERIC
+    return is_gpu(engine);
+#endif
+
+    return false;
+}
+
 int check_pd_cache(const_dnnl_primitive_desc_t pd, res_t *res) {
     // Disable this check for threadpool. A threadpool is always defined in
     // validation infrastructure but creates primitives in a separate
@@ -66,7 +140,7 @@ int check_pd_cache(const_dnnl_primitive_desc_t pd, res_t *res) {
         && DNNL_CPU_THREADING_RUNTIME != DNNL_RUNTIME_THREADPOOL
     int capacity = 0;
     DNN_SAFE(dnnl_get_primitive_cache_capacity(&capacity), FAIL);
-    if (capacity && !dnnl::impl::is_pd_in_cache(pd)) {
+    if (capacity && !dnnl_test_is_pd_in_cache(pd)) {
         res->state = FAILED;
         BENCHDNN_PRINT(0, "%s\n",
                 "Error: primitive descriptor is expected to be fetched from "
@@ -83,7 +157,7 @@ int check_primitive_cache(dnnl_primitive_t p, res_t *res) {
         && DNNL_CPU_THREADING_RUNTIME != DNNL_RUNTIME_THREADPOOL
     int capacity = 0;
     DNN_SAFE(dnnl_get_primitive_cache_capacity(&capacity), WARN);
-    if (capacity && !dnnl::impl::is_primitive_in_cache(p)) {
+    if (capacity && !dnnl_test_is_primitive_in_cache(p)) {
         res->state = FAILED;
         BENCHDNN_PRINT(0, "%s\n",
                 "Error: primitive is expected to be fetched from the primitive "
@@ -92,13 +166,6 @@ int check_primitive_cache(dnnl_primitive_t p, res_t *res) {
     }
 #endif
     return OK;
-}
-
-size_t set_primitive_cache_capacity_without_clearing(size_t capacity) {
-#ifndef DNNL_DISABLE_PRIMITIVE_CACHE
-    return dnnl::impl::set_primitive_cache_capacity_without_clearing(capacity);
-#endif
-    return size_t(0);
 }
 
 int get_cache_blob_id(
@@ -192,22 +259,26 @@ int test_persistent_cache_api(
         dnnl_memory_desc_create_with_blob(&new_md, md_blob.data());
         auto mew_mdw = make_benchdnn_dnnl_wrapper(new_md);
 
-        if (dnnl_memory_desc_equal(wei_md, new_md) == 0)
-            return res->state = FAILED, FAIL;
+        if (dnnl_memory_desc_equal(wei_md, new_md) == 0) {
+            res->state = FAILED;
+            SAFE(FAIL, WARN);
+        }
     }
 
     // Start testing persistent cache API.
-    if (!is_gpu() || (is_gpu() && DNNL_GPU_RUNTIME != DNNL_RUNTIME_OCL)) {
-        return OK;
-    }
+    if (!is_gpu() || !(is_opencl_engine() || is_ze_engine())) { return OK; }
 
     // 1. Disable primitive cache to make sure that the next primitive will
     // be created from the cache blob and not fetched from the primitive cache.
-    const auto old_capacity = set_primitive_cache_capacity_without_clearing(0);
+    const auto old_capacity
+            = dnnl_test_set_primitive_cache_capacity_without_clearing(0);
     // 2. Get cache blob ID to use it as a key for the `test_cache`.
     std::vector<uint8_t> cache_blob_id;
     auto st = get_cache_blob_id(cache_blob_id, pd);
-    if (st != OK) return res->state = FAILED, FAIL;
+    if (st != OK) {
+        res->state = FAILED;
+        SAFE(FAIL, WARN);
+    }
     // 3. Check if a cache blob for the obtained cache blob ID is present in the
     //    `test_cache`.
     //    a) If the cache blob is found the primitive is created from it.
@@ -222,38 +293,53 @@ int test_persistent_cache_api(
         const uint8_t *cache_blob = cache_value.data();
         auto dnnl_st = dnnl_primitive_create_from_cache_blob(
                 &p, pd, size, cache_blob);
-        if (dnnl_st != dnnl_success) return res->state = FAILED, FAIL;
+        if (dnnl_st != dnnl_success) {
+            res->state = FAILED;
+            DNN_SAFE(dnnl_st, WARN);
+        }
     } else {
         std::vector<uint8_t> cache_blob;
         st = get_cache_blob(cache_blob, prim);
-        if (st != OK) return res->state = FAILED, FAIL;
+        if (st != OK) {
+            res->state = FAILED;
+            SAFE(FAIL, WARN);
+        }
 
         // The cross-engine and direct copy reorders are special primitives that
         // may contain no kernels therefore the cache blob will always be empty,
         // which is the correct behavior.
         if (cache_blob.empty()) {
-            set_primitive_cache_capacity_without_clearing(old_capacity);
+            dnnl_test_set_primitive_cache_capacity_without_clearing(
+                    old_capacity);
             if (query_prim_kind(pd) == dnnl_reorder
                     && (res->impl_name.find("cross_engine") != std::string::npos
                             || res->impl_name.find("direct_copy")
                                     != std::string::npos))
                 return OK;
 
+            // If the operation is trivial, there may be no kernel in the cache.
+            const auto dst_md = query_md(pd, DNNL_ARG_DST);
+            for (int i = 0; i < query_md_ndims(dst_md); ++i)
+                if (query_md_padded_dims(dst_md)[i] == 0) return OK;
+
             BENCHDNN_PRINT(
                     0, "error: %s\n", "cache blob is not expected to be empty");
             res->state = FAILED;
-            return FAIL;
+            SAFE(FAIL, WARN);
         }
 
         auto dnnl_st = dnnl_primitive_create_from_cache_blob(
                 &p, pd, cache_blob.size(), cache_blob.data());
-        if (dnnl_st != dnnl_success) return res->state = FAILED, FAIL;
+        if (dnnl_st != dnnl_success) {
+            res->state = FAILED;
+            DNN_SAFE(dnnl_st, WARN);
+        }
         cache.add(cache_blob_id, cache_blob);
     }
     prim.reset(p);
 
     // 4. Restore the original primitive cache capacity to make it functional.
-    set_primitive_cache_capacity_without_clearing(old_capacity);
+    dnnl_test_set_primitive_cache_capacity_without_clearing(old_capacity);
 
     return OK;
 }
@@ -344,6 +430,49 @@ void args_t::replace(int arg, const dnn_mem_t *mem) {
     }
 }
 
+stream_staller_t::stream_staller_t(stream_t &stream) {
+#if DNNL_CPU_THREADING_RUNTIME == DNNL_RUNTIME_THREADPOOL
+    auto eng = query_engine(stream);
+    auto eng_kind = query_engine_kind(eng);
+    if (eng_kind != dnnl_cpu) return;
+
+    void *tp_ptr;
+    dnnl_threadpool_interop_stream_get_threadpool(stream, &tp_ptr);
+    auto tp = static_cast<dnnl::threadpool_interop::threadpool_iface *>(tp_ptr);
+
+    // `tp` is not expected to be empty for CPU streams with threadpol runtime.
+    if (!tp) SAFE_V(FAIL);
+
+    // Only relevant for asynchronous threadpool, synchronous will
+    // deadlock.
+    if (tp->get_flags()
+            != dnnl::threadpool_interop::threadpool_iface::ASYNCHRONOUS)
+        return;
+
+    // Each thread from the threadpool should get the task to be stalled.
+    const int num_tasks = tp->get_num_threads();
+
+    // The main thread must be let through, otherwise it deadlocks as
+    // task submission won't happen.
+    std::thread::id main_thr_id = std::this_thread::get_id();
+
+    // Shared future allows to pass all waiting threads at once inside the
+    // palallel call.
+    std::shared_future<void> fut(prom_.get_future());
+
+    tp->parallel_for(num_tasks, [=](int, int) {
+        std::thread::id id_thr = std::this_thread::get_id();
+        if (id_thr != main_thr_id) fut.wait();
+    });
+#endif
+}
+
+void stream_staller_t::release() {
+#if DNNL_CPU_THREADING_RUNTIME == DNNL_RUNTIME_THREADPOOL
+    prom_.set_value();
+#endif
+}
+
 // Unmap before passing the memory to execute
 void execute_unmap_args(
         const args_t &args, std::vector<dnnl_exec_arg_t> &dnnl_args) {
@@ -372,39 +501,56 @@ int execute_and_wait(perf_function_t &exec_func, const dnnl_engine_t &engine,
     TIME_EXECUTE(execute_unmap_args(args, dnnl_args));
 
     dnnl_status_t status = dnnl_runtime_error;
-    bool run_regular_exec = true;
+    if (is_gpu(engine) && execution_mode == execution_mode_t::graph) {
 #if DNNL_GPU_RUNTIME == DNNL_RUNTIME_DPCPP
-    while (execution_mode == execution_mode_t::graph && is_gpu(engine)) {
         void *queue_ptr;
         DNN_SAFE(dnnl_sycl_interop_stream_get_queue(stream, &queue_ptr), CRIT);
-        sycl::queue queue = *static_cast<sycl::queue *>(queue_ptr);
-        const bool can_run_sycl_graph = queue.get_device().get_backend()
-                == sycl::backend::ext_oneapi_level_zero;
-        if (!can_run_sycl_graph) break;
+        ::sycl::queue queue = *static_cast<::sycl::queue *>(queue_ptr);
+        if (queue.get_device().get_backend()
+                != ::sycl::backend::ext_oneapi_level_zero) {
+            BENCHDNN_PRINT(0, "%s %s\n",
+                    "[ERROR] SYCL graph execution is only available on Level "
+                    "Zero backend; currently using:",
+                    ::sycl::detail::get_backend_name_no_vendor(
+                            queue.get_device().get_backend())
+                            .data());
+            if (res) res->state = FAILED;
+            return FAIL;
+        }
 
         BENCHDNN_PRINT(
                 2, "%s\n", "[INFO] Using experimental SYCL graph execution.");
-        sycl::ext::oneapi::experimental::command_graph graph {
+        ::sycl::ext::oneapi::experimental::command_graph graph {
                 queue.get_context(), queue.get_device(),
-                {sycl::ext::oneapi::experimental::property::graph::
+                {::sycl::ext::oneapi::experimental::property::graph::
                                 assume_buffer_outlives_graph {}}};
 
-        graph.begin_recording(queue);
-        status = exec_func(stream, dnnl_args);
-        graph.end_recording(queue);
-        DNN_SAFE(dnnl_stream_wait(stream), CRIT);
+        try {
+            graph.begin_recording(queue);
+            status = exec_func(stream, dnnl_args);
+            graph.end_recording(queue);
+            DNN_SAFE(dnnl_stream_wait(stream), CRIT);
 
-        auto exec = graph.finalize();
-        queue.ext_oneapi_graph(exec).wait();
-
-        // SYCL graph feature completed submission and execution, no need to
-        // have a regular run.
-        run_regular_exec = false;
-        break;
-    }
+            auto exec = graph.finalize();
+            TIME_EXECUTE(queue.ext_oneapi_graph(exec).wait());
+        } catch (const std::exception &e) {
+            BENCHDNN_PRINT(0, "%s %s\n",
+                    "[ERROR] SYCL graph execution exception:", e.what());
+            if (res) res->state = FAILED;
+            return FAIL;
+        }
+#else
+        BENCHDNN_PRINT(0, "%s\n",
+                "[ERROR] Graph execution is only available on SYCL runtime "
+                "with Level Zero backend.");
+        if (res) res->state = FAILED;
+        return FAIL;
 #endif
-    if (run_regular_exec) {
+    } else {
+        stream_staller_t staller(stream);
         TIME_EXECUTE(status = exec_func(stream, dnnl_args));
+        staller.release();
+
         TIME_EXECUTE(DNN_SAFE(dnnl_stream_wait(stream), CRIT));
     }
     if (res) res->state = EXECUTED;
@@ -433,9 +579,25 @@ int execute_and_wait(dnnl_primitive_t prim, const args_t &args, res_t *res) {
     return execute_and_wait(exec_func, engine, args, res);
 }
 
+int run_execution(dnnl_primitive_t prim, const args_t &args, res_t *res) {
+    if (!has_bench_mode_bit(mode_bit_t::exec)
+            || has_bench_mode_bit(mode_bit_t::perf))
+        return OK;
+    return execute_and_wait(prim, args, res);
+}
+
+int run_execution(perf_function_t &exec_func, const dnnl_engine_t &engine,
+        const args_t &args, res_t *res) {
+    if (!has_bench_mode_bit(mode_bit_t::exec)
+            || has_bench_mode_bit(mode_bit_t::perf))
+        return OK;
+    return execute_and_wait(exec_func, engine, args, res);
+}
+
 void reset_gpu_profiling(dnnl_stream_t stream) {
 #if DNNL_GPU_RUNTIME == DNNL_RUNTIME_OCL \
-        || DNNL_GPU_RUNTIME == DNNL_RUNTIME_SYCL
+        || DNNL_GPU_RUNTIME == DNNL_RUNTIME_SYCL \
+        || DNNL_GPU_RUNTIME == DNNL_RUNTIME_ZE
     DNN_SAFE_V(dnnl_reset_profiling(stream));
 #endif
 }
@@ -443,7 +605,8 @@ void reset_gpu_profiling(dnnl_stream_t stream) {
 int get_gpu_profiling_info(dnnl_stream_t stream, std::vector<uint64_t> &nsecs,
         std::vector<uint64_t> &cycles, int expected_num_entries) {
 #if DNNL_GPU_RUNTIME == DNNL_RUNTIME_OCL \
-        || DNNL_GPU_RUNTIME == DNNL_RUNTIME_SYCL
+        || DNNL_GPU_RUNTIME == DNNL_RUNTIME_SYCL \
+        || DNNL_GPU_RUNTIME == DNNL_RUNTIME_ZE
     dnnl_profiling_data_kind_t undef_kind {};
     dnnl_profiling_data_kind_t time_kind {};
 
@@ -486,17 +649,30 @@ int get_gpu_profiling_info(dnnl_stream_t stream, std::vector<uint64_t> &nsecs,
 
 void notify_gpu_profiling_complete(dnnl_stream_t stream) {
 #if DNNL_GPU_RUNTIME == DNNL_RUNTIME_OCL \
-        || DNNL_GPU_RUNTIME == DNNL_RUNTIME_SYCL
+        || DNNL_GPU_RUNTIME == DNNL_RUNTIME_SYCL \
+        || DNNL_GPU_RUNTIME == DNNL_RUNTIME_ZE
     DNN_SAFE_V(dnnl_impl_notify_profiling_complete(stream));
 #endif
 }
 
 void finalize() {
     finalize_tbb();
+
+#if DNNL_CPU_THREADING_RUNTIME == DNNL_RUNTIME_THREADPOOL
+    // See: DUMMY_PARALLEL.
+    if (is_cpu()) {
+        auto tp = dnnl::testing::get_threadpool();
+        tp->parallel_for(1, [](int, int) {});
+    }
+#endif
 }
 
 inline int measure_perf_individual(timer::timer_t &t, dnnl_stream_t stream,
         perf_function_t &perf_func, std::vector<dnnl_exec_arg_t> &dnnl_args) {
+    // Warm-up run.
+    DNN_SAFE(perf_func(stream, dnnl_args), WARN);
+    DNN_SAFE(dnnl_stream_wait(stream), CRIT);
+
     cold_cache_t cold_cache(dnnl_args, stream);
 
     t.reset();
@@ -592,8 +768,8 @@ inline int measure_perf_aggregate(timer::timer_t &t,
             int batch_times_heuristic = (ms_min == 0.0)
                     ? INT_MAX
                     : MAX2(1,
-                            (int)((max_ms_per_prb - t.total_ms()) / ms_min
-                                    / 5));
+                              (int)((max_ms_per_prb - t.total_ms()) / ms_min
+                                      / 5));
             cur_batch_times = MIN2(max_batch_times, batch_times_heuristic);
             is_first_loop = false;
         }
@@ -640,16 +816,17 @@ int measure_perf(const thr_ctx_t &ctx, res_t *res, perf_function_t &perf_func,
     // For non-DPCPP CPU: measure individual iterations.
     // For DPCPP CPU and GPU: measure iterations in batches to hide driver
     // overhead. DPCPP CPU follows the model of GPU, thus, handled similar.
+    // For async threadpool CPU: use aggregate as well, similar to DPCPP CPU.
     int ret = OK;
-    if (is_cpu() && !is_sycl_engine(engine)) {
-        ret = execute_in_thr_ctx(ctx, measure_perf_individual, t, v_stream[0],
-                perf_func, dnnl_args[0]);
-    } else {
+    if (is_async(engine)) {
         ret = execute_in_thr_ctx(
                 ctx, measure_perf_aggregate, t, v_stream, perf_func, dnnl_args);
+    } else {
+        ret = execute_in_thr_ctx(ctx, measure_perf_individual, t, v_stream[0],
+                perf_func, dnnl_args[0]);
     }
 
-    if (ret != OK) res->state = FAILED;
+    res->state = (ret == OK ? EXECUTED : FAILED);
     execute_map_args(args);
     for (int j = 1; j < num_streams; j++) {
         execute_map_args(v_args[j]);
@@ -841,7 +1018,7 @@ void skip_unimplemented_prelu_po(
 
 void skip_unimplemented_arg_scale(const attr_t &attr, res_t *res) {
     for (const auto &arg_s : attr.scales.scales) {
-        if (arg_s.second.policy != policy_t::COMMON) {
+        if (!arg_s.second.has_single_element()) {
             res->state = SKIPPED;
             res->reason = skip_reason::case_not_supported;
             return;
@@ -900,59 +1077,6 @@ int check_ref_impl_hit(res_t *res) {
         return FAIL;
     }
     return OK;
-}
-
-bool is_cpu(const dnnl_engine_t &engine) {
-    return query_engine_kind(engine) == dnnl_cpu;
-}
-
-bool is_gpu(const dnnl_engine_t &engine) {
-    return query_engine_kind(engine) == dnnl_gpu;
-}
-
-bool is_sycl_engine(const dnnl_engine_t &engine) {
-    if (is_cpu(engine)) return DNNL_CPU_RUNTIME == DNNL_RUNTIME_DPCPP;
-    if (is_gpu(engine)) return DNNL_GPU_RUNTIME == DNNL_RUNTIME_DPCPP;
-    return false;
-}
-
-bool is_opencl_engine(const dnnl_engine_t &engine) {
-    if (is_gpu(engine)) return DNNL_GPU_RUNTIME == DNNL_RUNTIME_OCL;
-    return false;
-}
-
-bool is_nvidia_gpu(const dnnl_engine_t &engine) {
-#if defined(DNNL_WITH_SYCL) && DNNL_GPU_VENDOR == DNNL_VENDOR_NVIDIA
-    if (!is_gpu(engine)) return false;
-    constexpr int nvidia_vendor_id = 0x10DE;
-    auto eng = dnnl::engine(engine, true);
-    auto device = dnnl::sycl_interop::get_device(eng);
-    const auto eng_vendor_id
-            = device.get_info<::sycl::info::device::vendor_id>();
-    return eng_vendor_id == nvidia_vendor_id;
-#endif
-    return false;
-}
-
-bool is_amd_gpu(const dnnl_engine_t &engine) {
-#if defined(DNNL_WITH_SYCL) && DNNL_GPU_VENDOR == DNNL_VENDOR_AMD
-    if (!is_gpu(engine)) return false;
-    constexpr int amd_vendor_id = 0x1002;
-    auto eng = dnnl::engine(engine, true);
-    auto device = dnnl::sycl_interop::get_device(eng);
-    const auto eng_vendor_id
-            = device.get_info<::sycl::info::device::vendor_id>();
-    return eng_vendor_id == amd_vendor_id;
-#endif
-    return false;
-}
-
-bool is_generic_gpu(const dnnl_engine_t &engine) {
-#if defined(DNNL_WITH_SYCL) && DNNL_GPU_VENDOR == DNNL_VENDOR_GENERIC
-    return is_gpu(engine);
-#endif
-
-    return false;
 }
 
 bool is_f64_supported(const dnnl_engine_t &engine) {
@@ -1027,21 +1151,17 @@ int get_gpu_ram_sizes(size_t &ram_size, size_t &max_alloc_size) {
 
 #if DNNL_GPU_RUNTIME == DNNL_RUNTIME_OCL
     auto eng = dnnl::engine(get_test_engine(), true);
-    cl_int status = CL_SUCCESS;
-    cl_device_id ocl_device = dnnl::ocl_interop::get_device(eng);
+    cl_device_id ocl_dev = dnnl::ocl_interop::get_device(eng);
 
     cl_ulong ram_sz = 0;
-    status = clGetDeviceInfo(ocl_device, CL_DEVICE_GLOBAL_MEM_SIZE,
+    cl_int status = clGetDeviceInfo(ocl_dev, CL_DEVICE_GLOBAL_MEM_SIZE,
             sizeof(cl_ulong), &ram_sz, nullptr);
     if (status != CL_SUCCESS) return FAIL;
 
-    cl_ulong max_alloc_sz = 0;
-    status = clGetDeviceInfo(ocl_device, CL_DEVICE_MAX_MEM_ALLOC_SIZE,
-            sizeof(cl_ulong), &max_alloc_sz, nullptr);
-    if (status != CL_SUCCESS) return FAIL;
-
     ram_size = (size_t)ram_sz;
-    max_alloc_size = (size_t)max_alloc_sz;
+    // For OCL runtime we allow allocation of buffers up to VRAM size,
+    // with the usage of CL_MEM_ALLOW_UNRESTRICTED_SIZE_INTEL flag.
+    max_alloc_size = (size_t)ram_sz;
     return OK;
 #elif DNNL_GPU_RUNTIME == DNNL_RUNTIME_DPCPP
     auto eng = dnnl::engine(get_test_engine(), true);
@@ -1052,6 +1172,37 @@ int get_gpu_ram_sizes(size_t &ram_size, size_t &max_alloc_size) {
             = (size_t)sycl_dev
                       .get_info<::sycl::info::device::max_mem_alloc_size>();
     return OK;
+#elif DNNL_GPU_RUNTIME == DNNL_RUNTIME_ZE
+    auto eng = dnnl::engine(get_test_engine(), true);
+    auto ze_dev = dnnl::ze_interop::get_device(eng);
+
+    ze_result_t status = ZE_RESULT_SUCCESS;
+
+    uint32_t count = 0;
+    status = zeDeviceGetMemoryProperties(ze_dev, &count, nullptr);
+    if (status != ZE_RESULT_SUCCESS) return FAIL;
+    if (count > 1) {
+        assert(!"Found more than a single entry for memory.");
+        return FAIL;
+    }
+
+    ze_device_memory_properties_t ze_dev_mem_props {};
+    ze_dev_mem_props.stype = ZE_STRUCTURE_TYPE_DEVICE_MEMORY_PROPERTIES;
+    status = zeDeviceGetMemoryProperties(ze_dev, &count, &ze_dev_mem_props);
+    if (status != ZE_RESULT_SUCCESS) return FAIL;
+
+    ram_size = (size_t)ze_dev_mem_props.totalSize;
+
+    ze_device_properties_t ze_dev_props {};
+    ze_dev_props.stype = ZE_STRUCTURE_TYPE_DEVICE_PROPERTIES;
+    ze_dev_props.pNext = nullptr;
+    status = zeDeviceGetProperties(ze_dev, &ze_dev_props);
+    if (status != ZE_RESULT_SUCCESS) return FAIL;
+
+    max_alloc_size = (size_t)ze_dev_props.maxMemAllocSize;
+    return OK;
+#else
+    assert(!"unsupported GPU runtime");
 #endif
     ram_size = 0;
     max_alloc_size = 0;
@@ -1099,6 +1250,32 @@ int get_gpu_cache_size(size_t &cache_size) {
     _cache_size
             = (size_t)sycl_dev
                       .get_info<::sycl::info::device::global_mem_cache_size>();
+#elif DNNL_GPU_RUNTIME == DNNL_RUNTIME_ZE
+    auto eng = dnnl::engine(get_test_engine(), true);
+    auto ze_dev = dnnl::ze_interop::get_device(eng);
+
+    ze_result_t status = ZE_RESULT_SUCCESS;
+
+    uint32_t count = 0;
+    status = zeDeviceGetCacheProperties(ze_dev, &count, nullptr);
+    if (status != ZE_RESULT_SUCCESS) return FAIL;
+
+    std::vector<ze_device_cache_properties_t> ze_cache_props(count);
+    for (auto &e : ze_cache_props) {
+        e.stype = ZE_STRUCTURE_TYPE_DEVICE_CACHE_PROPERTIES;
+    }
+
+    status = zeDeviceGetCacheProperties(ze_dev, &count, ze_cache_props.data());
+    if (status != ZE_RESULT_SUCCESS) return FAIL;
+
+    for (uint32_t i = 0; i < count; i++) {
+        if (ze_cache_props[i].flags == 0) {
+            _cache_size = ze_cache_props[i].cacheSize;
+            break;
+        }
+    }
+#else
+    assert(!"unsupported GPU runtime");
 #endif
     cache_size = _cache_size;
     return OK;
@@ -1164,19 +1341,19 @@ int check_total_size(res_t *res, dnnl_primitive_t prim_ref) {
             res->reason = skip_reason::not_enough_ram;
         }
 
-        const bool all_allocation_fit_limit = std::all_of(
-                check_mem_size_args.sizes.cbegin(),
-                check_mem_size_args.sizes.cend(), [&](size_t s) {
-                    const bool fit = s < gpu_max_alloc_capacity;
-                    if (!fit) {
-                        BENCHDNN_PRINT(1,
-                                "[CHECK_MEM][%s]: Allocation of size %s "
-                                "doesn't fit allocation limit of %s.\n",
-                                dir_c_str(), smart_bytes(s).c_str(),
-                                smart_bytes(gpu_max_alloc_capacity).c_str());
-                    }
-                    return fit;
-                });
+        const bool all_allocation_fit_limit
+                = std::all_of(check_mem_size_args.sizes.cbegin(),
+                        check_mem_size_args.sizes.cend(), [&](size_t s) {
+            const bool fit = s < gpu_max_alloc_capacity;
+            if (!fit) {
+                BENCHDNN_PRINT(1,
+                        "[CHECK_MEM][%s]: Allocation of size %s "
+                        "doesn't fit allocation limit of %s.\n",
+                        dir_c_str(), smart_bytes(s).c_str(),
+                        smart_bytes(gpu_max_alloc_capacity).c_str());
+            }
+            return fit;
+        });
         if (!all_allocation_fit_limit) {
             res->state = SKIPPED;
             res->reason = skip_reason::not_enough_ram;
@@ -1655,6 +1832,16 @@ engine_t::engine_t(const engine_t &other) : is_owner_(other.is_owner_) {
         DNN_SAFE_V(dnnl_sycl_interop_engine_get_device(other.engine_, &dev));
         DNN_SAFE_V(dnnl_sycl_interop_engine_get_context(other.engine_, &ctx));
         DNN_SAFE_V(dnnl_sycl_interop_engine_create(&engine_, dev, ctx));
+#elif DNNL_GPU_RUNTIME == DNNL_RUNTIME_ZE
+        ze_driver_handle_t drv;
+        ze_device_handle_t dev;
+        ze_context_handle_t ctx;
+        DNN_SAFE_V(dnnl_ze_interop_engine_get_driver(other.engine_, &drv));
+        DNN_SAFE_V(dnnl_ze_interop_engine_get_device(other.engine_, &dev));
+        DNN_SAFE_V(dnnl_ze_interop_engine_get_context(other.engine_, &ctx));
+        DNN_SAFE_V(dnnl_ze_interop_engine_create(&engine_, drv, dev, ctx));
+#else
+        assert(!"unsupported GPU runtime");
 #endif
     } else {
         assert(!"unsupported engine kind");
@@ -1782,6 +1969,18 @@ void erase_unused_args(
     }
 }
 
+// Appends data kinds to check during comparison into `check_kinds` vector
+// coming from extensions through `attr`.
+void get_kinds_to_check_shared(
+        std::vector<data_kind_t> &check_kinds, const attr_t &attr) {
+    if (!attr.dropout.is_def() && attr.dropout.has_output_mask())
+        check_kinds.push_back(DROPOUT_MASK);
+
+    if (!attr.scales.get(DNNL_ARG_DST).is_def()
+            && attr.scales.get(DNNL_ARG_DST).is_dynamic())
+        check_kinds.push_back(DST_SCALES);
+}
+
 // This function handles cases when optimized CPU primitive is used as a
 // reference for a problem. Optimized primitive means custom memory formats
 // which require reorder to them. Since `ref_mem_map` is passed to optimized
@@ -1889,6 +2088,7 @@ int init_ref_memory_args_default_case(int exec_arg, dnn_mem_t &mem,
     const bool is_zero_point_arg = (exec_arg & DNNL_ARG_ATTR_ZERO_POINTS);
     const bool is_dropout_p = (exec_arg == DNNL_ARG_ATTR_DROPOUT_PROBABILITY);
     const bool is_dropout_seed = (exec_arg == DNNL_ARG_ATTR_DROPOUT_SEED);
+    const bool is_dropout_offset = (exec_arg == DNNL_ARG_ATTR_DROPOUT_OFFSET);
     const bool is_rounding_seed = (exec_arg == DNNL_ARG_ATTR_ROUNDING_SEED);
 
     if (is_post_ops_arg) {
@@ -1947,10 +2147,19 @@ int init_ref_memory_args_default_case(int exec_arg, dnn_mem_t &mem,
                 fill_zero_points(attr, local_exec_arg, mem, ref_mem), WARN));
     } else if (is_dropout_p) {
         ref_mem.set_f32_elem(0, attr.dropout.p);
-        TIME_FILL(SAFE(mem.reorder(ref_mem), WARN));
+        mem.set_elem(0, attr.dropout.p);
     } else if (is_dropout_seed) {
-        ref_mem.set_elem(0, attr.dropout.seed);
-        TIME_FILL(SAFE(mem.reorder(ref_mem), WARN));
+        ref_mem = dnn_mem_t(mem.md_, dnnl_s64, tag::abx, get_cpu_engine(),
+                /* prefill = */ false);
+        ref_mem.set_s64_elem(0, attr.dropout.seed);
+        assert(mem.dt() == dnnl_s64);
+        mem.set_s64_elem(0, attr.dropout.seed);
+    } else if (is_dropout_offset) {
+        ref_mem = dnn_mem_t(mem.md_, dnnl_s64, tag::abx, get_cpu_engine(),
+                /* prefill = */ false);
+        ref_mem.set_s64_elem(0, attr.dropout.offset);
+        assert(mem.dt() == dnnl_s64);
+        mem.set_s64_elem(0, attr.dropout.offset);
     } else if (is_rounding_seed) {
         ref_mem.set_elem(0, attr.rounding_mode.seed);
         TIME_FILL(SAFE(mem.reorder(ref_mem), WARN));

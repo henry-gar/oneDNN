@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstddef>
+#include <future> // for std::promise and std::future
 #include <map>
 #include <numeric>
 #include <string>
@@ -80,6 +81,7 @@ enum class graph_recognized_pattern_t {
     ordinary,
     sdpa_fwd,
     sdpa_bwd,
+    gmlp,
 };
 
 extern bdnn_state_t convert_state(const dnnl_status_t &s);
@@ -96,7 +98,7 @@ enum { CRIT = 0x001, WARN = 0x002, NEED_CLEANUP = 0x004 };
         try { \
             (f); \
         } catch (const dnnl::error &e) { \
-            if (((s)&CRIT) || ((s)&WARN)) { \
+            if (((s) & CRIT) || ((s) & WARN)) { \
                 bdnn_state_t bs = convert_state(e.status); \
                 (ss)->state = bs.state; \
                 if ((ss)->state == res_state_t::SKIPPED) { \
@@ -116,9 +118,9 @@ enum { CRIT = 0x001, WARN = 0x002, NEED_CLEANUP = 0x004 };
                             __FUNCTION__, __FILE__, __LINE__, e.what()); \
                 } \
                 fflush(0); \
-                if ((s)&CRIT) exit(2); \
+                if ((s) & CRIT) exit(2); \
             } \
-            if (!((s)&NEED_CLEANUP)) return FAIL; \
+            if (!((s) & NEED_CLEANUP)) return FAIL; \
         } \
     } while (0)
 
@@ -142,11 +144,13 @@ int measure_perf(timer::timer_t &t,
         res_t *res);
 
 dnnl::graph::op::kind opstr2kind(const std::string &kind);
+bool is_unary(const std::string &kind);
+bool is_unary(dnnl::graph::op::kind akind);
 dnnl::graph::op::attr attrstr2kind(const std::string &attr_name);
 const std::string &attrstr2type(const std::string &attr_name);
 
 std::string get_default_tag(size_t length);
-std::string strides2memory_tag(const size_t ndims,
+std::string strides2memory_tag(const dnnl::graph::logical_tensor::dims &dims,
         const dnnl::graph::logical_tensor::dims &strides,
         bool use_x_tag = true);
 dnnl::graph::logical_tensor::dims memory_tag2strides(
@@ -203,6 +207,7 @@ struct cpp_stream_t {
             void *interop_obj = nullptr);
     void wait() { stream_.wait(); }
     operator dnnl::stream &() { return stream_; }
+    dnnl::engine get_engine() const { return stream_.get_engine(); }
 
 private:
     BENCHDNN_DISALLOW_COPY_AND_ASSIGN(cpp_stream_t);
@@ -263,6 +268,18 @@ struct graph_fpmath_mode_t {
     // Since fpmath_mode doesn't provide an "undef" value that would indicate
     // it was not set externally to the json case, need to maintain this flag.
     bool override_json_value_ = false;
+};
+
+struct stream_staller_t {
+    // Enqueue tasks to stall a primitive execution tasks for asynchronous
+    // threadpool runtime. For rest runtimes does nothing.
+    stream_staller_t(graph::cpp_stream_t &stream);
+
+    // A signal the submission has completed and ready for execution.
+    void release();
+
+private:
+    std::promise<void> prom_;
 };
 
 } // namespace graph

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2024 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -38,7 +38,7 @@ class pads_value_check_t
     : public ::testing::TestWithParam<dnnl_graph_pads_value_params_t> {
 public:
     void TestPadsValueCheck() {
-        auto params = ::testing::TestWithParam<
+        const auto &params = ::testing::TestWithParam<
                 dnnl_graph_pads_value_params_t>::GetParam();
         graph::op_t op(params.op_name);
         op.set_attr<dims>(graph::op_attr::pads_begin, params.pads_begin);
@@ -209,7 +209,7 @@ class data_type_check_t
     : public ::testing::TestWithParam<dnnl_graph_data_type_params_t> {
 public:
     void TestDataTypeCheck() {
-        auto params = ::testing::TestWithParam<
+        const auto &params = ::testing::TestWithParam<
                 dnnl_graph_data_type_params_t>::GetParam();
 
         graph::op_t op(params.op_name);
@@ -309,7 +309,7 @@ class layer_norm_all_check_t
     : public ::testing::TestWithParam<dnnl_graph_ln_params_t> {
 public:
     void TestLayerNormAllCheck() {
-        auto params
+        const auto &params
                 = ::testing::TestWithParam<dnnl_graph_ln_params_t>::GetParam();
 
         graph::op_t op(params.op_name);
@@ -354,13 +354,13 @@ INSTANTIATE_TEST_SUITE_P(test_interface_op_def_constraint,
         ::testing::Values(
                 // test function of CheckLayerNormDataType
                 dnnl_graph_ln_params_t {LayerNorm, f32, f32, true, false, true,
-                        graph::check_ln_gn_data_type, true},
+                        graph::check_norm_data_type, true},
                 dnnl_graph_ln_params_t {LayerNorm, bf16, f32, true, false, true,
-                        graph::check_ln_gn_data_type, true},
+                        graph::check_norm_data_type, true},
                 dnnl_graph_ln_params_t {LayerNorm, f32, bf16, true, false, true,
-                        graph::check_ln_gn_data_type, false},
+                        graph::check_norm_data_type, false},
                 dnnl_graph_ln_params_t {LayerNorm, bf16, bf16, true, false,
-                        true, graph::check_ln_gn_data_type, true},
+                        true, graph::check_norm_data_type, true},
                 // test function of CheckLayerNormFwdOutputsNum
                 dnnl_graph_ln_params_t {LayerNorm, f32, f32, true, false, true,
                         graph::check_ln_gn_fwd_outputs_num, true},
@@ -396,7 +396,7 @@ class shape_check_t
     : public ::testing::TestWithParam<dnnl_graph_shape_params_t> {
 public:
     void TestShapeCheck() {
-        auto params = ::testing::TestWithParam<
+        const auto &params = ::testing::TestWithParam<
                 dnnl_graph_shape_params_t>::GetParam();
 
         graph::op_t op(params.op_name);

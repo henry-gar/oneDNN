@@ -1,6 +1,6 @@
 /*******************************************************************************
-* Copyright 2021-2023 Intel Corporation
-* Copyright 2024 FUJITSU LIMITED
+* Copyright 2021 Intel Corporation
+* Copyright 2024-2026 FUJITSU LIMITED
 * Copyright 2025 Arm Ltd. and affiliates
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
@@ -99,27 +99,41 @@ status_t brdgmm_dw_convolution_fwd_t<isa>::pd_t::init(engine_t *engine) {
     const auto bia_type = cd.bias_desc.data_type;
     const auto dst_type = cd.dst_desc.data_type;
 
-    // TODO: support s8s8 conv
     const bool is_f32 = everyone_is(f32, src_type, wei_type, dst_type);
-    const bool is_bf16 = everyone_is(bf16, src_type, wei_type, dst_type);
-    const bool is_int8 = one_of(src_type, u8) && wei_type == s8
+    const bool is_bf16 = everyone_is(bf16, src_type, wei_type)
+            && one_of(dst_type, bf16, f32);
+    const bool is_f32_bf16
+            = everyone_is(f32, src_type, dst_type) && wei_type == bf16;
+    const bool is_int8 = one_of(src_type, s8, u8) && wei_type == s8
             && one_of(dst_type, s32, f32, u8, s8);
-
-    //     const auto isa = sve_512;
 
     auto skip_mask = skip_mask_t::post_ops;
     if (is_int8) skip_mask |= skip_mask_t::scales;
 
-    bool ok = is_fwd() && set_default_alg_kind(alg_kind::convolution_direct)
-            && one_of(true, is_f32, is_int8, is_bf16) && (isa != isa_undef)
-            && mayiuse(isa)
-            && IMPLICATION(is_int8,
-                    one_of(bia_type, data_type::undef, f32, s32, s8, u8))
-            && IMPLICATION(!is_int8,
-                    one_of(bia_type, data_type::undef, src_type, dst_type))
-            && attr()->has_default_values(skip_mask) && !has_zero_dim_memory()
-            && impl::is_dense_format_kind({src_md(), weights_md(), dst_md()});
-    if (!ok) { return status::unimplemented; }
+    VDISPATCH_CONV(is_fwd(), VERBOSE_BAD_PROPKIND);
+    VDISPATCH_CONV(set_default_alg_kind(alg_kind::convolution_direct),
+            VERBOSE_BAD_ALGORITHM);
+    VDISPATCH_CONV(one_of(true, is_f32, is_int8, is_bf16, is_f32_bf16),
+            VERBOSE_UNSUPPORTED_DT);
+    VDISPATCH_CONV(
+            IMPLICATION(is_int8,
+                    one_of(bia_type, data_type::undef, f32, s32, s8, u8)),
+            VERBOSE_UNSUPPORTED_BIAS_CFG);
+    VDISPATCH_CONV(
+            IMPLICATION(is_bf16, one_of(bia_type, data_type::undef, bf16, f32)),
+            VERBOSE_UNSUPPORTED_BIAS_CFG);
+    VDISPATCH_CONV(
+            IMPLICATION(!is_int8 && !is_bf16,
+                    one_of(bia_type, data_type::undef, src_type, dst_type)),
+            VERBOSE_UNSUPPORTED_BIAS_CFG);
+    VDISPATCH_CONV(
+            attr()->has_default_values(skip_mask), VERBOSE_UNSUPPORTED_ATTR);
+    VDISPATCH_CONV(!has_zero_dim_memory(), VERBOSE_EMPTY_TENSOR, "");
+    VDISPATCH_CONV(
+            (isa != isa_undef) && mayiuse(isa), "undefined or unsupported isa");
+    VDISPATCH_CONV(
+            impl::is_dense_format_kind({src_md(), weights_md(), dst_md()}),
+            VERBOSE_UNSUPPORTED_SPARSE_CFG);
 
     auto &jcp = jcp_;
 
@@ -131,15 +145,18 @@ status_t brdgmm_dw_convolution_fwd_t<isa>::pd_t::init(engine_t *engine) {
     const int ndims = src_d.ndims();
     const bool is_3d = ndims == 5;
     // Currently this kernel only supports 2D and 3D convolutions.
-    if (!utils::one_of(ndims, 4, 5)) { return status::unimplemented; }
+    VDISPATCH_CONV(utils::one_of(ndims, 4, 5), VERBOSE_UNSUPPORTED_FEATURE,
+            "only 2D/3D convolutions are supported");
     const bool with_groups = weights_d.ndims() == src_d.ndims() + 1;
-    if (!with_groups) { return status::unimplemented; }
+    VDISPATCH_CONV(with_groups, VERBOSE_UNSUPPORTED_FEATURE,
+            "Grouped convolution expected for depthwise convolution "
+            "implementation");
     // dilations are not supported
-    if (cd.dilates[0] != 0 || cd.dilates[1] != 0
-            || (is_3d && cd.dilates[2] != 0))
-        return status::unimplemented;
+    VDISPATCH_CONV(!(cd.dilates[0] != 0 || cd.dilates[1] != 0
+                           || (is_3d && cd.dilates[2] != 0)),
+            VERBOSE_UNSUPPORTED_FEATURE, "dilations are not supported");
 
-    jcp = zero<decltype(jcp)>();
+    jcp = utils::zero<decltype(jcp)>();
     jcp.ngroups = weights_d.dims()[0];
     jcp.mb = src_d.dims()[0];
     jcp.oc = dst_d.dims()[1] / jcp.ngroups;
@@ -172,7 +189,9 @@ status_t brdgmm_dw_convolution_fwd_t<isa>::pd_t::init(engine_t *engine) {
     jcp.with_bias = with_bias();
     jcp.bia_dt = jcp.with_bias ? cd.bias_desc.data_type : data_type::undef;
 
-    if (!(everyone_is(1, jcp.ic, jcp.oc))) { return status::unimplemented; }
+    VDISPATCH_CONV((everyone_is(1, jcp.ic, jcp.oc)),
+            "Depthwise BRGEMM implementation supports only 1 input and 1 "
+            "output channel per group");
 
     const auto def_data_tag = is_3d ? format_tag::ndhwc : format_tag::nhwc;
     CHECK(init_tag(src_md_, src_d, def_data_tag, true));
@@ -184,7 +203,8 @@ status_t brdgmm_dw_convolution_fwd_t<isa>::pd_t::init(engine_t *engine) {
     }
 
     CHECK(attr_.set_default_formats(dst_md()));
-    if (!post_ops_ok(jcp, *attr(), dst_d)) { return status::unimplemented; }
+    VDISPATCH_CONV(
+            post_ops_ok(jcp, *attr(), dst_d), VERBOSE_UNSUPPORTED_POSTOP);
     jcp.with_post_ops = attr()->post_ops_.len() > 0;
 
     jcp.isa = isa;
@@ -231,9 +251,9 @@ void brdgmm_dw_convolution_fwd_t<isa>::pd_t::init_batch_elements() {
 
     auto &jcp = jcp_;
 
-    auto gen_batch_elements = [&jcp](int fpad, int backpad, int tpad, int bpad,
-                                      int lpad, int rpad, int &bs,
-                                      brgemm_batch_element_t *batches) {
+    auto gen_batch_elements
+            = [&jcp](int fpad, int backpad, int tpad, int bpad, int lpad,
+                      int rpad, int &bs, brgemm_batch_element_t *batches) {
         const size_t src_w_stride = jcp.ngroups * jcp.src_dsz;
         const size_t src_h_stride = jcp.ngroups * jcp.iw * jcp.src_dsz;
         const size_t src_d_stride = jcp.ngroups * jcp.ih * jcp.iw * jcp.src_dsz;
@@ -253,9 +273,9 @@ void brdgmm_dw_convolution_fwd_t<isa>::pd_t::init_batch_elements() {
                     || kh < tpad || kh >= jcp.kh - adj_bpad;
             if (padded_bs) continue;
             auto &batch = batches[bs];
-            batch.vvpad.top = nstl::max(0, div_up(lpad - kw, jcp.stride_w));
-            batch.vvpad.bottom = nstl::max(
-                    0, div_up(rpad - jcp.kw + kw + 1, jcp.stride_w));
+            batch.vvpad.top = div_up(nstl::max(0, lpad - kw), jcp.stride_w);
+            batch.vvpad.bottom = div_up(
+                    nstl::max(0, rpad - jcp.kw + kw + 1), jcp.stride_w);
             //     batch.has_s8s8_comp_batch_pad = padded_bs;
             const dim_t offs_A
                     = kd * src_d_stride + kh * src_h_stride + kw * src_w_stride;
@@ -279,7 +299,7 @@ void brdgmm_dw_convolution_fwd_t<isa>::pd_t::init_batch_elements() {
             = (jcp.ow_block - 1) * jcp.stride_w + jcp.kw - (jcp.iw + jcp.l_pad);
     const int rpad_1 = rpad_0 + (nstl::max(0, -rpad_0) / w_shift + 1) * w_shift;
     const int n_uniq_rpads
-            = 1 + nstl::max(0, div_up(jcp.r_pad - (rpad_1 - w_shift), w_shift));
+            = 1 + div_up(nstl::max(0, jcp.r_pad - (rpad_1 - w_shift)), w_shift);
 
     const auto h_blk_info = get_blocks_info(
             jcp.ih, jcp.oh, jcp.kh, jcp.stride_h, jcp.t_pad, jcp.b_pad, 1);
@@ -313,14 +333,14 @@ void brdgmm_dw_convolution_fwd_t<isa>::pd_t::init_batch_elements() {
         const int oh = ohb < h_blk_info.n_lpad_blks
                 ? ohb
                 : (h_blk_info.rpad_blk_start_idx
-                        + (ohb - h_blk_info.n_lpad_blks));
+                          + (ohb - h_blk_info.n_lpad_blks));
         const int bpad = oh * h_shift + jcp.kh - (jcp.ih + jcp.t_pad);
 
         const int fpad = jcp.f_pad - odb * d_shift;
         const int od = odb < d_blk_info.n_lpad_blks
                 ? odb
                 : (d_blk_info.rpad_blk_start_idx
-                        + (odb - d_blk_info.n_lpad_blks));
+                          + (odb - d_blk_info.n_lpad_blks));
         const int backpad = od * d_shift + jcp.kd - (jcp.id + jcp.f_pad);
 
         gen_batch_elements(fpad, backpad, tpad, bpad, lpad, rpad, bs_[bi],
@@ -398,9 +418,7 @@ status_t brdgmm_dw_convolution_fwd_t<isa>::pd_t::init_brdgmm_conf() {
 
                 if (ow_tail_block && (jcp.ow % ow_tail_block == 0))
                     jcp.ow_block = ow_tail_block;
-                else {
-                    jcp.ow_block = jcp.ow;
-                }
+                else { jcp.ow_block = jcp.ow; }
             } else {
                 const int max_ow_block = is_superset(jcp.isa, sve_512)
                         ? 6
@@ -533,7 +551,7 @@ status_t brdgmm_dw_convolution_fwd_t<isa>::execute(
             = (jcp.ow_block - 1) * jcp.stride_w + jcp.kw - (jcp.iw + jcp.l_pad);
     const int rpad_1 = rpad_0 + (nstl::max(0, -rpad_0) / w_shift + 1) * w_shift;
     const int n_rpad_blks
-            = 1 + nstl::max(0, div_up(jcp.r_pad - (rpad_1 - w_shift), w_shift));
+            = 1 + div_up(nstl::max(0, jcp.r_pad - (rpad_1 - w_shift)), w_shift);
 
     parallel(jcp.nthr, [&](const int ithr, const int nthr) {
         int start {0}, end {0};
@@ -603,9 +621,8 @@ status_t brdgmm_dw_convolution_fwd_t<isa>::execute(
             const int ow_e
                     = nstl::min(ow + cur_n_owb * jcp.ow_block, jcp.ow) - 1;
             const int rpad = ow_e * jcp.stride_w - jcp.l_pad + jcp.kw - jcp.iw;
-            const int rpad_i = rpad <= rpad_1 - w_shift
-                    ? 0
-                    : 1 + div_up(rpad - rpad_1, w_shift);
+            const int rpad_i
+                    = div_up(nstl::max(0, rpad - rpad_1 + w_shift), w_shift);
             const int bi //[d_bi][h_bi][w_bi][rpad_i] _
                     = ((d_bi * n_h_blks + h_bi) * n_w_blks + w_bi) * n_rpad_blks
                     + rpad_i;

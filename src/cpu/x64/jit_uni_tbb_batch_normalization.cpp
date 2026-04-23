@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -228,7 +228,7 @@ struct jit_bnorm_process_relu_t {
             jit_generator_t *host, Reg64 reg_off_dat, Reg64 reg_tmp,
             Reg64 reg_ptr_ws, Vmm vzero, Vmm vstore_mask, Opmask kstore_mask)
         : jit_bnorm_process_relu_t(pd, host, reg_off_dat, reg_tmp, reg_ptr_ws,
-                vzero, vstore_mask, kstore_mask, Vmm(), Vmm(), Reg64()) {}
+                  vzero, vstore_mask, kstore_mask, Vmm(), Vmm(), Reg64()) {}
 
     jit_generator_t *const h_;
     const Reg64 reg_off_dat_;
@@ -703,7 +703,7 @@ struct jit_bnorm_fwd_statistics_t : public jit_generator_t {
                 {
                     is_avx2_ne_xf16_
                             ? compute_stat_avx2_ne_xf16(
-                                    compute_mean, c_blks_to_unroll)
+                                      compute_mean, c_blks_to_unroll)
                             : compute_stat(compute_mean, c_blks_to_unroll);
 
                     add(reg_off_dat_, stride_S_ * data_type_size_);
@@ -2000,24 +2000,28 @@ public:
 
         auto reduce = [&](acc_data_t *stat, acc_data_t *r_stat) {
             if (!need_reduction) return;
-            acc_data_t *loc_stat = r_stat;
 
-            for (dim_t c = 0; c < size_C_stat; ++c)
-                stat[c] = loc_stat[c];
+            parallel(1, [= COMPAT_THIS_CAPTURE](int, int) {
+                acc_data_t *loc_stat = r_stat;
 
-            for (int thr_ns = 1; thr_ns < nthr_NS; ++thr_ns) {
-                loc_stat += size_C_stat;
                 for (dim_t c = 0; c < size_C_stat; ++c)
-                    stat[c] += loc_stat[c];
-            }
+                    stat[c] = loc_stat[c];
 
-            for (dim_t c = 0; c < size_C_stat; ++c)
-                stat[c] /= N_ * S_;
+                for (int thr_ns = 1; thr_ns < nthr_NS; ++thr_ns) {
+                    loc_stat += size_C_stat;
+                    for (dim_t c = 0; c < size_C_stat; ++c)
+                        stat[c] += loc_stat[c];
+                }
+
+                for (dim_t c = 0; c < size_C_stat; ++c)
+                    stat[c] /= N_ * S_;
+            });
         };
 
         // find local mean
         acc_data_t *r_mean = need_reduction ? rbuf : mean;
-        parallel(nthr.glob, [&](int ithr_glob, int nthr_glob) {
+        parallel(nthr.glob,
+                [= COMPAT_THIS_CAPTURE](int ithr_glob, int nthr_glob) {
             assert(nthr_glob == nthr.glob);
             const auto ithr = map_thread(ithr_glob, nthr);
             bnorm_dims_t start, stop;
@@ -2043,7 +2047,8 @@ public:
 
         // find local var
         acc_data_t *r_var = need_reduction ? rbuf : var;
-        parallel(nthr.glob, [&](int ithr_glob, int nthr_glob) {
+        parallel(nthr.glob,
+                [= COMPAT_THIS_CAPTURE](int ithr_glob, int nthr_glob) {
             assert(nthr_glob == nthr.glob);
             const auto ithr = map_thread(ithr_glob, nthr);
             bnorm_dims_t start, stop;
@@ -2078,7 +2083,8 @@ public:
         std::tie(stride_N, stride_S, stride_C)
                 = get_data_strides<isa>(pd_, tag_kind_);
 
-        parallel(nthr.glob, [&](int ithr_glob, int nthr_glob) {
+        parallel(nthr.glob,
+                [= COMPAT_THIS_CAPTURE](int ithr_glob, int nthr_glob) {
             assert(nthr_glob == nthr.glob);
             const auto ithr = map_thread(ithr_glob, nthr);
             bnorm_dims_t start, stop;
@@ -2168,28 +2174,31 @@ public:
         auto reduce = [&]() {
             if (!need_reduction) return;
 
-            // diff_gamma
-            const acc_data_t *loc_diff_gamma = r_diff_gamma;
-            for (dim_t c = 0; c < size_C_stat; ++c)
-                diff_gamma[c] = loc_diff_gamma[c];
-            for (int thr_ns = 1; thr_ns < nthr_NS; ++thr_ns) {
-                loc_diff_gamma += size_C_stat;
+            parallel(1, [=](int, int) {
+                // diff_gamma
+                const acc_data_t *loc_diff_gamma = r_diff_gamma;
                 for (dim_t c = 0; c < size_C_stat; ++c)
-                    diff_gamma[c] += loc_diff_gamma[c];
-            }
+                    diff_gamma[c] = loc_diff_gamma[c];
+                for (int thr_ns = 1; thr_ns < nthr_NS; ++thr_ns) {
+                    loc_diff_gamma += size_C_stat;
+                    for (dim_t c = 0; c < size_C_stat; ++c)
+                        diff_gamma[c] += loc_diff_gamma[c];
+                }
 
-            // diff_beta
-            const acc_data_t *loc_diff_beta = r_diff_beta;
-            for (dim_t c = 0; c < size_C_stat; ++c)
-                diff_beta[c] = loc_diff_beta[c];
-            for (int thr_ns = 1; thr_ns < nthr_NS; ++thr_ns) {
-                loc_diff_beta += size_C_stat;
+                // diff_beta
+                const acc_data_t *loc_diff_beta = r_diff_beta;
                 for (dim_t c = 0; c < size_C_stat; ++c)
-                    diff_beta[c] += loc_diff_beta[c];
-            }
+                    diff_beta[c] = loc_diff_beta[c];
+                for (int thr_ns = 1; thr_ns < nthr_NS; ++thr_ns) {
+                    loc_diff_beta += size_C_stat;
+                    for (dim_t c = 0; c < size_C_stat; ++c)
+                        diff_beta[c] += loc_diff_beta[c];
+                }
+            });
         };
 
-        parallel(nthr.glob, [&](int ithr_glob, int nthr_glob) {
+        parallel(nthr.glob,
+                [= COMPAT_THIS_CAPTURE](int ithr_glob, int nthr_glob) {
             assert(nthr_glob == nthr.glob);
             const auto ithr = map_thread(ithr_glob, nthr);
             bnorm_dims_t start, stop;
@@ -2231,7 +2240,8 @@ public:
         std::tie(stride_N, stride_S, stride_C)
                 = get_data_strides<isa>(pd_, tag_kind_);
 
-        parallel(nthr.glob, [&](int ithr_glob, int nthr_glob) {
+        parallel(nthr.glob,
+                [= COMPAT_THIS_CAPTURE](int ithr_glob, int nthr_glob) {
             assert(nthr_glob == nthr.glob);
             const auto ithr = map_thread(ithr_glob, nthr);
             bnorm_dims_t start, stop;
@@ -2551,18 +2561,19 @@ status_t jit_uni_tbb_batch_normalization_fwd_t<isa>::execute(
     auto scale = CTX_IN_MEM(const acc_data_t *, DNNL_ARG_SCALE);
     auto shift = CTX_IN_MEM(const acc_data_t *, DNNL_ARG_SHIFT);
 
-    auto mean = pd()->stats_is_src() ? const_cast<acc_data_t *>(
-                        CTX_IN_MEM(const acc_data_t *, DNNL_ARG_MEAN))
-                                     : CTX_OUT_MEM(acc_data_t *, DNNL_ARG_MEAN);
+    auto mean = pd()->stats_is_src()
+            ? const_cast<acc_data_t *>(
+                      CTX_IN_MEM(const acc_data_t *, DNNL_ARG_MEAN))
+            : CTX_OUT_MEM(acc_data_t *, DNNL_ARG_MEAN);
     auto var = pd()->stats_is_src()
             ? const_cast<acc_data_t *>(
-                    CTX_IN_MEM(const acc_data_t *, DNNL_ARG_VARIANCE))
+                      CTX_IN_MEM(const acc_data_t *, DNNL_ARG_VARIANCE))
             : CTX_OUT_MEM(acc_data_t *, DNNL_ARG_VARIANCE);
 
     auto dst = CTX_OUT_MEM(void *, DNNL_ARG_DST);
     auto ws = CTX_OUT_MEM(uint8_t *, DNNL_ARG_WORKSPACE);
 
-    auto scratchpad = ctx.get_scratchpad_grantor();
+    const auto &scratchpad = ctx.get_scratchpad_grantor();
 
     bnorm_driver_->exec_fwd(src, dst, scale, shift, mean, var, ws, scratchpad);
 
@@ -2685,7 +2696,7 @@ status_t jit_uni_tbb_batch_normalization_bwd_t<isa>::execute(
     auto diff_scale = CTX_OUT_MEM(acc_data_t *, DNNL_ARG_DIFF_SCALE);
     auto diff_shift = CTX_OUT_MEM(acc_data_t *, DNNL_ARG_DIFF_SHIFT);
 
-    auto scratchpad = ctx.get_scratchpad_grantor();
+    const auto &scratchpad = ctx.get_scratchpad_grantor();
 
     bnorm_driver_->exec_bwd(src, diff_src, diff_dst, scale, diff_scale,
             diff_shift, mean, var, ws, scratchpad);

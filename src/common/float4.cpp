@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2024-2025 Intel Corporation
+* Copyright 2024 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -113,8 +113,10 @@ uint8_t float2e3m0(float f) {
             min_diff = diff;
             raw_bits = idx;
         }
-        // Special case for midpoint, we round to even (so even index)
-        if ((diff == min_diff) && !(idx & 1)) raw_bits = idx;
+        // Special case for midpoint:
+        //  - towards 0 for 0.125
+        //  - up for other ties
+        if ((diff == min_diff) && idx != 1) raw_bits = idx;
     }
     assert(raw_bits < 8);
     // reapply sign

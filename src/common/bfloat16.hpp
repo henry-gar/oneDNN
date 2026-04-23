@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2023 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -48,7 +48,7 @@ struct bfloat16_t {
                     std::is_integral<IntegerType>::value>::type>
     bfloat16_t(const IntegerType i)
         : raw_bits_ {convert_bits_of_normal_or_zero(
-                utils::bit_cast<uint32_t>(static_cast<float>(i)))} {}
+                  utils::bit_cast<uint32_t>(static_cast<float>(i)))} {}
 
     bfloat16_t DNNL_API &operator=(float f);
 

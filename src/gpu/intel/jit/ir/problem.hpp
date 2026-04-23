@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -20,8 +20,7 @@
 #include <string>
 #include <vector>
 
-#include "gpu/intel/jit/dsl/tensor.hpp"
-#include "gpu/intel/jit/ir/core.hpp"
+#include "gemmstone/dsl/tensor.hpp"
 #include "gpu/intel/utils.hpp"
 
 namespace dnnl {
@@ -43,7 +42,7 @@ enum class tensor_kind_t {
 
 std::string to_string(tensor_kind_t tensor);
 
-using pvar_t = dsl::idx_t;
+using pvar_t = gemmstone::dsl::idx_t;
 
 namespace pvars {
 extern pvar_t g;
@@ -75,10 +74,10 @@ extern pvar_t k;
 } // namespace pvars
 
 template <typename T>
-using pvar_map_t = dsl::idx_map_t<T>;
-using tile_t = dsl::tile_t;
-using coord_t = dsl::coord_t;
-using icoord_t = dsl::icoord_t;
+using pvar_map_t = gemmstone::dsl::idx_map_t<T>;
+using tile_t = gemmstone::dsl::tile_t;
+using coord_t = gemmstone::dsl::coord_t;
+using icoord_t = gemmstone::dsl::icoord_t;
 
 struct tile_coord_t {
     tile_t tile;
@@ -93,7 +92,7 @@ struct tile_coord_t {
     dim_t elems() const { return tile.elems(); }
     bool has_zero_coord() const {
         for (auto &d : coord) {
-            if (!is_zero(coord.at(d))) return false;
+            if (coord.at(d).is(0)) return false;
         }
         return true;
     }
@@ -119,7 +118,7 @@ struct tile_coord_t {
         return oss.str();
     }
 
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
     static tile_coord_t invalid() { return tile_coord_t(false); }
 };

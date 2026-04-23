@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -17,10 +17,13 @@
 /// @example eltwise.cpp
 /// > Annotated version: @ref eltwise_example_cpp
 
-/// @page eltwise_example_cpp Element-Wise Primitive Example
-/// This C++ API example demonstrates how to create and execute an
+/// @page eltwise_example_cpp_brief
+/// @brief This C++ API example demonstrates how to create and execute an
 /// [Element-wise](@ref dev_guide_eltwise) primitive in forward training
 /// propagation mode.
+
+/// @page eltwise_example_cpp Element-Wise Primitive Example
+/// \copybrief eltwise_example_cpp_brief
 ///
 /// @include eltwise.cpp
 

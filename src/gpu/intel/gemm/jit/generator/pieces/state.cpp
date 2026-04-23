@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -70,6 +70,15 @@ void CommonState::allocEmulate64Temp(const EmulationStrategy &estrategy)
 
     for (int q = 0; q < ntemp; q++)
         emulate.temp[q] = ra.alloc();
+}
+
+GRF GEMMState::r0InfoGRF() const
+{
+    if (r0_info.isValid()) {
+        if (r0_info.isARF()) stub();
+        return GRF{r0_info.getBase()};
+    }
+    return GRF{};
 }
 
 void GEMMState::setTacc(Type T)

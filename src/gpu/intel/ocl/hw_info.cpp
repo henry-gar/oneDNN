@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -19,7 +19,7 @@
 
 #include "gpu/intel/jit/binary_format.hpp"
 #include "gpu/intel/jit/generator.hpp"
-#include "gpu/intel/jit/utils/ngen_type_bridge.hpp"
+#include "gpu/intel/jit/utils/type_bridge.hpp"
 
 #ifndef CL_DEVICE_IP_VERSION_INTEL
 #define CL_DEVICE_IP_VERSION_INTEL 0x4250
@@ -36,11 +36,12 @@ xpu::runtime_version_t get_driver_version(cl_device_id device) {
     xpu::runtime_version_t runtime_version(-1, -1, -1);
 
     size_t param_size = 0;
-    err = clGetDeviceInfo(device, CL_DRIVER_VERSION, 0, nullptr, &param_size);
+    err = xpu::ocl::clGetDeviceInfo(
+            device, CL_DRIVER_VERSION, 0, nullptr, &param_size);
     std::string driver_version(param_size, '\0');
 
     if (err == CL_SUCCESS) {
-        err = clGetDeviceInfo(device, CL_DRIVER_VERSION, param_size,
+        err = xpu::ocl::clGetDeviceInfo(device, CL_DRIVER_VERSION, param_size,
                 &driver_version[0], nullptr);
     }
 
@@ -58,10 +59,12 @@ xpu::runtime_version_t get_driver_version(cl_device_id device) {
 status_t init_gpu_hw_info(impl::engine_t *engine, cl_device_id device,
         cl_context ctx, uint32_t &ip_version, compute::gpu_arch_t &gpu_arch,
         compute::gpu_product_t &product_, uint64_t &native_extensions,
-        bool &mayiuse_systolic, bool &mayiuse_ngen_kernels) {
+        bool &mayiuse_systolic, bool &mayiuse_ngen_kernels,
+        bool &is_efficient_64bit) {
     using namespace ngen;
     ngen::Product product
             = ngen::OpenCLCodeGenerator<HW::Unknown>::detectHWInfo(ctx, device);
+    HW hw = getCore(product.family);
     bool is_xelpg = (product.family == ngen::ProductFamily::ARL
             || product.family == ngen::ProductFamily::MTL);
 
@@ -73,16 +76,23 @@ status_t init_gpu_hw_info(impl::engine_t *engine, cl_device_id device,
     CHECK(get_ocl_device_enabled_native_float_atomics(
             device, native_extensions, is_xelpg));
 
-    auto status
-            = jit::gpu_supports_binary_format(&mayiuse_ngen_kernels, engine);
-    if (status != status::success) {
-        VWARN(common, runtime,
-                "ngen fallback (gpu does not support binary format kernels)");
-        mayiuse_ngen_kernels = false;
-    }
+    if (hw <= ngen::HW::Xe3) {
+        auto status = jit::gpu_supports_binary_format(
+                &mayiuse_ngen_kernels, engine);
+        if (status != status::success) {
+            VWARN(common, runtime,
+                    "ngen fallback (gpu does not support binary format "
+                    "kernels)");
+            mayiuse_ngen_kernels = false;
+        }
+    } else if (hw != ngen::HW::Unknown)
+        mayiuse_ngen_kernels = true;
+
+    is_efficient_64bit = OpenCLCodeGenerator<HW::Unknown>::detectEfficient64Bit(
+            ctx, device, hw);
 
     ip_version = 0;
-    OCL_CHECK(clGetDeviceInfo(device, CL_DEVICE_IP_VERSION_INTEL,
+    OCL_CHECK(xpu::ocl::clGetDeviceInfo(device, CL_DEVICE_IP_VERSION_INTEL,
             sizeof(ip_version), &ip_version, nullptr));
     return status::success;
 }

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -93,8 +93,38 @@ CacheSettingsLSC getCaching(char l1, char l3)
     }
 }
 
+CacheSettingsLSC getCaching(char l1, char l2, char l3) {
+    if (l3 == 'u' || l3 == 'i') return getCaching(l1, l2);
+
+    if (l3 == 'c' || l3 == 'b') {
+        bool l2cached = (l2 == 'c') || (l2 == 'b');
+        switch (l1) {
+            case 'u':
+                return l2cached ? CacheSettingsLSC::L1UC_L2C_L3C
+                                : CacheSettingsLSC::L1UC_L2UC_L3C;
+            case 't':
+            case 'c':
+                return l2cached ? CacheSettingsLSC::L1C_L2C_L3C
+                                : CacheSettingsLSC::L1C_L2UC_L3C;
+            case 's':
+                return l2cached ? CacheSettingsLSC::L1S_L2C_L3C
+                                : CacheSettingsLSC::L1S_L2UC_L3C;
+            case 'b':
+                if (!l2cached) return CacheSettingsLSC::L1WB_L2UC_L3WB;
+            default: break;
+        }
+    }
+
+    throw std::runtime_error("Unknown cache setting");
+}
+
 CacheSettingsLSC getCachingEntry(std::stringstream &s, HW hw)
 {
+    if (hw >= HW::Xe3p) {
+        char l1, l2, l3;
+        s >> l1 >> l2 >> l3;
+        return getCaching(l1, l2, l3);
+    } else
     {
         char l1, l3;
         s >> l1 >> l3;
@@ -112,6 +142,8 @@ void getCaching(std::stringstream &s, HW hw, MatrixAddressingStrategy &astrategy
         cachingW = CacheSettingsLSC::L1WB_L3WB;
         if (hw >= HW::XeHPC)
             cachingW = CacheSettingsLSC::L1UC_L3WB;
+        if (hw >= HW::Xe3p)
+            cachingR = CacheSettingsLSC::L1C_L2C_L3C;
     }
 
     if (s.peek() == '{') {
@@ -138,7 +170,7 @@ static void getTiling(std::stringstream &s, MatrixAddressingStrategy &astrategy)
     }
 }
 
-void parseStrategy(const char *str, HW hw, const GEMMProblem &problem, GEMMStrategy &strategy)
+void parseStrategy(const std::string &str, HW hw, const GEMMProblem &problem, GEMMStrategy &strategy)
 {
     std::stringstream s(str);
     s.imbue(std::locale::classic());
@@ -233,6 +265,7 @@ void parseStrategy(const char *str, HW hw, const GEMMProblem &problem, GEMMStrat
     strategy.A.cachingW = CacheSettingsLSC::Default;
     strategy.B.cachingW = CacheSettingsLSC::Default;
     strategy.CO.cachingR = CacheSettingsLSC::L1C_L3C;
+    if (hw >= HW::Xe3p) strategy.CO.cachingR = CacheSettingsLSC::L1C_L2C_L3C;
     strategy.A_prefetch.prefetch = true;
     strategy.B_prefetch.prefetch = true;
     strategy.C_prefetch.prefetch = true;
@@ -253,6 +286,8 @@ void parseStrategy(const char *str, HW hw, const GEMMProblem &problem, GEMMStrat
     strategy.AB_prefetchL3.base = getAddressBase(strategy.l3PrefetchA ? asA : asB);
     if (strategy.AB_prefetchL3.cachingR == CacheSettingsLSC::Default) {
         strategy.AB_prefetchL3.cachingR = CacheSettingsLSC::L1UC_L3C;
+        if (hw >= HW::Xe3p)
+            strategy.AB_prefetchL3.cachingR = CacheSettingsLSC::L1UC_L2C_L3C;
     }
 
     strategy.A.padded |= isPacked(problem.A.layout);
@@ -284,9 +319,14 @@ void parseStrategy(const char *str, HW hw, const GEMMProblem &problem, GEMMStrat
         else if (mod.substr(0, 3) == "grf") {
             mod.erase(0,3);
             strategy.GRFs = std::stoi(mod);
-        } else if (mod.substr(0, 3) == "dot") {
+        } else if (mod == "dsl")
+            strategy.isDSLGenerator = true;
+         else if (mod.substr(0, 3) == "dot") {
             mod.erase(0,3);
             strategy.dotVL = mod.empty() ? 1 : std::stoi(mod);
+        } else if (mod.substr(0, 3) == "cti") {
+            mod.erase(0,3);
+            strategy.cInterleaveChunk = mod.empty() ? 64 / problem.Tc_ext : std::stoi(mod);
         } else if (mod == "sys")
             strategy.systolic = true;
         else if (mod == "dw")
@@ -848,6 +888,8 @@ std::string unparseStrategy(HW hw, const GEMMProblem &problem, const GEMMStrateg
             s << " dw";
     }
 
+    if (strategy.isDSLGenerator) s << " dsl";
+
     if (strategy.dotVL) {
         s << " dot";
         if (strategy.dotVL > 1) s << strategy.dotVL;
@@ -911,6 +953,8 @@ std::string unparseStrategy(HW hw, const GEMMProblem &problem, const GEMMStrateg
     if (!strategy.jointSplit)           s << " njs";
     if (strategy.mSplitThresh)          s << " ms" << strategy.mSplitThresh;
     if (strategy.nSplitThresh)          s << " ns" << strategy.nSplitThresh;
+
+    if (strategy.cInterleaveChunk > 1)  s << " cti" << strategy.cInterleaveChunk;
 
     if (strategy.kParallel)             s << " kb";
     if (strategy.kParallelVariable)     s << " kv";
@@ -1039,6 +1083,42 @@ void unparseCaching(HW hw, std::ostream &s, const MatrixAddressingStrategy &astr
 
     s << '{';
 
+    if (hw >= HW::Xe3p) {
+        switch (cachingR) {
+            case CacheSettingsLSC::Default:             s << "ddd"; break;
+            case CacheSettingsLSC::L1UC_L2UC_L3UC:      s << "uuu"; break;
+            case CacheSettingsLSC::L1UC_L2UC_L3C:       s << "uuc"; break;
+            case CacheSettingsLSC::L1UC_L2C_L3UC:       s << "ucu"; break;
+            case CacheSettingsLSC::L1UC_L2C_L3C:        s << "ucc"; break;
+            case CacheSettingsLSC::L1C_L2UC_L3UC:       s << "cuu"; break;
+            case CacheSettingsLSC::L1C_L2UC_L3C:        s << "cuc"; break;
+            case CacheSettingsLSC::L1C_L2C_L3UC:        s << "ccu"; break;
+            case CacheSettingsLSC::L1C_L2C_L3C:         s << "ccc"; break;
+            case CacheSettingsLSC::L1S_L2UC_L3UC:       s << "suu"; break;
+            case CacheSettingsLSC::L1S_L2UC_L3C:        s << "suc"; break;
+            case CacheSettingsLSC::L1S_L2C_L3UC:        s << "scu"; break;
+            case CacheSettingsLSC::L1S_L2C_L3C:         s << "scc"; break;
+            case CacheSettingsLSC::L1IAR_L2IAR_L3IAR:   s << "iii"; break;
+            default:                                    s << "???"; break;
+        }
+        if (cachingW != CacheSettingsLSC::Default) {
+            s << '/';
+            switch (cachingW) {
+                case CacheSettingsLSC::L1UC_L2UC_L3UC:  s << "uuu"; break;
+                case CacheSettingsLSC::L1UC_L2UC_L3WB:  s << "uub"; break;
+                case CacheSettingsLSC::L1UC_L2WB_L3UC:  s << "ubu"; break;
+                case CacheSettingsLSC::L1WT_L2UC_L3UC:  s << "tuu"; break;
+                case CacheSettingsLSC::L1WT_L2UC_L3WB:  s << "tub"; break;
+                case CacheSettingsLSC::L1WT_L2WB_L3UC:  s << "tbu"; break;
+                case CacheSettingsLSC::L1S_L2UC_L3UC:   s << "suu"; break;
+                case CacheSettingsLSC::L1S_L2UC_L3WB:   s << "sub"; break;
+                case CacheSettingsLSC::L1S_L2WB_L3UC:   s << "sbu"; break;
+                case CacheSettingsLSC::L1WB_L2WB_L3UC:  s << "bbu"; break;
+                case CacheSettingsLSC::L1WB_L2UC_L3WB:  s << "bub"; break;
+                default:                                s << "???"; break;
+            }
+        }
+    } else
     {
         switch (cachingR) {
             case CacheSettingsLSC::Default:   s << "dd"; break;

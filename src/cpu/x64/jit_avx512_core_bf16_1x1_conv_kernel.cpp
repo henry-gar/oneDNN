@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -194,19 +194,19 @@ void jit_avx512_core_bf16_1x1_conv_kernel_t::apply_postops(
             iterate(load_loop_blk, ur, mask_tail,
                     [&](const bool mask_flag, const int i_load,
                             const int i_ur) {
-                        const int aux_output_l_off
-                                = get_output_offset(i_load, i_ur, true);
-                        const auto vmm_idx
-                                = vreg_accum_idx(load_loop_blk, i_load, i_ur);
-                        vmm_idxs.emplace(vmm_idx);
+                const int aux_output_l_off
+                        = get_output_offset(i_load, i_ur, true);
+                const auto vmm_idx
+                        = vreg_accum_idx(load_loop_blk, i_load, i_ur);
+                vmm_idxs.emplace(vmm_idx);
 
-                        rhs_arg_params_tail.vmm_idx_to_out_reg.emplace(
-                                vmm_idx, aux_reg_output_data);
-                        rhs_arg_params_tail.vmm_idx_to_out_elem_off_val.emplace(
-                                vmm_idx, aux_output_l_off);
-                        if (mask_flag)
-                            rhs_arg_params_tail.vmm_tail_idx_.emplace(vmm_idx);
-                    });
+                rhs_arg_params_tail.vmm_idx_to_out_reg.emplace(
+                        vmm_idx, aux_reg_output_data);
+                rhs_arg_params_tail.vmm_idx_to_out_elem_off_val.emplace(
+                        vmm_idx, aux_output_l_off);
+                if (mask_flag)
+                    rhs_arg_params_tail.vmm_tail_idx_.emplace(vmm_idx);
+            });
             rhs_arg_params = rhs_arg_params_tail;
             rhs_arg_params.vmm_tail_idx_.clear();
 
@@ -243,9 +243,8 @@ void jit_avx512_core_bf16_1x1_conv_kernel_t::apply_postops(
         } else {
             iterate(load_loop_blk, ur,
                     [&](const bool, const int i_load, const int i_ur) {
-                        vmm_idxs.emplace(
-                                vreg_accum_idx(load_loop_blk, i_load, i_ur));
-                    });
+                vmm_idxs.emplace(vreg_accum_idx(load_loop_blk, i_load, i_ur));
+            });
             postops_injector_->compute_vector_range(vmm_idxs);
         }
     }
@@ -275,8 +274,8 @@ void jit_avx512_core_bf16_1x1_conv_kernel_t::reduce_loop(
                 reg_bias_data, jcp.typesize_bia * jcp.oc_block * i_load);
     };
 
-    auto bcast_ptr = [this, bcast_layout_nxc](
-                             int i_reduce, int i_ur, bool bcast) {
+    auto bcast_ptr
+            = [this, bcast_layout_nxc](int i_reduce, int i_ur, bool bcast) {
         assert(i_ur < jcp.ur);
         assert(i_reduce <= jcp.reduce_loop_unroll);
         int offt;
@@ -307,7 +306,7 @@ void jit_avx512_core_bf16_1x1_conv_kernel_t::reduce_loop(
         int lmul = jcp.load_block
                 * (load_layout_nxc ? 1
                                    : utils::rnd_up(
-                                           jcp.reduce_dim, jcp.reduce_block));
+                                             jcp.reduce_dim, jcp.reduce_block));
         int rmul = load_layout_nxc ? jcp.load_dim : jcp.load_block;
         int offt = i_load * lmul + u0 * rmul;
         return EVEX_compress_addr(aux_reg_load_data,
@@ -565,9 +564,9 @@ void jit_avx512_core_bf16_1x1_conv_kernel_t::reduce_loop(
         auto zmm_prm = [zmm_store]() { return zmm_store(); };
         auto get_load_start_idx
                 = [this, pipeline, load_loop_blk](int bcast_count) {
-                      return pipeline * jcp.uses_permw_transposition
-                              + (bcast_count % pipeline) * load_loop_blk;
-                  };
+            return pipeline * jcp.uses_permw_transposition
+                    + (bcast_count % pipeline) * load_loop_blk;
+        };
         auto pipeline_bcast_ptr = [this, bcast_ptr](int i_reduce, int i_ur,
                                           bool bcast, int pipeline_idx) {
             if (jcp.uses_permw_transposition) {
@@ -1244,7 +1243,7 @@ status_t jit_avx512_core_bf16_1x1_conv_kernel_t::init_conf(
 
     jcp.bia_dt = jcp.with_bias
             ? pick_by_prop_kind(jcp.prop_kind, cd.bias_desc.data_type,
-                    data_type::undef, cd.diff_bias_desc.data_type)
+                      data_type::undef, cd.diff_bias_desc.data_type)
             : data_type::undef;
     jcp.typesize_bia = jcp.with_bias ? types::data_type_size(jcp.bia_dt) : 0;
 
@@ -1827,7 +1826,7 @@ status_t jit_avx512_core_bf16_1x1_conv_kernel_t::init_scratchpad(
         const size_t max_load_per_thread = is_out_layout_nxc
                 ? utils::rnd_up(jcp.load_dim, jcp.load_block)
                 : rnd_up((utils::div_up(jcp.load_dim, grp_count)),
-                        jcp.load_block);
+                          jcp.load_block);
         const size_t store_buffer_size = (size_t)jcp.nthr
                 * utils::rnd_up(jcp.bcast_dim, jcp.bcast_block)
                 * max_load_per_thread;

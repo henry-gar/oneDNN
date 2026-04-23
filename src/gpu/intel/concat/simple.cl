@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2024-2025 Intel Corporation
+* Copyright 2024 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -636,7 +636,7 @@ internal_padding_block_concat2(__global DATA_T *dst,
 
             COMPUTE_T trailmask = (ntrail < NPERSG)
                     ? SHIFTR(SHIFTL(FULLMASK, ntrail * DATA_TYPE_SIZE * 8),
-                            ntrail * DATA_TYPE_SIZE * 8)
+                              ntrail * DATA_TYPE_SIZE * 8)
                     : zero;
 
             if (cutoff > 0 && (ic % B0) >= cutoff) {

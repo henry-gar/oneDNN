@@ -1,5 +1,5 @@
 #===============================================================================
-# Copyright 2017-2025 Intel Corporation
+# Copyright 2017 Intel Corporation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -76,7 +76,6 @@ function(register_benchdnn_test engine driver test_file)
     # Additionally, only needed for speeding up JIT compilation of OCL kernels.
     set(mode_modifier "")
     if(${engine} MATCHES "gpu"
-       AND NOT WIN32
        AND NOT ${DNNL_GPU_VENDOR} MATCHES "NVIDIA"
        AND NOT ${DNNL_GPU_VENDOR} MATCHES "AMD")
         set(mode_modifier "--mode-modifier=P")
@@ -161,6 +160,7 @@ foreach(driver ${all_drivers})
             inputs/${driver}/test_*_gpu_ci)
     file(GLOB test_files_gpu RELATIVE ${driver_dir} inputs/${driver}/test_*_gpu)
     file(GLOB test_files_ci RELATIVE ${driver_dir} inputs/${driver}/test_*_ci)
+    file(GLOB test_files_gpu_smoke RELATIVE ${driver_dir} inputs/${driver}/test_*_gpu_smoke)
     file(GLOB test_files_smoke RELATIVE ${driver_dir} inputs/${driver}/test_*_smoke)
     file(GLOB test_files_cpu RELATIVE ${driver_dir} inputs/${driver}/test_*)
     file(GLOB test_files_with_all RELATIVE ${driver_dir}
@@ -168,14 +168,28 @@ foreach(driver ${all_drivers})
         inputs/graph/test_graph_all inputs/rnn/test_lstm_all)
 
     if(DNNL_TEST_SET_COVERAGE EQUAL DNNL_TEST_SET_SMOKE)
+        # gpu_smoke files may happen if standard coverage is not applicable on gpu.
+        # Filter out gpu_smoke inputs from smoke
+        foreach(test_file ${test_files_gpu_smoke})
+            string(REPLACE "${test_file}" "" test_files_smoke "${test_files_smoke}")
+        endforeach()
+
         if(has_gpu)
-            register_all_tests(gpu "${driver}" "${test_files_smoke}")
+            if(test_files_gpu_smoke)
+                register_all_tests(gpu "${driver}" "${test_files_gpu_smoke}")
+            else()
+                register_all_tests(gpu "${driver}" "${test_files_smoke}")
+            endif()
         endif()
         if(has_cpu)
             register_all_tests(cpu "${driver}" "${test_files_smoke}")
         endif()
     elseif(DNNL_TEST_SET_COVERAGE EQUAL DNNL_TEST_SET_CI)
-        # gpu_ci files may happen if cpu coverage can not be used on gpu
+        if(NOT DNNL_EXPERIMENTAL_GROUPED_MEMORY)
+            list(REMOVE_ITEM test_files_ci "test_matmul_grouped_ci")
+        endif()
+
+        # gpu_ci files may happen if standard coverage is not applicable on gpu.
         # Filter out gpu_ci inputs from ci
         foreach(test_file ${test_files_gpu_ci})
             string(REPLACE "${test_file}" "" test_files_ci "${test_files_ci}")
@@ -194,8 +208,11 @@ foreach(driver ${all_drivers})
         endif()
     elseif(DNNL_TEST_SET_COVERAGE EQUAL DNNL_TEST_SET_NIGHTLY)
         ## Filter out gpu, large cpu and invalid inputs from cpu
+        ##
+        ## Note: put longer/specialized names first to keep filtering working.
         foreach(test_file ${test_files_large_cpu} ${test_files_gpu_ci}
-            ${test_files_gpu} ${test_files_ci} ${test_files_smoke})
+            ${test_files_gpu_smoke} ${test_files_gpu} ${test_files_ci}
+            ${test_files_smoke})
             string(REPLACE "${test_file}" "" test_files_cpu "${test_files_cpu}")
         endforeach()
         ## Then filter files with "all" suffix by exact name since there may

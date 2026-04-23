@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2025 Intel Corporation
+* Copyright 2021 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -97,8 +97,6 @@ bool matmul_amx_blocking_params_macro_t::is_supported(
         const brgemm_matmul_conf_t &bgmmc,
         const brgemm_matmul_conf_utils_t &bm_conf_utils) {
 
-    if (bgmmc.K < bgmmc.wei_k_blk) { return false; }
-
     bool a_dt_ok
             = one_of(bgmmc.orig_src_dt, dnnl_s8, dnnl_u8, dnnl_bf16, dnnl_f16);
     bool b_dt_ok
@@ -106,8 +104,10 @@ bool matmul_amx_blocking_params_macro_t::is_supported(
 
     bool a_tag_ok = bgmmc.src_tag == dnnl_format_tag_any
             || bm_conf_utils.check_is_plain(bgmmc.src_tag);
-    bool b_tag_ok = bm_conf_utils.is_any_B_layout()
-            || bm_conf_utils.check_b_layout_blocked_32_by_n(bgmmc.wei_tag);
+
+    bool b_tag_ok = IMPLICATION(
+            bm_conf_utils.check_b_layout_blocked_by_n(bgmmc.wei_tag),
+            bm_conf_utils.check_b_layout_blocked_32_by_n(bgmmc.wei_tag));
 
     bool has_zp = bgmmc.src_zp_type != brgemm_broadcast_t::none
             || bgmmc.wei_zp_type != brgemm_broadcast_t::none
@@ -116,20 +116,24 @@ bool matmul_amx_blocking_params_macro_t::is_supported(
     return bgmmc.orig_src_dt == bgmmc.src_dt
             && bgmmc.orig_wei_dt == bgmmc.wei_dt && bgmmc.is_amx
             && !bgmmc.is_runtime_N && !bgmmc.is_runtime_M && a_dt_ok && a_tag_ok
-            && (bgmmc.reduce_kind == matmul_reduce_kind::undef) && b_tag_ok
-            && b_dt_ok && !has_zp && !bgmmc.packed_sparse_weights;
+            && b_dt_ok && b_tag_ok
+            && (bgmmc.reduce_kind == matmul_reduce_kind::undef) && !has_zp
+            && !bgmmc.packed_sparse_weights;
 }
 
 bool matmul_amx_blocking_params_macro_t::divs_are_acceptable() const {
-    bool unacceptable_m_div = m_per_thread < min_m_elem && nthr_m_ > 1;
+    bool unacceptable_m_div
+            = rnd_up(m_per_thread, m_tmul) < min_mn_elem && nthr_m_ > 1;
     bool unacceptable_k_div = k_per_thread < min_k_elem && nthr_k_ > 1;
     bool unacceptable_n_div;
     if (nthr_k_ == 1 && k_per_thread < k_threshold_write_bound_layer_elem) {
         // The layer is write-bound (small K) and no reduction (C becomes non-consecutive)
-        unacceptable_n_div = n_per_thread < min_n_dim_write_bound_layer_elem
+        unacceptable_n_div = rnd_up(n_per_thread, n_tmul)
+                        < min_n_dim_write_bound_layer_elem
                 && nthr_n_ > 1;
     } else {
-        unacceptable_n_div = n_per_thread < min_n_elem && nthr_n_ > 1;
+        unacceptable_n_div
+                = rnd_up(n_per_thread, n_tmul) < min_mn_elem && nthr_n_ > 1;
     }
 
     bool unacceptable_b_div = nthr_b_ > (size_t)batch;
@@ -144,6 +148,167 @@ size_t determine_tmul_size(size_t num_elements, int full_tile_size) {
     return tmul_size;
 }
 
+/*
+ * When one of the dimensions (M, N, or K) is significantly smaller than the others,
+ * one of the matrices will be much larger in comparison:
+ *    1. M is small:  Matrix B >> A, C
+ *    2. N is small:  Matrix A >> B, C
+ *    3. K is small:  Matrix C >> A, B
+ *
+ * In such cases, the layer becomes memory-bound, and the key performance factor
+ * is efficient reading of the largest matrix.
+ *
+ * To optimize this, we divide the workload across cores so that each core reads
+ * a consecutive chunk of the large matrix. Also ensure that each core follows
+ * a sequential memory access pattern, improving bandwidth efficiency:
+ *    1. M is small:  Matrix B layout is [N, K, 16K, 32N, (vnni)K] → divide along N and read in K direction before N
+ *    2. N is small:  Matrix A layout is [M, K] → divide along M and read in K direction before M
+ *    3. K is small:  Matrix C layout is [M, N] → divide along M and read in N direction before M (horizontal access)
+ */
+bool matmul_amx_blocking_params_macro_t::maybe_small_dims_heuristics(
+        const brgemm_matmul_conf_t &bgmmc,
+        matmul_amx_blocking_params_macro_t &best_blocking) {
+
+    auto set_common = [&]() {
+        best_blocking.k_blk_ = bgmmc.K;
+        best_blocking.k_chunk_size_ = 1;
+
+        best_blocking.brgemm_batch_size_ = 1;
+        best_blocking.need_buf_c_ = false;
+        best_blocking.need_buf_a_ = false;
+
+        best_blocking.extendable_k_ = bgmmc.K % best_blocking.wei_k_blk != 0
+                && !best_blocking.skip_extendable_k();
+
+        best_blocking.is_a_nt_ = true;
+        best_blocking.is_b_nt = true;
+        best_blocking.set_nt_ = true;
+        best_blocking.need_prefetch_a_ = false;
+        best_blocking.need_prefetch_b_ = false;
+        best_blocking.use_fused_copy_a_ = false;
+        best_blocking.efficiency_score_ = 1;
+        best_blocking.current_lda_ = best_blocking.get_actual_lda();
+    };
+
+    const float core_utilization_threshold = 0.75;
+
+    const auto b_is_not_flat
+            = IMPLICATION(bgmmc.use_buffer_b, bgmmc.transposed_B);
+
+    if (bgmmc.M <= 32 && b_is_not_flat && bgmmc.batch == 1) {
+
+        best_blocking.n_decomposition
+                = nstl::min(bgmmc.N, (dim_t)bgmmc.wei_n_blk);
+        best_blocking.m_decomposition = bgmmc.M;
+        uint32_t n_per_core = div_up(bgmmc.N, bgmmc.nthr);
+        n_per_core = rnd_up(n_per_core, best_blocking.n_decomposition);
+        best_blocking.set_core_divs(1, 1, 1, div_up(bgmmc.N, n_per_core));
+
+        if (best_blocking.nthr_n_
+                < core_utilization_threshold * best_blocking.nthr) {
+            return false;
+        }
+        best_blocking.m_blk_ = bgmmc.M;
+        best_blocking.m_chunk_size_ = 1;
+        best_blocking.n_blk_ = best_blocking.n_decomposition;
+        best_blocking.n_chunk_size_
+                = n_per_core / best_blocking.n_decomposition;
+
+        if (bgmmc.use_buffer_b) {
+            const size_t brg_b_size = best_blocking.n_decomposition * bgmmc.K;
+            const size_t brg_a_size = best_blocking.M * bgmmc.K;
+            if (brg_a_size > L2_threshold()) { return false; }
+            best_blocking.k_chunk_size_
+                    = div_up(2 * brg_b_size, L2_threshold() - brg_a_size);
+            best_blocking.K_blk = rnd_up(
+                    div_up(best_blocking.K, best_blocking.k_chunk_size_),
+                    best_blocking.wei_k_blk);
+        } else {
+            best_blocking.k_blk_ = bgmmc.K;
+            best_blocking.k_chunk_size_ = 1;
+        }
+
+        set_common();
+        return true;
+
+    } else if (bgmmc.K <= best_blocking.wei_k_blk && bgmmc.batch == 1) {
+
+        const uint32_t m_per_core = div_up(bgmmc.M, bgmmc.nthr);
+        best_blocking.set_core_divs(1, div_up(bgmmc.M, m_per_core), 1, 1);
+        best_blocking.set_tmul_sizes();
+        best_blocking.set_decomposition();
+
+        if (best_blocking.nthr_m_
+                < core_utilization_threshold * best_blocking.nthr) {
+            return false;
+        }
+        best_blocking.m_blk_ = best_blocking.m_decomposition;
+        best_blocking.m_chunk_size_
+                = div_up(m_per_core, best_blocking.m_decomposition);
+        best_blocking.n_blk_ = bgmmc.N;
+        best_blocking.n_chunk_size_ = 1;
+
+        if (bgmmc.use_buffer_b) {
+            const size_t brg_b_size = best_blocking.N * bgmmc.K;
+            const size_t brg_b_size_tr
+                    = best_blocking.N * rnd_up(bgmmc.K, bgmmc.wei_k_blk);
+            const size_t brg_d_size
+                    = best_blocking.N * best_blocking.m_decomposition;
+            best_blocking.n_chunk_size_ = div_up(
+                    brg_b_size + brg_b_size_tr + brg_d_size, L2_threshold());
+            best_blocking.n_blk_ = rnd_up(
+                    div_up(best_blocking.N, best_blocking.n_chunk_size_),
+                    best_blocking.wei_n_blk);
+        } else {
+            best_blocking.n_blk_ = bgmmc.N;
+            best_blocking.n_chunk_size_ = 1;
+        }
+        set_common();
+        return true;
+
+    } else if (bgmmc.N <= 32 && bgmmc.batch == 1) {
+
+        const uint32_t m_per_core = div_up(bgmmc.M, bgmmc.nthr);
+
+        best_blocking.m_per_thread = m_per_core;
+        // in this case 2 full are preferable
+        best_blocking.m_decomposition
+                = determine_tmul_size(best_blocking.m_per_thread, 2 * 16);
+        best_blocking.n_tmul = 16; // B blocked layout is a multiply of 16
+        best_blocking.n_decomposition = 2 * best_blocking.n_tmul;
+        best_blocking.k_tmul = nstl::min(
+                (size_t)best_blocking.wei_k_blk, (size_t)best_blocking.K);
+
+        const size_t m_per_core_actual = rnd_up(
+                best_blocking.m_per_thread, best_blocking.m_decomposition);
+        best_blocking.set_core_divs(
+                1, div_up(bgmmc.M, m_per_core_actual), 1, 1);
+
+        if (best_blocking.nthr_m_
+                < core_utilization_threshold * best_blocking.nthr) {
+            return false;
+        }
+
+        best_blocking.m_blk_ = best_blocking.m_decomposition;
+        best_blocking.m_chunk_size_
+                = div_up(m_per_core, best_blocking.m_decomposition);
+        best_blocking.n_blk_ = bgmmc.N;
+        best_blocking.n_chunk_size_ = 1;
+
+        const size_t brg_b_size = best_blocking.n_decomposition * bgmmc.K;
+        const size_t brg_a_size = best_blocking.m_decomposition * bgmmc.K;
+        best_blocking.k_chunk_size_
+                = div_up(2 * brg_b_size + brg_a_size, L2_threshold());
+        best_blocking.k_blk_
+                = rnd_up(div_up(best_blocking.K, best_blocking.k_chunk_size_),
+                        best_blocking.wei_k_blk);
+        set_common();
+        return true;
+    } else {
+        return false;
+    }
+}
+
 bool matmul_amx_blocking_params_macro_t::find_best_blocking(
         const brgemm_matmul_conf_t &bgmmc,
         const brgemm_matmul_conf_utils_t &bm_conf_utils,
@@ -154,22 +319,11 @@ bool matmul_amx_blocking_params_macro_t::find_best_blocking(
         return false;
     }
 
-    best_blocking = matmul_amx_blocking_params_micro_t(bgmmc);
+    best_blocking = matmul_amx_blocking_params_macro_t(bgmmc);
 
     matmul_amx_blocking_params_macro_t current_blocking(bgmmc);
-    assert(bgmmc.tr_a_dt_sz == bgmmc.tr_b_dt_sz);
-    current_blocking.gemm_dt_sz = bgmmc.tr_a_dt_sz;
-    current_blocking.min_m_elem = matmul_amx_blocking_params_macro_t::min_m_dim;
-    current_blocking.min_k_elem = matmul_amx_blocking_params_macro_t::min_k_dim
-            / current_blocking.gemm_dt_sz;
-    current_blocking.min_n_elem
-            = matmul_amx_blocking_params_macro_t::min_n_dim / bgmmc.c_dt_sz;
-    current_blocking.k_threshold_write_bound_layer_elem
-            = matmul_amx_blocking_params_macro_t::k_threshold_write_bound_layer
-            / current_blocking.gemm_dt_sz;
-    current_blocking.min_n_dim_write_bound_layer_elem
-            = matmul_amx_blocking_params_macro_t::min_n_dim_write_bound_layer
-            / current_blocking.gemm_dt_sz;
+
+    if (maybe_small_dims_heuristics(bgmmc, best_blocking)) { return true; }
 
     for (size_t nthr_to_check = bgmmc.nthr; nthr_to_check > 0;
             nthr_to_check--) {
@@ -188,6 +342,8 @@ bool matmul_amx_blocking_params_macro_t::find_best_blocking(
                     int n_div = ((current_blocking.nthr_ / b_div) / m_div)
                             / k_div;
                     current_blocking.set_core_divs(b_div, m_div, k_div, n_div);
+                    current_blocking.set_tmul_sizes();
+                    current_blocking.set_decomposition();
                     if (current_blocking.divs_are_acceptable()
                             && current_blocking.set_blocking_parameters()) {
                         if (current_blocking > best_blocking) {
@@ -199,10 +355,30 @@ bool matmul_amx_blocking_params_macro_t::find_best_blocking(
         }
     }
 
+    if (best_blocking.use_buffer_b && !best_blocking.transposed_B
+            && !best_blocking.is_horizontal) {
+        current_blocking.nthr_ = best_blocking.nthr_b_ * best_blocking.nthr_m_
+                * best_blocking.nthr_n_ * best_blocking.nthr_k_;
+        current_blocking.set_core_divs(best_blocking.nthr_b_,
+                best_blocking.nthr_m_, best_blocking.nthr_k_,
+                best_blocking.nthr_n_);
+        if (current_blocking.set_blocking_parameters(true)
+                && current_blocking > best_blocking) {
+            best_blocking = current_blocking;
+        }
+        if (current_blocking.set_blocking_parameters(true, true)
+                && current_blocking > best_blocking) {
+            best_blocking = current_blocking;
+        }
+    }
     return true;
 }
 
 float matmul_amx_blocking_params_macro_t::calculate_blocking_scores() const {
+
+    bool strip1_b_tranform_h = is_horizontal && use_buffer_b;
+    bool strips_b_tranform_v = !is_horizontal && use_buffer_b;
+    bool strip1_b_in_mlc_h = strip1_b_tranform_h && b_transform_fits_in_l2();
 
     size_t a_size = m_per_thread * k_per_thread * gemm_dt_sz;
     size_t b_size = n_per_thread * k_per_thread * gemm_dt_sz;
@@ -331,23 +507,49 @@ float matmul_amx_blocking_params_macro_t::calculate_blocking_scores() const {
             + temporal_matrix_l1_hit / bw_interpulator.l1_load_hit_bw
             + nt_mat_l1_miss / bw_interpulator.l1_load_miss_bw + c_l1_cycles;
 
-    float strip_1_cycles
-            = strip_1_size_shared / bw_interpulator.get_bw(strip_1_share_coef)
-            + strip_1_size_private / bw_interpulator.get_bw(1);
+    float b_transform_cycles_h = strip1_b_tranform_h
+            ? strip_1_size_shared / bw_interpulator.get_bw(strip_1_share_coef)
+            : 0;
 
-    float strip_mid_dram = strip_mid_size_shared
+    float b_transform_cycles_v = strips_b_tranform_v ? strip_mid_size_shared
                     / bw_interpulator.get_bw(strip_mid_share_coef)
-            + strip_mid_size_private / bw_interpulator.get_bw(1);
-    float strip_mid_llc = (strip_mid_size_private + strip_mid_size_shared)
-            / bw_interpulator.llc_bw;
+                                                     : 0;
+
+    float strip_mid_dram;
+    float strip_mid_llc;
+    if (strips_b_tranform_v) {
+        strip_mid_dram = strip_mid_size_private / bw_interpulator.get_bw(1);
+        strip_mid_llc = strip_mid_size_private / bw_interpulator.llc_bw;
+    } else {
+        strip_mid_dram = strip_mid_size_shared
+                        / bw_interpulator.get_bw(strip_mid_share_coef)
+                + strip_mid_size_private / bw_interpulator.get_bw(1);
+
+        strip_mid_llc = (strip_mid_size_private + strip_mid_size_shared)
+                / bw_interpulator.llc_bw;
+    }
+
     float strip_tmul = num_tmuls_per_strip * num_cycles_per_tmul;
 
     float strip_avx
             = this->postops_inst_count * num_postop_cache_lines / avx_ipc;
-    float strip_mid_cycles = std::max(
-            {strip_mid_dram, strip_mid_llc, l1_cycles, strip_tmul, strip_avx});
+    float strip_mid_cycles = b_transform_cycles_v
+            + std::max({strip_mid_dram, strip_mid_llc, l1_cycles, strip_tmul,
+                    strip_avx});
 
-    float gemm_cycles = strip_1_cycles + (num_strip - 1) * strip_mid_cycles;
+    float strip_1_cycles;
+    if (!strip1_b_tranform_h)
+        // default for vertical and horizontal without b transform
+        strip_1_cycles = strip_1_size_shared
+                        / bw_interpulator.get_bw(strip_1_share_coef)
+                + strip_1_size_private / bw_interpulator.get_bw(1);
+    else if (strip1_b_in_mlc_h)
+        strip_1_cycles = strip_mid_cycles; // strip 1 is regular strip;
+    else
+        strip_1_cycles = strip_1_size_shared / bw_interpulator.llc_bw;
+
+    float gemm_cycles = b_transform_cycles_h + strip_1_cycles
+            + (num_strip - 1) * strip_mid_cycles;
 
     // Calculate reduction cycles
     float reduction_cycles;
@@ -355,8 +557,8 @@ float matmul_amx_blocking_params_macro_t::calculate_blocking_scores() const {
 
     if (nthr_k_ != 1) {
         if (c_size_per_core * 2 < L2_threshold() && batch == 1) {
-            float reduction_read_bytes = (M * N * acc_dt_sz) * ((nthr_k_ - 1))
-                    / (nthr_m_ * nthr_n_);
+            float reduction_read_bytes = (M * rnd_up(N, 16) * acc_dt_sz)
+                    * ((nthr_k_ - 1)) / (nthr_m_ * nthr_n_);
             float reduction_read_cycles;
             if (a_size + b_size + d_size < L2_threshold()) {
                 reduction_read_cycles
@@ -387,6 +589,14 @@ float matmul_amx_blocking_params_macro_t::calculate_blocking_scores() const {
     float peak_macs_per_cycle = (macs_per_cycle_base / gemm_dt_sz) * nthr;
     float peak_cycles = total_macs / peak_macs_per_cycle;
     return peak_cycles / total_cycles;
+}
+
+bool matmul_amx_blocking_params_macro_t::b_transform_fits_in_l2() const {
+    bool b_transform_in_l2;
+    auto max_l2_usage = l2_matrix_usage(
+            k_chunk_size_, n_blk_, k_blk_, true, true); /* B transform size */
+    b_transform_in_l2 = max_l2_usage < L2_threshold();
+    return b_transform_in_l2;
 }
 
 bool matmul_amx_blocking_params_macro_t::operator==(
@@ -474,7 +684,8 @@ std::set<dim_t> matmul_amx_blocking_params_macro_t::blk_candidates(
 }
 
 size_t matmul_amx_blocking_params_macro_t::l2_matrix_usage(size_t k_chunk_size,
-        size_t m_or_n_blk, size_t k_blk, bool is_horizontal) const {
+        size_t m_or_n_blk, size_t k_blk, bool is_horizontal,
+        bool force_transform_matrix_to_l2) const {
     int decomposition = is_horizontal ? m_decomposition : n_decomposition;
     int l1_matrix_size = 2 * decomposition
             * nstl::min(k_blk * k_chunk_size, (size_t)k_per_thread)
@@ -482,7 +693,11 @@ size_t matmul_amx_blocking_params_macro_t::l2_matrix_usage(size_t k_chunk_size,
     int l2_matrix_size = m_or_n_blk
             * nstl::min(k_blk * k_chunk_size, (size_t)k_per_thread)
             * gemm_dt_sz;
-
+    if (force_transform_matrix_to_l2) {
+        /* L2 matrix orig size */
+        l2_matrix_size += m_or_n_blk * k_blk * k_chunk_size
+                * (is_horizontal ? b_dt_sz : a_dt_sz);
+    }
     // Calculate C post size (output buffer)
     int c_post_size;
     if (is_horizontal) {
@@ -553,8 +768,9 @@ float matmul_amx_blocking_params_macro_t::ratio(size_t m_blk,
 
 float matmul_amx_blocking_params_macro_t::evaluate_single_core_blocking(
         size_t k_chunk_size, size_t m_or_n_blk, size_t k_blk,
-        bool is_horizontal) const {
-    if (l2_matrix_usage(k_chunk_size, m_or_n_blk, k_blk, is_horizontal)
+        bool is_horizontal, bool force_transform_matrix_to_l2) const {
+    if (l2_matrix_usage(k_chunk_size, m_or_n_blk, k_blk, is_horizontal,
+                force_transform_matrix_to_l2)
             <= L2_threshold()) {
         size_t m_blk, n_blk;
         if (is_horizontal) {
@@ -578,8 +794,8 @@ void matmul_amx_blocking_params_macro_t::set_tmul_sizes() {
 }
 
 void matmul_amx_blocking_params_macro_t::set_decomposition() {
-    m_decomposition = nstl::min((size_t)m_per_thread, 2 * m_tmul);
-    n_decomposition = nstl::min((size_t)n_per_thread, 2 * n_tmul);
+    m_decomposition = nstl::min((size_t)M, 2 * m_tmul);
+    n_decomposition = nstl::min((size_t)N, 2 * n_tmul);
 }
 
 bool matmul_amx_blocking_params_macro_t::is_horizontal_selected(
@@ -609,9 +825,8 @@ bool matmul_amx_blocking_params_macro_t::is_horizontal_selected(
     return is_horizontal_local;
 }
 
-bool matmul_amx_blocking_params_macro_t::set_blocking_parameters() {
-    set_tmul_sizes();
-    set_decomposition();
+bool matmul_amx_blocking_params_macro_t::set_blocking_parameters(
+        bool force_horizontal, bool force_b_transform_to_l2) {
 
     std::set<dim_t> m_candidates
             = blk_candidates(m_per_thread, m_decomposition);
@@ -621,12 +836,13 @@ bool matmul_amx_blocking_params_macro_t::set_blocking_parameters() {
     dim_t best_m_v, best_k_v;
     float best_score_h = 0, best_score_v = 0;
     bool horizontal_not_possible = false;
-    bool vertical_not_possible = false;
+    bool vertical_not_possible = force_horizontal;
 
     auto calc_horizontal = [&](size_t k_blk_h, dim_t min_k_chunk_size = 0) {
-        if (rnd_up(m_per_thread, m_decomposition) * (nthr_m_ - 1) > (size_t)M) {
+        if (rnd_up(m_per_thread, m_decomposition) * (nthr_m_ - 1)
+                >= (size_t)M) {
             horizontal_not_possible = true;
-        } else if (rnd_up(k_per_thread, k_blk_h) * (nthr_k_ - 1) > (size_t)K) {
+        } else if (rnd_up(k_per_thread, k_blk_h) * (nthr_k_ - 1) >= (size_t)K) {
             // Early exit: There is no possible division of work for nthr_k threads
             horizontal_not_possible = true;
         } else {
@@ -638,8 +854,9 @@ bool matmul_amx_blocking_params_macro_t::set_blocking_parameters() {
                 for (std::set<dim_t>::reverse_iterator it_k
                         = k_candidates_h.rbegin();
                         it_k != k_candidates_h.rend(); it_k++) {
-                    float cur_score = evaluate_single_core_blocking(
-                            *it_k, *it_n * n_decomposition, k_blk_h, true);
+                    float cur_score = evaluate_single_core_blocking(*it_k,
+                            *it_n * n_decomposition, k_blk_h, true,
+                            force_b_transform_to_l2);
                     if (cur_score > best_score_h && *it_k >= min_k_chunk_size) {
                         best_score_h = cur_score;
                         best_k_h = *it_k;
@@ -648,12 +865,17 @@ bool matmul_amx_blocking_params_macro_t::set_blocking_parameters() {
                 }
             }
 
+            if (best_n_h == 0) {
+                horizontal_not_possible = true;
+                return;
+            }
+
             if (rnd_up(n_per_thread, best_n_h * n_decomposition) * (nthr_n_ - 1)
-                    > (size_t)N) {
+                    >= (size_t)N) {
                 horizontal_not_possible = true;
             }
             if (rnd_up(k_per_thread, best_k_h * k_blk_h) * (nthr_k_ - 1)
-                    > (size_t)K) {
+                    >= (size_t)K) {
                 // There is not enough work for nthr_k threads
                 horizontal_not_possible = true;
             }
@@ -664,9 +886,10 @@ bool matmul_amx_blocking_params_macro_t::set_blocking_parameters() {
     calc_horizontal(k_blk_h);
 
     auto calc_vertical = [&](size_t k_blk_v, dim_t min_k_chunk_size = 0) {
-        if (rnd_up(n_per_thread, n_decomposition) * (nthr_n_ - 1) > (size_t)N) {
+        if (rnd_up(n_per_thread, n_decomposition) * (nthr_n_ - 1)
+                >= (size_t)N) {
             vertical_not_possible = true;
-        } else if (rnd_up(k_per_thread, k_blk_v) * (nthr_k_ - 1) > (size_t)K) {
+        } else if (rnd_up(k_per_thread, k_blk_v) * (nthr_k_ - 1) >= (size_t)K) {
             // Early exit: There is no possible division of work for nthr_k threads
             vertical_not_possible = true;
         } else {
@@ -688,24 +911,29 @@ bool matmul_amx_blocking_params_macro_t::set_blocking_parameters() {
                 }
             }
 
+            if (best_m_v == 0) {
+                vertical_not_possible = true;
+                return;
+            }
+
             if (rnd_up(m_per_thread, best_m_v * m_decomposition) * (nthr_m_ - 1)
-                    > (size_t)M) {
+                    >= (size_t)M) {
                 vertical_not_possible = true;
             }
             if (rnd_up(k_per_thread, best_k_v * k_blk_v) * (nthr_k_ - 1)
-                    > (size_t)K) {
+                    >= (size_t)K) {
                 // There is not enough work for nthr_k threads
                 vertical_not_possible = true;
             }
-            size_t l2_util_v;
+            size_t l2_util_v = 0;
 
             if (!vertical_not_possible) {
                 // Figure out if vertical is an option wrt L2 usage
                 l2_util_v = l2_matrix_and_c_usage(
-                        best_k_v, best_m_v, k_blk_v, false);
+                        best_k_v, best_m_v * m_decomposition, k_blk_v, false);
                 if (l2_util_v > L2_threshold()) {
-                    l2_util_v = l2_matrix_usage(
-                            best_k_v, best_m_v, k_blk_v, false);
+                    l2_util_v = l2_matrix_usage(best_k_v,
+                            best_m_v * m_decomposition, k_blk_v, false);
                 }
             }
             bool repeat_loop_over_k = div_up(K, k_blk_v * best_k_v) != 1;
@@ -817,7 +1045,7 @@ bool matmul_amx_blocking_params_macro_t::set_blocking_parameters() {
         is_a_nt_ = true;
         is_b_nt_ = false;
         need_prefetch_a_ = false;
-        need_prefetch_b_ = (n_per_thread / n_blk_) >= 2;
+        need_prefetch_b_ = ((n_per_thread / n_blk_) >= 2) && !use_buffer_b;
         use_fused_copy_a_ = false;
 
         extendable_k_ = K % wei_k_blk != 0 && !skip_extendable_k();
@@ -834,7 +1062,8 @@ bool matmul_amx_blocking_params_macro_t::set_blocking_parameters() {
     current_lda_ = get_actual_lda();
 
     // Need a temp C buffer if a BRGEMM creates partial results
-    need_buf_c_ = (nthr_k_ != 1) || (k_blk_ != K && acc_dt != dst_dt);
+    need_buf_c_
+            = (nthr_k_ != 1) || (k_blk_ != K && (with_sum || acc_dt != dst_dt));
 
     efficiency_score_ = calculate_blocking_scores();
 
@@ -877,7 +1106,7 @@ void matmul_amx_blocking_params_macro_t::set_core_divs(
 void matmul_amx_blocking_params_micro_t::find_best_blocking(
         const brgemm_matmul_conf_t &bgmmc,
         const brgemm_matmul_conf_utils_t &bm_conf_utils,
-        matmul_amx_blocking_params_t &best_blocking) {
+        matmul_amx_blocking_params_micro_t &best_blocking) {
 
     matmul_amx_blocking_params_micro_t current_blocking(bgmmc);
 
@@ -968,8 +1197,13 @@ void matmul_amx_blocking_params_micro_t::find_best_blocking(
             float cur_score = current_blocking.get_blocking_scores();
             float bst_score = best_blocking.get_blocking_scores();
 
-            int m_chunks = div_up(bgmmc.M, m_blk * m_ch_sz);
-            int n_chunks = div_up(bgmmc.N, n_blk * n_ch_sz);
+            // TODO: Verify whether using a chunk count of 1 for runtime M and N is optimal for
+            // this heuristic. The previous implementation inadvertently used DNNL_RUNTIME_DIM_VAL
+            // for M and N in arithmetic, producing incorrect work_amount values.
+            int m_chunks
+                    = bgmmc.is_runtime_M ? 1 : div_up(bgmmc.M, m_blk * m_ch_sz);
+            int n_chunks
+                    = bgmmc.is_runtime_N ? 1 : div_up(bgmmc.N, n_blk * n_ch_sz);
             int work_amount = bgmmc.batch * m_chunks * n_chunks;
 
             bool skip_config = work_amount < nthr_bmn * 3
@@ -1055,8 +1289,8 @@ void matmul_amx_blocking_params_micro_t::set_blocking_parameters(
 
         // TODO: review extendable_k_ condition to cover more cases
         extendable_k_ = (K % wei_k_blk != 0) && (brgemm_k_elems > wei_k_blk)
-                && wei_zp_type == none && !use_buffer_a
-                && !packed_sparse_weights && current_lda_ == K;
+                && wei_zp_type == none && !apply_scales_in_buffer_b
+                && !use_buffer_a && !packed_sparse_weights && current_lda_ == K;
 
         if (extendable_k_) {
             if (brgemm_k_elems >= K) {

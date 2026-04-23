@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2024-2025 Intel Corporation
+* Copyright 2024 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -34,7 +34,7 @@ void *ocl_allocator_t::malloc(
 void ocl_allocator_t::free(
         void *ptr, cl_device_id dev, cl_context ctx, cl_event event) {
     if (nullptr == ptr) return;
-    if (event) { OCL_CHECK_V(clWaitForEvents(1, &event)); }
+    if (event) { OCL_CHECK_V(xpu::ocl::clWaitForEvents(1, &event)); }
     ocl::free(ptr, dev, ctx);
 }
 #endif

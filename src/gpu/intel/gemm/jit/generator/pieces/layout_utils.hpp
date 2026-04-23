@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -15,8 +15,8 @@
 *******************************************************************************/
 
 
-#ifndef GEMMSTONE_GUARD_LAYOUT_UTILS_HPP
-#define GEMMSTONE_GUARD_LAYOUT_UTILS_HPP
+#ifndef GEMMSTONE_GENERATOR_PIECES_LAYOUT_UTILS_HPP
+#define GEMMSTONE_GENERATOR_PIECES_LAYOUT_UTILS_HPP
 
 #include "internal/ngen_includes.hpp"
 #include "gemmstone/type.hpp"

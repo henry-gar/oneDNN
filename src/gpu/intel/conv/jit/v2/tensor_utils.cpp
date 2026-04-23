@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2024-2025 Intel Corporation
+* Copyright 2024 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -16,8 +16,8 @@
 
 #include "gpu/intel/conv/jit/v2/tensor_utils.hpp"
 
+#include "gemmstone/../../dsl/ir/pass/simplify.hpp"
 #include "gpu/intel/conv/jit/problem.hpp"
-#include "gpu/intel/jit/pass/simplify.hpp"
 
 namespace dnnl {
 namespace impl {
@@ -97,8 +97,8 @@ layout_tag_t make_layout_tag(tensor_kind_t tensor_kind, const std::string &s) {
     bool is_wei = (tensor_kind == tensor_kind_t::wei);
     auto desc = make_layout_desc(tensor_kind);
     auto parts = gpu_utils::split(s, ":");
-    auto type
-            = (parts.size() > 1 ? jit::parse<type_t>(parts[1]) : type_t::f32());
+    auto type = (parts.size() > 1 ? jit::parse<dsl::type_t>(parts[1])
+                                  : dsl::type_t::f32());
     auto str_tag = desc.to_abx_tag(parts[0]);
     auto raw_tag = layout_raw_tag_t(str_tag, is_wei ? 6 : 5);
     return layout_tag_t(desc, type, raw_tag);
@@ -162,7 +162,7 @@ layout_t make_layout(tensor_kind_t tensor_kind, const layout_tag_t &_tag,
         if (dim_mask == 0) return expr_t(1);
         auto dim_size = reqs.to_expr(dim);
         if (!blocks.has(dim)) return dim_size;
-        return div_up(dim_size, blocks[dim]);
+        return intel::jit::v2::div_up(dim_size, blocks[dim]);
     };
     auto &entries = tag.raw_tag().entries();
     for (auto it = entries.rbegin(); it != entries.rend(); it++) {
@@ -265,7 +265,7 @@ layout_tag_t make_layout_tag(
     memory_desc_wrapper mdw(md);
     bool is_strided = (mdw.is_plain() && !mdw.is_dense());
     auto desc = make_layout_desc(tensor_kind);
-    type_t type(to_ir(md.data_type));
+    dsl::type_t type(to_ir(md.data_type));
     if (is_any) return layout_tag_t(desc, type, layout_raw_tag_t::any());
     auto str_tag = blocked_to_str_tag(md);
     auto raw_tag = layout_raw_tag_t(str_tag);

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -53,6 +53,13 @@ struct with_post_ops_t : public primitive_t {
         compute::dispatch_t dispatch_;
         attr_info_t attr_info_;
         bool subbyte_pack_ = false;
+        bool dynamic_scales_ = false;
+        bool with_dropout = false;
+        bool dropout_use_host_scalars = false;
+        bool dropout_use_offset = false;
+        bool dropout_has_output_mask = false;
+        data_type_t dst_type_ = data_type::undef;
+        data_type_t acc_type_ = data_type::undef;
     };
 
     status_t init(impl::engine_t *engine) override {
@@ -66,14 +73,37 @@ struct with_post_ops_t : public primitive_t {
             CHECK(attr.set_gpu_attr(gpu_primitive_attr_t(threads_per_eu)));
         }
         compute::kernel_ctx_t kernel_ctx(&attr);
-        ret_status = pd()->init_kernel_ctx(kernel_ctx);
-        CHECK(ret_status);
-        ret_status = create_kernel(
-                engine, &post_process_kernel_, "gemm_post_ops", kernel_ctx);
+        CHECK(pd()->init_kernel_ctx(kernel_ctx));
+        CHECK(create_kernel(engine, &kernels_[0], "gemm_post_ops", kernel_ctx));
+        const bool dyn_scales = pd()->dynamic_scales_;
+        if (dyn_scales) {
+            compute::kernel_ctx_t alt_ctx(pd()->attr());
+            const auto src_info = memory_desc_info_t::create(pd_->dst_md(0));
+            dnnl_memory_desc dst_md(*(pd()->dst_md(0)));
+            dst_md.data_type = pd()->dst_type_;
+            memory_desc_wrapper dst_d(dst_md);
+            def_memory_desc_info(alt_ctx, src_info, "SRC", false);
+            def_memory_desc_info(
+                    alt_ctx, memory_desc_info_t::create(dst_d), "DST", false);
+            def_data_type(alt_ctx,
+                    pd()->attr()->scales_.get_data_type(DNNL_ARG_DST),
+                    "DST_SCALES", false);
+            const int ndims = dst_d.ndims();
+            bool runtime_dims
+                    = pd()->has_runtime_dims_or_strides() || ndims > 5;
+            if (!runtime_dims) {
+                offsets_t off;
+                set_offsets(dst_d, off.dst_off);
+                def_offsets(off.dst_off, alt_ctx, "DST", ndims);
+                alt_ctx.define_int("NDIMS", ndims);
+            }
+            CHECK(create_kernel(
+                    engine, &kernels_[1], "dynamic_scale_dst", alt_ctx));
+        }
         if (pd()->subbyte_pack_)
             CHECK(create_kernel(
-                    engine, &subbyte_pack_kernel_, "subbyte_pack", kernel_ctx));
-        return ret_status;
+                    engine, &kernels_[2], "subbyte_pack", kernel_ctx));
+        return status::success;
     }
 
     status_t execute(const exec_ctx_t &ctx) const override;
@@ -81,8 +111,7 @@ struct with_post_ops_t : public primitive_t {
 private:
     const pd_t *pd() const { return (const pd_t *)primitive_t::pd().get(); }
     std::shared_ptr<impl::primitive_t> prim_;
-    compute::kernel_t post_process_kernel_;
-    compute::kernel_t subbyte_pack_kernel_;
+    std::array<compute::kernel_t, 3> kernels_ = {};
 };
 
 } // namespace gemm

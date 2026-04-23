@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -132,19 +132,19 @@ struct ref_concat_t : public gpu::primitive_t {
                 = [&](const std::shared_ptr<impl::primitive_t> &reorder,
                           const memory_arg_t &src, const memory_arg_t &dst,
                           const memory_arg_t *src_scales, int r_num) {
-                      exec_args_t r_args;
-                      r_args[DNNL_ARG_SRC] = src;
-                      r_args[DNNL_ARG_DST] = dst;
-                      if (src_scales)
-                          r_args[DNNL_ARG_ATTR_SCALES | DNNL_ARG_SRC]
-                                  = *src_scales;
-                      exec_ctx_t r_ctx(ctx, std::move(r_args));
+            exec_args_t r_args;
+            r_args[DNNL_ARG_SRC] = src;
+            r_args[DNNL_ARG_DST] = dst;
+            if (src_scales)
+                r_args[DNNL_ARG_ATTR_SCALES | DNNL_ARG_SRC] = *src_scales;
+            exec_ctx_t r_ctx(ctx, std::move(r_args));
 
-                      nested_scratchpad_t ns(
-                              ctx, key_nested_multiple + r_num, reorder);
-                      r_ctx.set_scratchpad_grantor(ns.grantor());
-                      return reorder->execute(r_ctx);
-                  };
+            auto *nested_grantor = create_nested_grantor(
+                    ctx.get_scratchpad_grantor(), key_nested_multiple + r_num,
+                    reorder->pd()->scratchpad_registry());
+            r_ctx.set_scratchpad_grantor(nested_grantor);
+            return reorder->execute(r_ctx);
+        };
 
         if (pd()->use_tent_dst()) {
             auto scratchpad = ctx.get_scratchpad_grantor().get_memory_storage(

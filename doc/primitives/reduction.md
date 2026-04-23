@@ -49,18 +49,23 @@ where \f$eps\_op\f$ can be max and sum.
  * Reduction dimensions are of size 1 in a destination tensor.
  * The reduction primitive does not have a notion of forward or backward
    propagations.
+ * For Lp-norm algorithms, the parameter \f$p\f$ must be a finite value
+   greater than or equal to 1.0.
 
 ## Execution Arguments
 
 When executed, the inputs and outputs should be mapped to an execution
 argument index as specified by the following table.
 
-| Primitive input/output      | Execution argument index                                                  |
-|-----------------------------|---------------------------------------------------------------------------|
-| \src                        | DNNL_ARG_SRC                                                              |
-| \dst                        | DNNL_ARG_DST                                                              |
-| \f$\text{binary post-op}\f$ | DNNL_ARG_ATTR_MULTIPLE_POST_OP(binary_post_op_position) \| DNNL_ARG_SRC_1,|
-|                             | DNNL_ARG_ATTR_MULTIPLE_POST_OP(binary_post_op_position) \| DNNL_ARG_SRC_2 |
+| Argument                    | Index                                                                     | Type         |
+|-----------------------------|---------------------------------------------------------------------------|--------------|
+| \src                        | DNNL_ARG_SRC                                                              | Input        |
+| \dst                        | DNNL_ARG_DST                                                              | Output       |
+| \f$\text{binary post-op}\f$ | DNNL_ARG_ATTR_MULTIPLE_POST_OP(binary_post_op_position) \| DNNL_ARG_SRC_1 | Input        |
+|                             | DNNL_ARG_ATTR_MULTIPLE_POST_OP(binary_post_op_position) \| DNNL_ARG_SRC_2 | Input        |
+| [scratchpad]                | DNNL_ARG_SCRATCHPAD                                                       | Output       |
+
+[scratchpad]: @ref dev_guide_attributes_scratchpad
 
 ## Implementation Details
 
@@ -108,5 +113,6 @@ meaning associated with any of the dimensions of a tensor.
 
 ## Examples
 
-* @ref reduction_example_cpp
+See @ref dev_guide_examples page for a complete list. Reduction examples are listed in the
+[Tensor Operations](@ref examples_tensor_operations) section.
 

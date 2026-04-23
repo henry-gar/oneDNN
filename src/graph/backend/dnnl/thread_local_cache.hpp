@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright 2021-2024 Intel Corporation
+ * Copyright 2021 Intel Corporation
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -104,8 +104,8 @@ public:
                         auto pos = std::find_if(thread_instances.begin(),
                                 thread_instances.end(),
                                 [&](std::shared_ptr<T> &ins) -> bool {
-                                    return ins.get() == value.get();
-                                });
+                            return ins.get() == value.get();
+                        });
                         assertm(pos != thread_instances.end(),
                                 "expected value to exist in cache");
                         thread_instances.erase(pos);
@@ -185,8 +185,8 @@ private:
                 static auto global_cache = std::shared_ptr<global_cache_type_t>(
                         new global_cache_type_t {},
                         [](global_cache_type_t *ptr) {
-                            return ptr->release();
-                        });
+                    return ptr->release();
+                });
                 return global_cache.get();
             } catch (...) { return nullptr; }
         }
@@ -228,8 +228,8 @@ private:
                         auto pos = std::find_if(thread_instances.begin(),
                                 thread_instances.end(),
                                 [&](std::shared_ptr<T> &ins) -> bool {
-                                    return ins.get() == value.get();
-                                });
+                            return ins.get() == value.get();
+                        });
                         assertm(pos != thread_instances.end(),
                                 "expected value to exist in cache");
                         // Destroy it

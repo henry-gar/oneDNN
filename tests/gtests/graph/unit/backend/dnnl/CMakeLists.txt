@@ -1,5 +1,5 @@
 #===============================================================================
-# Copyright 2021-2025 Intel Corporation
+# Copyright 2021 Intel Corporation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,8 +17,8 @@
 set(TEST_EXE test_graph_unit_dnnl)
 
 # make gtest and library same definition for subgraph_visualizer_t
-if(ONEDNN_ENABLE_GRAPH_DUMP)
-    add_definitions_with_host_compiler(-DDNNL_ENABLE_GRAPH_DUMP)
+if(NOT ONEDNN_ENABLE_GRAPH_DUMP)
+    add_definitions_with_host_compiler(-DDNNL_DISABLE_GRAPH_DUMP)
 endif()
 
 FILE(GLOB DNNL_COMMON_TEST_SOURCES

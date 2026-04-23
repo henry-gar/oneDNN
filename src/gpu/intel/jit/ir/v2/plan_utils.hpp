@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -27,12 +27,12 @@ namespace jit {
 namespace v2 {
 
 struct base_plan_t {
-    base_plan_t(const hw_t &hw = hw_t()) : hw(hw) {}
+    base_plan_t(const dsl::hw_t &hw = dsl::hw_t()) : hw(hw) {}
 
     explicit operator bool() const { return hw.ngen_hw() != ngen::HW::Unknown; }
     int grf_size() const { return hw.grf_size(); }
 
-    hw_t hw;
+    dsl::hw_t hw;
 };
 
 } // namespace v2

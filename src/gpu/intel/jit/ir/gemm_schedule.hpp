@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2025 Intel Corporation
+* Copyright 2021 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -19,15 +19,13 @@
 
 #include <functional>
 #include <limits>
-#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
 #include <initializer_list>
 
-#include "gpu/intel/jit/ir/ir.hpp"
+#include "gpu/intel/jit/ir/legacy.hpp"
 #include "gpu/intel/jit/ir/tensor.hpp"
-#include "gpu/intel/jit/ir/walk_order.hpp"
 #include "gpu/intel/jit/utils/utils.hpp"
 
 namespace dnnl {
@@ -43,9 +41,9 @@ namespace jit {
 // - M:  shared only by A and C
 // - N:  shared only by B and C
 // - K:  shared only by A and B (reduction dimension)
-enum class bmnk_kind_t { undef = -1, b = 0, m = 1, n = 2, k = 3 };
+enum class bmnk_kind_t : int { undef = -1, b = 0, m = 1, n = 2, k = 3 };
 
-enum class abc_kind_t { undef, a, b, c };
+enum class abc_kind_t : int { undef, a, b, c };
 
 inline std::ostream &operator<<(std::ostream &out, abc_kind_t abc) {
     switch (abc) {
@@ -167,6 +165,8 @@ private:
         for (auto &p : mn_blocks) {
             auto b = p.second;
             const auto &var = bmnk_mapper_.var(p.first, b.idx);
+            auto idx = bmnk_mapper_.dim_idx(abc_kind, var);
+            if (idx == -1) continue;
             b.idx = bmnk_mapper_.dim_idx(abc_kind, var);
             ret.push_back(b);
         }
@@ -363,7 +363,7 @@ public:
         return oss.str();
     }
 
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
 private:
     expr_t var_; // Loop index variable.
@@ -563,12 +563,12 @@ public:
         if (outer_name.empty()) {
             outer_var = create_var({var}, "outer");
         } else {
-            outer_var = var_t::make(type_t::s32(), outer_name);
+            outer_var = var_t::make(dsl::type_t::s32(), outer_name);
         }
         if (inner_name.empty()) {
             inner_var = create_var({var}, "inner");
         } else {
-            inner_var = var_t::make(type_t::s32(), inner_name);
+            inner_var = var_t::make(dsl::type_t::s32(), inner_name);
         }
 
         gpu_assert(outer_var.as<var_t>().name != inner_var.as<var_t>().name)
@@ -673,6 +673,16 @@ public:
             if (!found[i]) continue;
             vars_[i] = ordered_vars[j++];
         }
+    }
+
+    bool is_inner_loop(const expr_t &v) const {
+        for (size_t i = 0; i < vars_.size(); i++) {
+            auto &loop = find_loop(vars_[i]);
+            if (!loop.is_leaf() || loop.kind() != loop_kind_t::serial) continue;
+            if (to_cpp<dim_t>(loop.bound()) == 1) continue;
+            return find_root_var(vars_[i]).is_same(v);
+        }
+        return false;
     }
 
     // Sets init and step for loop defined by `var`.
@@ -976,6 +986,14 @@ private:
         return loops_[var];
     }
 
+    expr_t find_root_var(const expr_t &var) const {
+        auto *loop = &find_loop(var);
+        while (!loop->is_root()) {
+            loop = &find_loop(loop->parent_vars()[0]);
+        }
+        return loop->var();
+    }
+
     int loop_level(const expr_t &var) const {
         for (int i = 0; i < int(vars_.size()); i++) {
             if (vars_[i].is_same(var)) return i;
@@ -1003,12 +1021,13 @@ private:
     static expr_t create_var(
             const std::vector<expr_t> &vars, const std::string &suffix) {
         std::string var_name;
+        const std::string idx_suffix = "_idx";
         for (auto &v : vars) {
-            auto name = strip_suffix(v.as<var_t>().name, "_idx");
+            auto name = strip_suffix(v.as<var_t>().name, idx_suffix);
             var_name += name + "_";
         }
         var_name += suffix;
-        return var_t::make(type_t::s32(), var_name);
+        return var_t::make(dsl::type_t::s32(), var_name);
     }
 
     void init_problem_tiles() {

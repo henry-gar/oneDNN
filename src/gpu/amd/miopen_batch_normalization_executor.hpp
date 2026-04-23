@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2024 Intel Corporation
+* Copyright 2020 Intel Corporation
 * Copyright 2020-2022 Codeplay Software Limited
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
@@ -39,7 +39,8 @@ namespace amd {
 struct bnorm_exec_base_t {
     virtual status_t execute(const exec_ctx_t &ctx, impl::engine_t *engine,
             const std::shared_ptr<miopen_batch_normalization_impl_base_t>
-                    bnorm_impl) const = 0;
+                    bnorm_impl) const
+            = 0;
     virtual ~bnorm_exec_base_t() = default;
 
 protected:
@@ -65,55 +66,50 @@ protected:
             xpu::sycl::interop_memory_arg_t<mean_var_m> arg_mean = {},
             xpu::sycl::interop_memory_arg_t<mean_var_m> arg_var = {}) const {
 
-        compat::host_task(cgh,
-                [= WA_THIS_COPY_CAPTURE](const compat::interop_handle &ih) {
-                    auto &sycl_engine
-                            = *utils::downcast<amd::engine_t *>(engine);
-                    auto sc = hip_sycl_scoped_context_handler_t(sycl_engine);
-                    auto handle = hip_stream->get_miopen_handle();
+        compat::host_task(
+                cgh, [= COMPAT_THIS_CAPTURE](const compat::interop_handle &ih) {
+            auto &sycl_engine = *utils::downcast<amd::engine_t *>(engine);
+            auto sc = hip_sycl_scoped_context_handler_t(sycl_engine);
+            auto handle = hip_stream->get_miopen_handle();
 
-                    if (!use_scale)
-                        init_scaleshift(sc, ih, hip_stream, arg_scale_buf, 1.f,
-                                bnorm_impl->C());
-                    if (!use_shift)
-                        init_scaleshift(sc, ih, hip_stream, arg_shift_buf, 0.f,
-                                bnorm_impl->C());
-                    if (init_global_stats)
-                        init_mean_var(sc, ih, hip_stream, arg_mean, arg_var,
-                                bnorm_impl->C());
+            if (!use_scale)
+                init_scaleshift(sc, ih, hip_stream, arg_scale_buf, 1.f,
+                        bnorm_impl->C());
+            if (!use_shift)
+                init_scaleshift(sc, ih, hip_stream, arg_shift_buf, 0.f,
+                        bnorm_impl->C());
+            if (init_global_stats)
+                init_mean_var(
+                        sc, ih, hip_stream, arg_mean, arg_var, bnorm_impl->C());
 
-                    auto *x = arg_src.get_native_pointer(ih);
-                    auto *y = arg_dst.get_native_pointer(ih);
-                    auto *mean = arg_mean.get_native_pointer(ih);
-                    auto *var = arg_var.get_native_pointer(ih);
+            auto *x = arg_src.get_native_pointer(ih);
+            auto *y = arg_dst.get_native_pointer(ih);
+            auto *mean = arg_mean.get_native_pointer(ih);
+            auto *var = arg_var.get_native_pointer(ih);
 
-                    auto *scale = use_scale
-                            ? static_cast<uint8_t *>(
-                                    arg_scale.get_native_pointer(ih))
-                            : static_cast<uint8_t *>(
-                                    arg_scale_buf.get_native_pointer(ih));
+            auto *scale = use_scale
+                    ? static_cast<uint8_t *>(arg_scale.get_native_pointer(ih))
+                    : static_cast<uint8_t *>(
+                              arg_scale_buf.get_native_pointer(ih));
 
-                    uint8_t *shift = use_shift
-                            ? static_cast<uint8_t *>(
-                                    arg_shift.get_native_pointer(ih))
-                            : static_cast<uint8_t *>(
-                                    arg_shift_buf.get_native_pointer(ih));
-                    uint8_t *y_prime = nullptr, *save_mean = nullptr,
-                            *save_var = nullptr;
+            uint8_t *shift = use_shift
+                    ? static_cast<uint8_t *>(arg_shift.get_native_pointer(ih))
+                    : static_cast<uint8_t *>(
+                              arg_shift_buf.get_native_pointer(ih));
+            uint8_t *y_prime = nullptr, *save_mean = nullptr,
+                    *save_var = nullptr;
 
-                    if (!arg_wkspace.empty()) {
-                        save_mean = static_cast<uint8_t *>(
-                                arg_wkspace.get_native_pointer(ih));
-                        save_var
-                                = save_mean + bnorm_impl->mean_var_size_bytes();
-                        y_prime = save_var + bnorm_impl->mean_var_size_bytes();
-                    }
+            if (!arg_wkspace.empty()) {
+                save_mean = static_cast<uint8_t *>(
+                        arg_wkspace.get_native_pointer(ih));
+                save_var = save_mean + bnorm_impl->mean_var_size_bytes();
+                y_prime = save_var + bnorm_impl->mean_var_size_bytes();
+            }
 
-                    std::shared_ptr<bnorm_args_t> args(
-                            new bnorm_fwd_args_t(x, y, mean, var, scale, shift,
-                                    y_prime, save_mean, save_var));
-                    bnorm_impl->execute(handle, args);
-                });
+            std::shared_ptr<bnorm_args_t> args(new bnorm_fwd_args_t(x, y, mean,
+                    var, scale, shift, y_prime, save_mean, save_var));
+            bnorm_impl->execute(handle, args);
+        });
     }
 
     void interop_task_bwd(
@@ -142,56 +138,52 @@ protected:
             xpu::sycl::interop_memory_arg_t<::sycl::access::mode::read_write>
                     arg_temp_relu,
             bool use_scale, bool use_shift) const {
-        compat::host_task(cgh,
-                [= WA_THIS_COPY_CAPTURE](const compat::interop_handle &ih) {
-                    auto &sycl_engine
-                            = *utils::downcast<amd::engine_t *>(engine);
-                    auto sc = hip_sycl_scoped_context_handler_t(sycl_engine);
-                    auto handle = hip_stream->get_miopen_handle();
+        compat::host_task(
+                cgh, [= COMPAT_THIS_CAPTURE](const compat::interop_handle &ih) {
+            auto &sycl_engine = *utils::downcast<amd::engine_t *>(engine);
+            auto sc = hip_sycl_scoped_context_handler_t(sycl_engine);
+            auto handle = hip_stream->get_miopen_handle();
 
-                    if (!use_scale)
-                        init_scaleshift(sc, ih, hip_stream, arg_scale_buf, 1.f,
-                                bnorm_impl->C());
-                    if (!use_scale)
-                        init_scaleshift(sc, ih, hip_stream, arg_diff_scale_buf,
-                                1.f, bnorm_impl->C());
-                    if (!use_shift)
-                        init_scaleshift(sc, ih, hip_stream, arg_diff_shift_buf,
-                                0.f, bnorm_impl->C());
+            if (!use_scale)
+                init_scaleshift(sc, ih, hip_stream, arg_scale_buf, 1.f,
+                        bnorm_impl->C());
+            if (!use_scale)
+                init_scaleshift(sc, ih, hip_stream, arg_diff_scale_buf, 1.f,
+                        bnorm_impl->C());
+            if (!use_shift)
+                init_scaleshift(sc, ih, hip_stream, arg_diff_shift_buf, 0.f,
+                        bnorm_impl->C());
 
-                    auto *x = arg_src.get_native_pointer(ih);
-                    auto *dy = arg_diff_dst.get_native_pointer(ih);
-                    auto *dx = arg_diff_src.get_native_pointer(ih);
+            auto *x = arg_src.get_native_pointer(ih);
+            auto *dy = arg_diff_dst.get_native_pointer(ih);
+            auto *dx = arg_diff_src.get_native_pointer(ih);
 
-                    auto *scale = use_scale
-                            ? static_cast<uint8_t *>(
-                                    arg_scale.get_native_pointer(ih))
-                            : static_cast<uint8_t *>(
-                                    arg_scale_buf.get_native_pointer(ih));
-                    auto *diff_scale = use_scale
-                            ? static_cast<uint8_t *>(
-                                    arg_diff_scale.get_native_pointer(ih))
-                            : static_cast<uint8_t *>(
-                                    arg_diff_scale_buf.get_native_pointer(ih));
-                    uint8_t *diff_shift = use_shift
-                            ? static_cast<uint8_t *>(
-                                    arg_diff_shift.get_native_pointer(ih))
-                            : static_cast<uint8_t *>(
-                                    arg_diff_shift_buf.get_native_pointer(ih));
+            auto *scale = use_scale
+                    ? static_cast<uint8_t *>(arg_scale.get_native_pointer(ih))
+                    : static_cast<uint8_t *>(
+                              arg_scale_buf.get_native_pointer(ih));
+            auto *diff_scale = use_scale
+                    ? static_cast<uint8_t *>(
+                              arg_diff_scale.get_native_pointer(ih))
+                    : static_cast<uint8_t *>(
+                              arg_diff_scale_buf.get_native_pointer(ih));
+            uint8_t *diff_shift = use_shift
+                    ? static_cast<uint8_t *>(
+                              arg_diff_shift.get_native_pointer(ih))
+                    : static_cast<uint8_t *>(
+                              arg_diff_shift_buf.get_native_pointer(ih));
 
-                    auto *save_mean = static_cast<uint8_t *>(
-                            arg_wkspace.get_native_pointer(ih));
-                    auto *save_var
-                            = save_mean + bnorm_impl->mean_var_size_bytes();
-                    auto *wkspace
-                            = save_var + bnorm_impl->mean_var_size_bytes();
-                    auto *relu_dy = arg_temp_relu.get_native_pointer(ih);
+            auto *save_mean = static_cast<uint8_t *>(
+                    arg_wkspace.get_native_pointer(ih));
+            auto *save_var = save_mean + bnorm_impl->mean_var_size_bytes();
+            auto *wkspace = save_var + bnorm_impl->mean_var_size_bytes();
+            auto *relu_dy = arg_temp_relu.get_native_pointer(ih);
 
-                    std::shared_ptr<bnorm_args_t> args(new bnorm_bwd_args_t(x,
-                            dx, dy, save_mean, save_var, scale, diff_scale,
-                            diff_shift, wkspace, relu_dy));
-                    bnorm_impl->execute(handle, args);
-                });
+            std::shared_ptr<bnorm_args_t> args(
+                    new bnorm_bwd_args_t(x, dx, dy, save_mean, save_var, scale,
+                            diff_scale, diff_shift, wkspace, relu_dy));
+            bnorm_impl->execute(handle, args);
+        });
     }
 
     template <typename T = float>
@@ -269,7 +261,7 @@ struct bnorm_exec_fwd_t : public bnorm_exec_base_t {
             auto arg_wkspace = bnorm_impl->is_training()
                     ? CTX_OUT_SYCL_MEMORY(DNNL_ARG_WORKSPACE)
                     : xpu::sycl::interop_memory_arg_t<
-                            ::sycl::access::mode::write>();
+                              ::sycl::access::mode::write>();
 
             if (!use_global_stats) {
                 const bool init_global_stats = bnorm_impl->is_training();

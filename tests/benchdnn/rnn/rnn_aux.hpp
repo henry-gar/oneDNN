@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2018-2025 Intel Corporation
+* Copyright 2018 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -121,6 +121,7 @@ void gates_reduction(
         const prb_t &prb, const float *b_gates_, float *diff_bias_);
 
 rnn_data_kind_t data_kind2rnn_data_kind(data_kind_t data_kind);
+data_kind_t rnn_data_kind2data_kind(rnn_data_kind_t rnn_data_kind);
 
 }; // namespace rnn
 

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -51,7 +51,7 @@ public:
     engine_t(
             const ::sycl::device &dev, const ::sycl::context &ctx, size_t index)
         : gpu::intel::engine_t(new xpu::sycl::engine_impl_t(
-                engine_kind::gpu, dev, ctx, index)) {}
+                  engine_kind::gpu, dev, ctx, index)) {}
 
     status_t init() override {
         CHECK(init_impl());
@@ -78,7 +78,7 @@ public:
             gpu::intel::jit::generator_base_t *jitter) const override;
 
     status_t create_kernel(compute::kernel_t &kernel,
-            const jit::kernel_t &kernel_ir) const override;
+            const jit::dsl::kernel_t &kernel_ir) const override;
 
 #ifdef DNNL_EXPERIMENTAL_SYCL_KERNEL_COMPILER
     status_t create_kernels_from_cache_blob(const cache_blob_t &cache_blob,

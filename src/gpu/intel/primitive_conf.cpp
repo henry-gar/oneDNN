@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2024-2025 Intel Corporation
+* Copyright 2024 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -15,10 +15,14 @@
 *******************************************************************************/
 
 #include "gpu/gpu_eltwise_pd.hpp"
+#include "gpu/intel/block_structure.hpp"
 #include "gpu/intel/post_ops.hpp"
 #include "oneapi/dnnl/dnnl_types.h"
 
 #include "gpu/intel/primitive_conf.hpp"
+
+// Included to enable compatibility tests
+#include "gpu/intel/include/dnnl_interop.h"
 
 namespace dnnl {
 namespace impl {
@@ -137,6 +141,7 @@ attr_info_t attr_info_t::create(const primitive_attr_t *attr) {
     attr_info.with_host_src_scale = src_scales.is_host_scalar();
     attr_info.with_host_wei_scale = wei_scales.is_host_scalar();
     attr_info.with_host_dst_scale = dst_scales.is_host_scalar();
+    attr_info.with_dyn_dst_scale = dst_scales.is_dynamic();
     attr_info.with_host_src_zp = zp.get(DNNL_ARG_SRC).is_host_scalar();
     attr_info.with_host_wei_zp = zp.get(DNNL_ARG_WEIGHTS).is_host_scalar();
     attr_info.with_host_dst_zp = zp.get(DNNL_ARG_DST).is_host_scalar();
@@ -232,23 +237,6 @@ outer_strides_getter_t get_outer_strides(const memory_desc_wrapper &md) {
     return {md};
 }
 
-block_layout_t get_inner_layout(const memory_desc_wrapper &md) {
-    block_layout_t inner_layout(md, /* inner_only */ true);
-
-    block_layout_t ret;
-    // Explicitly initialize to size-1 blocks
-    for (int d = 0; d < MAX_NDIMS; d++) {
-        ret.append(block_t(d, 1, 0));
-    }
-
-    // Overwrite inner blocks with their actual values
-    for (const auto &block : inner_layout) {
-        ret[block.dim_idx] = block;
-    }
-
-    return ret;
-}
-
 void def_offsets(const dim_t offs[4][MAX_NDIMS],
         compute::kernel_ctx_t &kernel_ctx, const char *str,
         const dim_idx_t ndims) {
@@ -292,6 +280,7 @@ const char *get_type_name(data_type_t dt, bool with_punning) {
         case data_type::s4: return with_punning ? "uchar" : "s4";
         case data_type::u4: return with_punning ? "uchar" : "u4";
         case data_type::s32: return "int";
+        case data_type::s64: return "long";
         default:
             gpu_error_not_expected()
                     << "Unexpected data type " << dnnl_dt2str(dt);
@@ -364,6 +353,10 @@ void def_data_type(compute::kernel_ctx_t &kernel_ctx, data_type_t dt,
             kernel_ctx.add_option(
                     utils::format("-D%s_DATA_T=int -D%s_DT_S32", str, str));
             break;
+        case data_type::s64:
+            kernel_ctx.add_option(
+                    utils::format("-D%s_DATA_T=int -D%s_DT_S64", str, str));
+            break;
         default:
             gpu_error_not_expected()
                     << "Unexpected data type " << dnnl_dt2str(dt);
@@ -405,55 +398,6 @@ void def_memory_desc_info(compute::kernel_ctx_t &kernel_ctx,
                         "%s_S%d_%d=invalid_stride", prefix, d, l));
         }
     }
-}
-
-void def_binary_alg_kinds(compute::kernel_ctx_t &kernel_ctx) {
-    kernel_ctx.define_int("BINARY_ADD", alg_kind::binary_add);
-    kernel_ctx.define_int("BINARY_MUL", alg_kind::binary_mul);
-    kernel_ctx.define_int("BINARY_MIN", alg_kind::binary_min);
-    kernel_ctx.define_int("BINARY_MAX", alg_kind::binary_max);
-    kernel_ctx.define_int("BINARY_DIV", alg_kind::binary_div);
-    kernel_ctx.define_int("BINARY_SUB", alg_kind::binary_sub);
-    kernel_ctx.define_int("BINARY_GE", alg_kind::binary_ge);
-    kernel_ctx.define_int("BINARY_GT", alg_kind::binary_gt);
-    kernel_ctx.define_int("BINARY_LE", alg_kind::binary_le);
-    kernel_ctx.define_int("BINARY_LT", alg_kind::binary_lt);
-    kernel_ctx.define_int("BINARY_EQ", alg_kind::binary_eq);
-    kernel_ctx.define_int("BINARY_NE", alg_kind::binary_ne);
-}
-
-void def_eltwise_alg_kinds(compute::kernel_ctx_t &kernel_ctx) {
-    kernel_ctx.define_int("RELU", alg_kind::eltwise_relu);
-    kernel_ctx.define_int("LINEAR", alg_kind::eltwise_linear);
-    kernel_ctx.define_int("SOFT_RELU", alg_kind::eltwise_soft_relu);
-    kernel_ctx.define_int("MISH", alg_kind::eltwise_mish);
-    kernel_ctx.define_int("LOGISTIC", alg_kind::eltwise_logistic);
-    kernel_ctx.define_int("TANH", alg_kind::eltwise_tanh);
-    kernel_ctx.define_int("ELU", alg_kind::eltwise_elu);
-    kernel_ctx.define_int("SQUARE", alg_kind::eltwise_square);
-    kernel_ctx.define_int("SQRT", alg_kind::eltwise_sqrt);
-    kernel_ctx.define_int("ABS", alg_kind::eltwise_abs);
-    kernel_ctx.define_int("EXP", alg_kind::eltwise_exp);
-    kernel_ctx.define_int("GELU_TANH", alg_kind::eltwise_gelu_tanh);
-    kernel_ctx.define_int("SWISH", alg_kind::eltwise_swish);
-    kernel_ctx.define_int("LOG", alg_kind::eltwise_log);
-    kernel_ctx.define_int("CLIP", alg_kind::eltwise_clip);
-    kernel_ctx.define_int("CLIP_V2", alg_kind::eltwise_clip_v2);
-    kernel_ctx.define_int("POW", alg_kind::eltwise_pow);
-    kernel_ctx.define_int("GELU_ERF", alg_kind::eltwise_gelu_erf);
-    kernel_ctx.define_int("ROUND", alg_kind::eltwise_round);
-    kernel_ctx.define_int("HARDSWISH", alg_kind::eltwise_hardswish);
-    kernel_ctx.define_int("HARDSIGMOID", alg_kind::eltwise_hardsigmoid);
-
-    kernel_ctx.define_int("RELU_DST", alg_kind::eltwise_relu_use_dst_for_bwd);
-    kernel_ctx.define_int(
-            "LOGISTIC_DST", alg_kind::eltwise_logistic_use_dst_for_bwd);
-    kernel_ctx.define_int("TANH_DST", alg_kind::eltwise_tanh_use_dst_for_bwd);
-    kernel_ctx.define_int("ELU_DST", alg_kind::eltwise_elu_use_dst_for_bwd);
-    kernel_ctx.define_int("SQRT_DST", alg_kind::eltwise_sqrt_use_dst_for_bwd);
-    kernel_ctx.define_int("EXP_DST", alg_kind::eltwise_exp_use_dst_for_bwd);
-    kernel_ctx.define_int(
-            "CLIP_V2_DST", alg_kind::eltwise_clip_v2_use_dst_for_bwd);
 }
 
 bool post_ops_with_binary_ok(const primitive_attr_t *attr,
@@ -573,6 +517,7 @@ status_t def_post_ops_cfg(compute::kernel_ctx_t &kernel_ctx,
 
             post_op::relative_md_t src_rmd;
             if (e.is_binary()) {
+                kernel_ctx.register_buffer_size(e.binary.src1_desc);
                 kernel_ctx.define_int("PO_" + idx + "_ALG", e.binary.alg);
                 CHECK(post_op::relative_md_t::make(
                         src_rmd, e.binary.src1_desc, {}));
@@ -582,6 +527,7 @@ status_t def_post_ops_cfg(compute::kernel_ctx_t &kernel_ctx,
                 memory_desc_t weight_mem_desc;
                 CHECK(get_prelu_md(e.prelu.mask, dst_md.dims, weight_mem_desc,
                         dst_md.ndims));
+                kernel_ctx.register_buffer_size(weight_mem_desc);
                 CHECK(post_op::relative_md_t::make(
                         src_rmd, weight_mem_desc, {}));
             }
@@ -645,10 +591,10 @@ int append_post_ops_to_arg_list_base(const exec_args_t &args,
         if (e.is_binary() || e.is_prelu()) {
             auto arg = args.at(DNNL_ARG_ATTR_MULTIPLE_POST_OP(po_idx)
                     | (e.is_binary() ? DNNL_ARG_SRC_1 : DNNL_ARG_WEIGHTS));
-            gpu_assert(arg.is_const);
+            gpu_assert(arg.is_const());
 
-            auto &binary_arg = arg.mem
-                    ? *(arg.mem->memory_storage())
+            auto &binary_arg = arg.mem()
+                    ? *(arg.mem()->memory_storage())
                     : dnnl::impl::memory_storage_t::empty_storage();
             arg_list.set(post_op_idx++, binary_arg);
 
@@ -768,9 +714,8 @@ status_t def_attr_info_impl(compute::kernel_ctx_t &kernel_ctx,
     kernel_ctx.define_int("WITH_HOST_SRC_SCALE", attr_info.with_host_src_scale);
     kernel_ctx.define_int("WITH_HOST_WEI_SCALE", attr_info.with_host_wei_scale);
     kernel_ctx.define_int("WITH_HOST_DST_SCALE", attr_info.with_host_dst_scale);
-
-    def_binary_alg_kinds(kernel_ctx);
-    def_eltwise_alg_kinds(kernel_ctx);
+    kernel_ctx.define_int("WITH_DYN_DST_SCALE", attr_info.with_dyn_dst_scale);
+    kernel_ctx.define_int("WITH_MX_DST_SCALE", attr_info.with_dyn_dst_scale);
 
     return def_post_ops_cfg(kernel_ctx, post_ops, dst_md);
 }

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -161,6 +161,7 @@ static status_t init_conf_common(reusable_params_t &conf,
 
     conf = utils::zero<decltype(conf)>();
     conf.data_type = data_mdw.data_type();
+    conf.require_stateless_addressing = pd->has_large_buffers();
 
     conf.use_scale = pd->use_scale();
     conf.use_shift = pd->use_shift();
@@ -207,6 +208,7 @@ static status_t init_conf_common(reusable_params_t &conf,
 static void init_kernel_ctx_common(
         compute::kernel_ctx_t &kernel_ctx, const reusable_params_t &conf) {
     kernel_ctx.set_data_type(conf.data_type, false);
+    kernel_ctx.require_stateless_addressing(conf.require_stateless_addressing);
 
     kernel_ctx.define_int("WITH_RELU", conf.with_relu);
     if (conf.with_leaky_relu) kernel_ctx.define_int("WITH_LEAKY_RELU", 1);
@@ -302,12 +304,12 @@ status_t reusable_fwd_t::execute_forward(const exec_ctx_t &ctx) const {
         const auto &append_off
                 = [use_int32_offset](
                           compute::kernel_arg_list_t &arg_list, dim_t off) {
-                      if (use_int32_offset) {
-                          arg_list.append(into<int32_t>(off));
-                      } else {
-                          arg_list.append(off);
-                      }
-                  };
+            if (use_int32_offset) {
+                arg_list.append(into<int32_t>(off));
+            } else {
+                arg_list.append(off);
+            }
+        };
 
         compute::kernel_arg_list_t calc_mean_arg_list;
         calc_mean_arg_list.set(0, src);
@@ -424,12 +426,12 @@ status_t reusable_bwd_t::execute_backward(const exec_ctx_t &ctx) const {
     const auto &append_off
             = [use_int32_offset](
                       compute::kernel_arg_list_t &arg_list, dim_t off) {
-                  if (use_int32_offset) {
-                      arg_list.append(into<int32_t>(off));
-                  } else {
-                      arg_list.append(off);
-                  }
-              };
+        if (use_int32_offset) {
+            arg_list.append(into<int32_t>(off));
+        } else {
+            arg_list.append(off);
+        }
+    };
 
     compute::kernel_arg_list_t calc_stats_arg_list;
     calc_stats_arg_list.set(0, src);

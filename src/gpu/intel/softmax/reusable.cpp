@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -34,7 +34,7 @@ public:
             if (blocks.get_dim_idx() == block.dim_idx) { return true; }
         }
         return false;
-    };
+    }
 
     void include(dim_idx_t dim, size_t size) {
         inc_blocks.emplace_back(dim, into<dim_t>(size), 1);
@@ -57,7 +57,7 @@ private:
         }
 
         return lws;
-    };
+    }
 
     std::vector<block_t> inc_blocks;
 };
@@ -146,9 +146,11 @@ status_t reusable_fwd_t::pd_t::init_dispatch_workgroup_per_reduction(
 
     // source buffer gets new dimension: multiple workers per reduction block
     compute::named_buffer_t src_buf("SRC");
+    src_buf.data_type = conf.src_data_type;
 
     // keep original input buffer geometry for addressing
     compute::named_buffer_t ori_buf("ORIGINAL");
+    ori_buf.data_type = conf.src_data_type;
     for (size_t i = 0; i < dims_ids.size(); i++) {
         ori_buf.append_block(dims_ids[i], sizes[i]);
     }
@@ -174,6 +176,7 @@ status_t reusable_fwd_t::pd_t::init_dispatch_workgroup_per_reduction(
     }
 
     compute::named_buffer_t dst_buf("DST", src_buf);
+    dst_buf.data_type = conf.dst_data_type;
 
     // dispatch: all dims except reduction dimension plus workers dimension
     std::vector<dim_idx_t> dispatch_dims = std::move(dims_ids);
@@ -214,6 +217,8 @@ status_t reusable_fwd_t::pd_t::init_dispatch_workgroup_per_reduction(
 
 compute::kernel_ctx_t reusable_params_t::get_kernel_ctx() const {
     compute::kernel_ctx_t kernel_ctx;
+    // Stateless addressing model
+    kernel_ctx.require_stateless_addressing(require_stateless_addressing);
     kernel_ctx.define_int("SOFTMAX_INF_AS_ZERO", is_softmax_inf_as_zero);
     kernel_ctx.define_int("LOGSOFTMAX", is_logsoftmax);
     kernel_ctx.define_int("MANY_REDUCTIONS_PER_WORKGROUP",

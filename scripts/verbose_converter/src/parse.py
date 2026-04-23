@@ -1,5 +1,5 @@
 ################################################################################
-# Copyright 2024-2025 Intel Corporation
+# Copyright 2024 Intel Corporation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -386,11 +386,33 @@ class ParserImpl:
             post_op.mask = spec.read_uint()
         if spec.read_literal(":"):
             post_op.tag = spec.read_str()
+        if spec.read_literal(":"):
+            post_op.strides = spec.read_str()
         return post_op
 
     @staticmethod
     def parse_dropout(args: str) -> ir.Dropout:
-        return ir.Dropout(tag=args if args else None)
+        spec = ParseSpec(args)
+        tag = spec.read_str()
+        if not tag:
+            # Backward compatibility
+            return ir.Dropout()
+        if not spec.read_literal(":"):
+            return ir.Dropout(tag)
+        seed_dt = spec.read_str()
+        if not spec.read_literal(":"):
+            raise ParseError("Expected offset indicator for dropout")
+        indicator = spec.read_literal("0") or spec.read_literal("1")
+        if indicator is None:
+            raise ParseError("Expected offset indicator for dropout")
+        use_offset = indicator == "1"
+        if not spec.read_literal(":"):
+            raise ParseError("Expected host scalar indicator for dropout")
+        indicator = spec.read_literal("0") or spec.read_literal("1")
+        if indicator is None:
+            raise ParseError("Expected host scalar indicator for dropout")
+        use_host_scalars = indicator == "1"
+        return ir.Dropout(tag, seed_dt, use_offset, use_host_scalars)
 
     @staticmethod
     def parse_per_argument(attr, name, parse):
@@ -410,8 +432,17 @@ class ParserImpl:
 
     @staticmethod
     def parse_quantization_param(spec, read_value, param_type):
+        def is_groups(item: str):
+            try:
+                dims = map(int, item.split("x"))
+                return len(list(dims)) == 2
+            except ValueError:
+                return False
+
+        GROUPS, HOST_SCALAR, QUANT_MODE = 0, 1, 2
+
         # Old style: mask[:[value[*]|*]]
-        # New style: mask[:data_type[:groups]]
+        # New style: mask[:data_type[:groups][:host_scalar][:quantization_mode]]
         param = param_type()
         param.mask = spec.read_uint()
         if spec.read_literal(":"):
@@ -423,12 +454,22 @@ class ParserImpl:
                 pass
             elif not spec.eof:  # new style
                 param.data_type = spec.read_str()
-                if spec.read_literal(":"):
-                    groups_or_host_flag = spec.read_str()
-                    if groups_or_host_flag == "host_scalar":
+                state = GROUPS
+                while state <= QUANT_MODE:
+                    if spec.read_literal(":") is None:
+                        break
+                    item = spec.read_str()
+                    if state <= GROUPS and is_groups(item):
+                        param.groups = item
+                        state = GROUPS
+                    elif state <= HOST_SCALAR and item == "host_scalar":
                         param.is_host_scalar = True
-                    else:
-                        param.groups = groups_or_host_flag
+                        state = HOST_SCALAR
+                    elif state <= QUANT_MODE:
+                        param.quantization_mode = item
+                        state = QUANT_MODE
+                    state += 1
+
         return param
 
     # v2.7 and below

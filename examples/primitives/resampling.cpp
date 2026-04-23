@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -17,11 +17,13 @@
 /// @example resampling.cpp
 /// > Annotated version: @ref resampling_example_cpp
 
-/// @page resampling_example_cpp Resampling Primitive Example
-/// This C++ API example demonstrates how to create and execute a
+/// @page resampling_example_cpp_brief
+/// @brief This C++ API example demonstrates how to create and execute a
 /// [Resampling](@ref dev_guide_resampling) primitive in forward training
 /// propagation mode.
-///
+
+/// @page resampling_example_cpp Resampling Primitive Example
+/// \copybrief resampling_example_cpp_brief
 /// @include resampling.cpp
 
 #include <algorithm>

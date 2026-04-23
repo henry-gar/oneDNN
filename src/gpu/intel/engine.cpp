@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@
 
 #include "gpu/intel/engine.hpp"
 
+#include "common/rw_mutex.hpp"
 #include "common/utils.hpp"
 
 namespace dnnl {
@@ -87,10 +88,19 @@ status_t engine_t::init(const std::vector<uint8_t> &cache_blob) {
 } // namespace impl
 } // namespace dnnl
 
-bool dnnl_impl_gpu_mayiuse_ngen_kernels(dnnl::impl::engine_t *engine) {
+bool dnnl_impl_gpu_intel_mayiuse_ngen_kernels(dnnl::impl::engine_t *engine) {
     using namespace dnnl::impl;
     using namespace dnnl::impl::gpu;
 
     auto *intel_engine = utils::downcast<intel::engine_t *>(engine);
     return intel_engine->mayiuse_ngen_kernels();
+}
+
+const char *dnnl_impl_gpu_intel_get_isa_name(dnnl::impl::engine_t *engine) {
+    using namespace dnnl::impl;
+    using namespace dnnl::impl::gpu;
+
+    auto *intel_engine = utils::downcast<intel::engine_t *>(engine);
+    auto *device_info = intel_engine->device_info();
+    return intel::compute::to_string(device_info->gpu_arch());
 }

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -68,8 +68,7 @@ bool check_output_num(op_t *op) {
 template <data_type_t DTYPE>
 bool check_unsupported_input_dtype(op_t *op) {
     for (size_t i = 0; i < op->num_inputs(); ++i) {
-        const logical_tensor_t &iport
-                = op->get_input_value(i)->get_logical_tensor();
+        const logical_tensor_t &iport = op->get_input_logical_tensor(i);
         if (iport.data_type == DTYPE) return false;
     }
 
@@ -79,8 +78,7 @@ bool check_unsupported_input_dtype(op_t *op) {
 template <data_type_t DTYPE>
 bool check_input_dtype(op_t *op) {
     for (size_t i = 0; i < op->num_inputs(); ++i) {
-        const logical_tensor_t &iport
-                = op->get_input_value(i)->get_logical_tensor();
+        const logical_tensor_t &iport = op->get_input_logical_tensor(i);
         if (iport.data_type != DTYPE) return false;
     }
 
@@ -91,8 +89,7 @@ template <data_type_t DTYPE, size_t N>
 bool check_input_dtype_from_offset(op_t *op) {
     if (N >= op->num_inputs()) return true;
     for (size_t i = N; i < op->num_inputs(); ++i) {
-        const logical_tensor_t &iport
-                = op->get_input_value(i)->get_logical_tensor();
+        const logical_tensor_t &iport = op->get_input_logical_tensor(i);
         if (iport.data_type != DTYPE) return false;
     }
 
@@ -102,8 +99,7 @@ bool check_input_dtype_from_offset(op_t *op) {
 template <dim N>
 static inline bool check_conv_weight_size(op_t *op) {
     std::string weight_fmt = op->get_attr<std::string>(op_attr::weights_format);
-    const logical_tensor_t &weight_lt
-            = op->get_input_value(1)->get_logical_tensor();
+    const logical_tensor_t &weight_lt = op->get_input_logical_tensor(1);
     const auto weight_lt_wrapper = logical_tensor_wrapper_t(weight_lt);
     if (weight_lt_wrapper.ndims() == DNNL_GRAPH_UNKNOWN_NDIMS) { return false; }
     dims fil_sp = weight_lt_wrapper.get_weight_spatial_dims(weight_fmt);
@@ -115,8 +111,7 @@ static inline bool check_conv_weight_size(op_t *op) {
 template <data_type_t DTYPE>
 bool check_output_dtype(op_t *op) {
     for (size_t i = 0; i < op->num_outputs(); ++i) {
-        const logical_tensor_t &oport
-                = op->get_output_value(i)->get_logical_tensor();
+        const logical_tensor_t &oport = op->get_output_logical_tensor(i);
         if (oport.data_type != DTYPE) return false;
     }
 
@@ -135,8 +130,7 @@ inline bool check_qtype_equal_to_per_tensor(op_t *op) {
 }
 
 inline bool check_begin_norm_axis_attr(const op_t *op) {
-    const logical_tensor_t &src_lt
-            = op->get_input_value(0)->get_logical_tensor();
+    const logical_tensor_t &src_lt = op->get_input_logical_tensor(0);
     const auto src_lt_wrapper = logical_tensor_wrapper_t(src_lt);
     const auto ndims = src_lt_wrapper.ndims();
 
@@ -153,8 +147,7 @@ inline bool check_begin_norm_axis_attr(const op_t *op) {
 template <size_t OFFSET, int32_t MIN, int32_t MAX>
 inline bool check_input_ndim_from_offset(const op_t *op) {
     if (OFFSET >= op->num_inputs()) return false;
-    const logical_tensor_t &src_lt
-            = op->get_input_value(OFFSET)->get_logical_tensor();
+    const logical_tensor_t &src_lt = op->get_input_logical_tensor(OFFSET);
     const auto src_lt_wrapper = logical_tensor_wrapper_t(src_lt);
     const auto ndims = src_lt_wrapper.ndims();
 
@@ -269,11 +262,11 @@ inline bool check_if_constant_weight(op_t *op) {
 inline bool is_f8_quantization(const op_t *op) {
     const op_kind_t kind = op->get_kind();
     if (kind == graph::op_kind::Quantize) {
-        const auto &out = op->get_output_value(0)->get_logical_tensor();
+        const auto &out = op->get_output_logical_tensor(0);
         return graph::utils::one_of(out.data_type, graph::data_type::f8_e4m3,
                 graph::data_type::f8_e5m2);
     } else if (kind == graph::op_kind::Dequantize) {
-        const auto &in = op->get_input_value(0)->get_logical_tensor();
+        const auto &in = op->get_input_logical_tensor(0);
         return graph::utils::one_of(in.data_type, graph::data_type::f8_e4m3,
                 graph::data_type::f8_e5m2);
     } else {
@@ -284,11 +277,11 @@ inline bool is_f8_quantization(const op_t *op) {
 inline bool is_int8_quantization(const op_t *op) {
     const op_kind_t kind = op->get_kind();
     if (kind == graph::op_kind::Quantize) {
-        const auto &out = op->get_output_value(0)->get_logical_tensor();
+        const auto &out = op->get_output_logical_tensor(0);
         return graph::utils::one_of(
                 out.data_type, graph::data_type::s8, graph::data_type::u8);
     } else if (kind == graph::op_kind::Dequantize) {
-        const auto &in = op->get_input_value(0)->get_logical_tensor();
+        const auto &in = op->get_input_logical_tensor(0);
         return graph::utils::one_of(
                 in.data_type, graph::data_type::s8, graph::data_type::u8);
     } else {
@@ -369,7 +362,7 @@ inline graph::utils::pm::pb_node_t *optional_smooth_quant(
     auto opt = optional_qout
             ? p_curr_graph->append_optional(optional_graph)
             : p_curr_graph->append_optional(optional_graph,
-                    graph::utils::pm::in_edges_t {in_edge(0, input, 0)});
+                      graph::utils::pm::in_edges_t {in_edge(0, input, 0)});
     graph::utils::pm::pb_op_t *quant_out
             = p_curr_graph->append_op(graph::op_kind::Quantize,
                     graph::utils::pm::in_edges_t {in_edge(0, opt, 0)});
@@ -415,6 +408,36 @@ inline graph::utils::pm::repetition_t *optional_scale(
     return optional_scale;
 }
 
+inline graph::utils::pm::repetition_t *optional_dropout(
+        const std::shared_ptr<graph::utils::pm::pb_graph_t> &pgraph,
+        graph::utils::pm::pb_node_t *input,
+        graph::data_type_t dtype = graph::data_type::undef) {
+    auto dropout_graph = std::make_shared<graph::utils::pm::pb_graph_t>();
+    auto dropout = dropout_graph->append_op(graph::op_kind::Dropout);
+    if (dtype != data_type::undef) {
+        dropout->append_decision_function([dtype](op_t *op) {
+            const logical_tensor_t &iport = op->get_input_logical_tensor(0);
+            return iport.data_type == dtype;
+        });
+    }
+    dropout_graph->create_input_port(0, dropout, 0);
+    dropout_graph->create_output_port(0, dropout, 0);
+    auto optional_dropout
+            = pgraph->append_optional(dropout_graph, {in_edge(0, input, 0)});
+    return optional_dropout;
+}
+
+inline graph::utils::pm::repetition_t *optional_typecast(
+        const std::shared_ptr<graph::utils::pm::pb_graph_t> &pgraph,
+        graph::utils::pm::pb_node_t *input) {
+    auto tc_graph = std::make_shared<graph::utils::pm::pb_graph_t>();
+    auto tc = tc_graph->append_op(graph::op_kind::TypeCast);
+    tc_graph->create_input_port(0, tc, 0);
+    tc_graph->create_output_port(0, tc, 0);
+    auto opt_tc = pgraph->append_optional(tc_graph, {in_edge(0, input, 0)});
+    return opt_tc;
+}
+
 inline graph::utils::pm::repetition_t *optional_explicit_mask(
         const std::shared_ptr<graph::utils::pm::pb_graph_t> &pgraph,
         graph::utils::pm::pb_node_t *scaled_output) {
@@ -443,8 +466,7 @@ inline graph::utils::pm::repetition_t *optional_soft_capping(
 
 inline bool check_inputs_xf16(op_t *op) {
     for (size_t i = 0; i < op->num_inputs(); ++i) {
-        const logical_tensor_t &iport
-                = op->get_input_value(i)->get_logical_tensor();
+        const logical_tensor_t &iport = op->get_input_logical_tensor(i);
         if (iport.data_type != graph::data_type::f16
                 && iport.data_type != graph::data_type::bf16)
             return false;

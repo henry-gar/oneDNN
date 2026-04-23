@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -223,7 +223,9 @@ private:
         if (!new_pd->is_initialized()) return nullptr; \
         return new_pd.release(); \
     } \
-    const char *name() const override { return impl_name; }
+    const char *name() const override { \
+        return impl_name; \
+    }
 
 #define DECLARE_SUM_PD_T(impl_name, ...) \
     DECLARE_SUM_PD_t(impl_name, __VA_ARGS__)

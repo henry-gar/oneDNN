@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2025 Intel Corporation
+* Copyright 2021 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -164,7 +164,8 @@ private:
     const reg64_savable_t reg_iter_labels_list {regscratchpad_, rax, r16};
 
     const reg64_t reg_addr_batch = r13;
-    const reg64_t reg_aux1_batch = rbp;
+    const reg64_savable_t reg_aux1_batch {
+            regscratchpad_, rbx, rbp, may_use_rbp()};
     const reg64_t reg_A = r11;
     const reg64_t reg_B = r10;
     const reg64_t reg_stride_lda = r14;
@@ -193,7 +194,7 @@ private:
     const reg64_t reg_converted_stride = rsi;
     const reg64_t reg_zp_comp_pad_a = rsi;
 
-    const reg64_t reg_long_offt = r11;
+    const reg64_savable_t reg_long_offt = {regscratchpad_, r11};
 
     bool are_post_ops_applicable_ = false;
     bool need_to_apply_alpha_beta_ = false;
@@ -214,29 +215,29 @@ private:
     bool prepare_post_ops_registers_once_ = false;
 
     const char *bd_mask_buffer_ptr_ = nullptr;
-    std::vector<size_t> adj_bd_mask_buffer_;
-    std::vector<size_t> skipped_bd_mask_buffer_;
+    std::vector<dim_t> adj_bd_mask_buffer_;
+    std::vector<dim_t> skipped_bd_mask_buffer_;
     palette_config_t palette_;
     // used to store offsets within wsp buffer where the data is
     // transformed(downconverted), to reuse when needed.
-    std::unordered_map<std::string, size_t> transform_buf_map_A_;
-    std::unordered_map<std::string, size_t> transform_buf_map_B_;
+    std::unordered_map<std::string, dim_t> transform_buf_map_A_;
+    std::unordered_map<std::string, dim_t> transform_buf_map_B_;
 
-    size_t LDA_size_ = 0, LDA2_size_ = 0;
-    size_t LDB_size_ = 0, LDB2_size_ = 0;
-    size_t LDC_size_ = 0, LDC2_size_M_ = 0, LDC2_size_N_ = 0;
-    size_t LDD_size_ = 0;
-    size_t ld_block_B_size_ = 0;
-    size_t ld_block_C_size_ = 0;
-    size_t ld_block_D_size_ = 0;
-    size_t ld_block_bias_size_ = 0;
-    size_t ld_block_scales_size_ = 0;
-    size_t ld_block_zp_size_ = 0;
+    dim_t LDA_size_ = 0, LDA2_size_ = 0;
+    dim_t LDB_size_ = 0, LDB2_size_ = 0;
+    dim_t LDC_size_ = 0, LDC2_size_M_ = 0, LDC2_size_N_ = 0;
+    dim_t LDD_size_ = 0;
+    dim_t ld_block_B_size_ = 0;
+    dim_t ld_block_C_size_ = 0;
+    dim_t ld_block_D_size_ = 0;
+    dim_t ld_block_bias_size_ = 0;
+    dim_t ld_block_scales_size_ = 0;
+    dim_t ld_block_zp_size_ = 0;
 
-    size_t ldb_tail_B_size_ = 0;
-    size_t ldb_tail_C_size_ = 0;
-    size_t ldb_tail_D_size_ = 0;
-    size_t ldb_tail_zp_size_ = 0;
+    dim_t ldb_tail_B_size_ = 0;
+    dim_t ldb_tail_C_size_ = 0;
+    dim_t ldb_tail_D_size_ = 0;
+    dim_t ldb_tail_zp_size_ = 0;
 
     enum matrix_kind_t { matrix_A, matrix_B, matrix_C, matrix_D };
 
@@ -251,9 +252,9 @@ private:
     // JIT code generation
     struct iteration_block_t {
         int block = 0;
-        size_t pos = 0;
+        dim_t pos = 0;
         bool is_tail = false;
-        iteration_block_t(size_t pos_, int block_, bool is_tail_ = false)
+        iteration_block_t(dim_t pos_, int block_, bool is_tail_ = false)
             : block(block_), pos(pos_), is_tail(is_tail_) {}
         bool operator==(const iteration_block_t &rhs) const {
             return block == rhs.block && is_tail == rhs.is_tail;
@@ -270,12 +271,12 @@ private:
             return !operator==(rhs);
         }
 
-        size_t pos(size_t b) const {
+        dim_t pos(size_t b) const {
             assert(b < blocks.size());
             return blocks[b].pos;
         }
 
-        size_t rel_pos(size_t b) const {
+        dim_t rel_pos(size_t b) const {
             assert(b < blocks.size());
             return (blocks[b].pos - blocks[0].pos);
         }
@@ -301,12 +302,12 @@ private:
     };
 
     struct bd_iteration_t : public dim_iteration_t {
-        size_t A_shift {0};
-        size_t C_shift {0};
-        size_t D_shift {0};
-        size_t zp_comp_pad_a_shift {0};
+        dim_t A_shift {0};
+        dim_t C_shift {0};
+        dim_t D_shift {0};
+        dim_t zp_comp_pad_a_shift {0};
         std::vector<char> bd_mask;
-        std::vector<size_t> adj_bd_mask;
+        std::vector<dim_t> adj_bd_mask;
         bd_iteration_t *similar {nullptr};
         Label lstart;
 
@@ -322,13 +323,12 @@ private:
     };
 
     struct bs_iteration_t {
-        size_t idx = 0;
-        size_t pos = 0;
+        dim_t idx = 0;
+        dim_t pos = 0;
         bool is_first = false;
         bool is_last = false;
         bs_iteration_t() = default;
-        bs_iteration_t(
-                size_t pos_, bool is_first_ = true, bool is_last_ = false)
+        bs_iteration_t(dim_t pos_, bool is_first_ = true, bool is_last_ = false)
             : pos(pos_), is_first(is_first_), is_last(is_last_) {}
     };
 
@@ -383,7 +383,7 @@ private:
     };
 
     struct prf_sprinkled_t {
-        std::vector<size_t> prefetch_offsets;
+        std::vector<dim_t> prefetch_offsets;
         size_t current_prefetch_idx;
         void reset() {
             prefetch_offsets.clear();
@@ -531,19 +531,21 @@ private:
             reg64_t reg_data_stride, reg64_t reg_buf);
 
     void maybe_pre_process_data(brgemm_iteration_t &bi, const Tmm &t1,
-            reg64_t reg_base, size_t offset, reg64_t reg_stride,
+            reg64_t reg_base, dim_t offset, reg64_t reg_stride,
             matrix_kind_t mk);
 
     bool maybe_pre_process_k_tail(brgemm_iteration_t &bi, int bdb,
-            const Tmm &t1, reg64_t reg_base, size_t offset, reg64_t reg_stride,
+            const Tmm &t1, reg64_t reg_base, dim_t offset, reg64_t reg_stride,
             matrix_kind_t mk, bool use_memadvice);
 
+    bool process_k_tail_only_last_tile();
+
     void pre_process_k_tail_fused_copy_a(brgemm_iteration_t &bi, int bdb,
-            const Tmm &t1, reg64_t reg_base, size_t offset_src,
-            size_t offset_dst, bool mem_advice_A);
+            const Tmm &t1, reg64_t reg_base, dim_t offset_src, dim_t offset_dst,
+            bool mem_advice_A);
 
     void maybe_tileloadd_nt(
-            brgemm_iteration_t &bi, matrix_kind_t mk, int xdb, size_t offset);
+            brgemm_iteration_t &bi, matrix_kind_t mk, int xdb, dim_t offset);
 
     void maybe_fused_copy_A_nt_load(brgemm_iteration_t &bi, int bdb);
 
@@ -583,38 +585,38 @@ private:
                 && !skip_accumulation);
     }
 
-    size_t A_offset(
+    dim_t A_offset(
             const brgemm_iteration_t &bi, int bdb, int rdb = 0) const noexcept;
 
-    size_t A_offset_wsp(
+    dim_t A_offset_wsp(
             const brgemm_iteration_t &bi, int bdb, int rdb = 0) const noexcept;
 
-    size_t A_offset_line(const brgemm_iteration_t &bi, int bdb, int rdb = 0,
+    dim_t A_offset_line(const brgemm_iteration_t &bi, int bdb, int rdb = 0,
             int bd_elem_idx = 0) const noexcept;
 
-    size_t B_offset(
+    dim_t B_offset(
             const brgemm_iteration_t &bi, int ldb, int rdb = 0) const noexcept;
 
-    size_t B_offset_line(const brgemm_iteration_t &bi, int ldb, int rdb = 0,
+    dim_t B_offset_line(const brgemm_iteration_t &bi, int ldb, int rdb = 0,
             int rd_elem_idx = 0) const noexcept;
 
-    size_t C_offset(const brgemm_iteration_t &bi, int bdb, int inp_bd,
+    dim_t C_offset(const brgemm_iteration_t &bi, int bdb, int inp_bd,
             int ldb) const noexcept;
 
-    size_t D_offset(const brgemm_iteration_t &bi, int bdb, int inp_bd,
+    dim_t D_offset(const brgemm_iteration_t &bi, int bdb, int inp_bd,
             int ldb) const noexcept;
 
-    size_t lda() const noexcept;
-    size_t ldb() const noexcept;
+    dim_t lda() const noexcept;
+    dim_t ldb() const noexcept;
 
-    size_t bias_offset(int ldb) const noexcept;
+    dim_t bias_offset(int ldb) const noexcept;
 
-    size_t scales_offset(int ldb) const noexcept;
-    size_t zp_comp_a_offset(int ldb) const noexcept;
-    size_t zp_comp_pad_a_offset(const brgemm_iteration_t &bi, int bdb,
+    dim_t scales_offset(int ldb) const noexcept;
+    dim_t zp_comp_a_offset(int ldb) const noexcept;
+    dim_t zp_comp_pad_a_offset(const brgemm_iteration_t &bi, int bdb,
             int inp_bd, int ldb) const noexcept;
-    size_t zp_comp_b_offset(int bd) const noexcept;
-    size_t zp_c_values_offset(brgemm_iteration_t &bi, int ldb) const noexcept;
+    dim_t zp_comp_b_offset(int bd) const noexcept;
+    dim_t zp_c_values_offset(brgemm_iteration_t &bi, int ldb) const noexcept;
     bool is_out_bd(const bd_iteration_t *bdi, int bdb, int inp_bd) const;
     int get_out_bd(const bd_iteration_t *bdi, int bdb, int inp_bd) const;
 
@@ -626,7 +628,7 @@ private:
 
     void fill_imap();
     void copy_k_tail_to_wsp(const Tmm &t1,
-            jit_brgemm_amx_uker_base_t::reg64_t &reg_base, size_t src_offset,
+            jit_brgemm_amx_uker_base_t::reg64_t &reg_base, dim_t src_offset,
             jit_brgemm_amx_uker_base_t::reg64_t &reg_src_stride,
             bool use_memadvice);
 };
@@ -736,7 +738,7 @@ int jit_brgemm_amx_uker_base_t::skipped_bd_mask(int inp_bd) noexcept {
         return skipped_bd_mask_buffer_[inp_bd];
 }
 
-size_t jit_brgemm_amx_uker_base_t::A_offset_wsp(
+dim_t jit_brgemm_amx_uker_base_t::A_offset_wsp(
         const brgemm_iteration_t &bi, int bdb, int rdb) const noexcept {
     // Full WSP buffer layout:
     //   1. partial C results.
@@ -756,7 +758,7 @@ size_t jit_brgemm_amx_uker_base_t::A_offset_wsp(
     return transform_offset + bs_offs + bdb_offs + rdb_offs;
 }
 
-size_t jit_brgemm_amx_uker_base_t::A_offset(
+dim_t jit_brgemm_amx_uker_base_t::A_offset(
         const brgemm_iteration_t &bi, int bdb, int rdb) const noexcept {
     const auto bs_offs = (brg.type == brgemm_static_offs)
             ? brg.brgattr.static_offsets[bi.bsi->idx].offset.A
@@ -767,12 +769,12 @@ size_t jit_brgemm_amx_uker_base_t::A_offset(
             + bi.rdi->pos(rdb) * brg.rd_block * brg.typesize_A;
 }
 
-size_t jit_brgemm_amx_uker_base_t::A_offset_line(const brgemm_iteration_t &bi,
+dim_t jit_brgemm_amx_uker_base_t::A_offset_line(const brgemm_iteration_t &bi,
         int bdb, int rdb, int bd_elem_idx) const noexcept {
     return A_offset(bi, bdb, rdb) + bd_elem_idx * LDA2_size_;
 }
 
-size_t jit_brgemm_amx_uker_base_t::B_offset(
+dim_t jit_brgemm_amx_uker_base_t::B_offset(
         const brgemm_iteration_t &bi, int ldb, int rdb) const noexcept {
     const auto bs_offs = (brg.type == brgemm_static_offs)
             ? brg.brgattr.static_offsets[bi.bsi->idx].offset.B
@@ -788,67 +790,67 @@ size_t jit_brgemm_amx_uker_base_t::B_offset(
     return rdb_B_offset + ldb_B_offset + bs_offs;
 }
 
-size_t jit_brgemm_amx_uker_base_t::B_offset_line(const brgemm_iteration_t &bi,
+dim_t jit_brgemm_amx_uker_base_t::B_offset_line(const brgemm_iteration_t &bi,
         int ldb, int rdb, int rd_elem_idx) const noexcept {
     return B_offset(bi, ldb, rdb) + rd_elem_idx * LDB_size_;
 }
 
-size_t jit_brgemm_amx_uker_base_t::C_offset(const brgemm_iteration_t &bi,
+dim_t jit_brgemm_amx_uker_base_t::C_offset(const brgemm_iteration_t &bi,
         int bdb, int inp_bd, int ldb) const noexcept {
     const auto bi_bd_start = get_out_bd(bi.bdi, 0, 0);
     const auto bd = get_out_bd(bi.bdi, bdb, inp_bd);
     const auto bd_shift = bd - (ununroll_bd_loop ? bi_bd_start : 0);
-    size_t ldc_elem = (size_t)ldb * brg.ld_block;
-    size_t bloc_idx = ldc_elem / brg.LDC;
-    size_t in_block = ldc_elem % brg.LDC;
+    dim_t ldc_elem = (dim_t)ldb * brg.ld_block;
+    dim_t bloc_idx = ldc_elem / brg.LDC;
+    dim_t in_block = ldc_elem % brg.LDC;
 
-    return (size_t)bd_shift * LDC2_size_M_ + (size_t)bloc_idx * LDC2_size_N_
+    return (dim_t)bd_shift * LDC2_size_M_ + (dim_t)bloc_idx * LDC2_size_N_
             + in_block * brg.typesize_C;
 }
 
-size_t jit_brgemm_amx_uker_base_t::D_offset(const brgemm_iteration_t &bi,
+dim_t jit_brgemm_amx_uker_base_t::D_offset(const brgemm_iteration_t &bi,
         int bdb, int inp_bd, int ldb) const noexcept {
     const auto bi_bd_start = get_out_bd(bi.bdi, 0, 0);
     const auto bd = get_out_bd(bi.bdi, bdb, inp_bd);
     const auto bd_shift = bd - (ununroll_bd_loop ? bi_bd_start : 0);
-    return (size_t)bd_shift * LDD_size_ + (size_t)ldb * ld_block_D_size_;
+    return (dim_t)bd_shift * LDD_size_ + (dim_t)ldb * ld_block_D_size_;
 }
 
-size_t jit_brgemm_amx_uker_base_t::lda() const noexcept {
+dim_t jit_brgemm_amx_uker_base_t::lda() const noexcept {
     return LDA_size_;
 }
 
-size_t jit_brgemm_amx_uker_base_t::ldb() const noexcept {
+dim_t jit_brgemm_amx_uker_base_t::ldb() const noexcept {
     return LDB_size_ * brg.rd_step;
 }
 
-size_t jit_brgemm_amx_uker_base_t::bias_offset(int ldb) const noexcept {
+dim_t jit_brgemm_amx_uker_base_t::bias_offset(int ldb) const noexcept {
     return ldb * ld_block_bias_size_;
 }
 
-size_t jit_brgemm_amx_uker_base_t::scales_offset(int ldb) const noexcept {
+dim_t jit_brgemm_amx_uker_base_t::scales_offset(int ldb) const noexcept {
     return brg.is_oc_scale * ldb * ld_block_scales_size_;
 }
 
-size_t jit_brgemm_amx_uker_base_t::zp_comp_a_offset(int ldb) const noexcept {
+dim_t jit_brgemm_amx_uker_base_t::zp_comp_a_offset(int ldb) const noexcept {
     return ldb * ld_block_zp_size_;
 }
 
-size_t jit_brgemm_amx_uker_base_t::zp_comp_pad_a_offset(
+dim_t jit_brgemm_amx_uker_base_t::zp_comp_pad_a_offset(
         const brgemm_iteration_t &bi, int bdb, int inp_bd,
         int ldb) const noexcept {
     const auto bi_bd_start = get_out_bd(bi.bdi, 0, 0);
     const auto bd = get_out_bd(bi.bdi, bdb, inp_bd);
     const auto bd_shift = bd - (ununroll_bd_loop ? bi_bd_start : 0);
-    return (size_t)bd_shift * brg.LDB * sizeof(int32_t)
-            + (size_t)ldb * ld_block_zp_size_;
+    return (dim_t)bd_shift * brg.LDB * sizeof(int32_t)
+            + (dim_t)ldb * ld_block_zp_size_;
 }
 
-size_t jit_brgemm_amx_uker_base_t::zp_comp_b_offset(int bd) const noexcept {
+dim_t jit_brgemm_amx_uker_base_t::zp_comp_b_offset(int bd) const noexcept {
     return sizeof(int32_t) * bd;
 }
 
-size_t jit_brgemm_amx_uker_base_t::zp_c_values_offset(
+dim_t jit_brgemm_amx_uker_base_t::zp_c_values_offset(
         brgemm_iteration_t &bi, int ldb) const noexcept {
     if (brg.zp_type_c == brgemm_broadcast_t::per_n) {
         return (bi.ldi->is_tail(ldb)) ? ldb_tail_zp_size_
@@ -935,7 +937,7 @@ void jit_brgemm_amx_uker_base_t::read_params() {
 }
 
 void jit_brgemm_amx_uker_base_t::load_accumulators(brgemm_iteration_t &bi) {
-    size_t ils_shift = 0;
+    dim_t ils_shift = 0;
     if (may_load_accumulators_) {
         mov(reg_stride_ld_block, LDC_size_);
         const auto need_ils_shift
@@ -1044,6 +1046,17 @@ void jit_brgemm_amx_uker_base_t::apply_post_ops_to_range(
 
             const auto k_mask = (!is_ld_tail) ? ld_full_mask : ld_tail_mask;
             const auto zmm_prev_dst = Xbyak::Zmm(0);
+
+            const auto max_d_offset = [&]() {
+                dim_t result = 0;
+                for (auto bd = bd_start; bd < bd_finish; bd++) {
+                    if (!is_out_bd(bi.bdi, bdb, bd)) continue;
+                    result = nstl::max(result, D_offset(bi, bdb, bd, ldb_pos));
+                }
+                return result;
+            }();
+            reg64_savable_guard_t reg_A_guard(
+                    {&reg_long_offt}, max_d_offset > INT_MAX);
 
             for (auto bd = bd_start; bd < bd_finish; bd++) {
                 if (!is_out_bd(bi.bdi, bdb, bd)) continue;
@@ -1237,8 +1250,7 @@ void jit_brgemm_amx_uker_base_t::prefetch_CD_range(brgemm_iteration_t &bi,
         if (!is_out_bd(bi.bdi, bdb, bd)) continue;
         if (bi.apply_postops) {
             const auto d_offset = D_offset(bi, bdb, bd, ldb_pos);
-            auto ptr_D
-                    = EVEX_compress_addr_safe(reg_D, d_offset, reg_long_offt);
+            auto ptr_D = EVEX_compress_addr_safe(reg_D, d_offset, reg_tmp_gpr);
             uni_prefetch(ptr_D, pft, true);
         } else if (are_post_ops_applicable_) {
             //            TODO: split hints C and D hints
@@ -1445,13 +1457,13 @@ void jit_brgemm_amx_uker_base_t::process_output_range(
             vmovups(vreg_acc, ptr[reg_buf + buf_offset + wsp_offset]);
         }
 
-        const auto c_offset = C_offset(bi, bdb, bd, bi.ldi->pos(ldb));
-        const auto ptr_C
-                = EVEX_compress_addr_safe(reg_C, c_offset, reg_long_offt);
-
-        if (need_to_apply_alpha_beta_ || bi.skip_accumulation)
+        if (need_to_apply_alpha_beta_ || bi.skip_accumulation) {
+            const auto c_offset = C_offset(bi, bdb, bd, bi.ldi->pos(ldb));
+            const auto ptr_C
+                    = EVEX_compress_addr_safe(reg_C, c_offset, reg_long_offt);
             apply_alpha_beta_to_vector(
                     zmm.getIdx(), ptr_C, bi.ldi->is_tail(ldb));
+        }
 
         if (!bi.apply_postops) continue;
 
@@ -1606,15 +1618,16 @@ void jit_brgemm_amx_uker_base_t::store_vector(
     const auto c_offset = C_offset(bi, bdb, inp_bd, ldb_pos);
     const auto d_offset = D_offset(bi, bdb, inp_bd, ldb_pos);
 
-    auto ptr_C = EVEX_compress_addr_safe(reg_C, c_offset, reg_long_offt);
-    auto ptr_D = EVEX_compress_addr_safe(reg_D, d_offset, reg_long_offt);
-
-    if (bi.apply_postops)
+    if (bi.apply_postops) {
+        auto ptr_D = EVEX_compress_addr_safe(reg_D, d_offset, reg_tmp_gpr);
         store_vector_with_post_ops(vreg_acc.getIdx(), ptr_D, is_ld_tail);
-    else if (are_post_ops_applicable_)
+    } else if (are_post_ops_applicable_) {
+        auto ptr_C = EVEX_compress_addr_safe(reg_C, c_offset, reg_tmp_gpr);
         store_vector_without_post_ops(vreg_acc.getIdx(), ptr_C, is_ld_tail);
-    else
+    } else {
+        auto ptr_D = EVEX_compress_addr_safe(reg_D, d_offset, reg_tmp_gpr);
         store_vector_without_post_ops(vreg_acc.getIdx(), ptr_D, is_ld_tail);
+    }
 }
 
 void jit_brgemm_amx_uker_base_t::interleave_store(
@@ -1738,7 +1751,7 @@ void jit_brgemm_amx_uker_base_t::set_A_B_matrices(int bs) {
     if (one_of(brg.type, brgemm_static_offs)) return;
     assert(one_of(brg.type, brgemm_addr, brgemm_offs));
     if (brg.brgattr.max_bs == 1) return;
-    auto batch_offset = (size_t)bs * sizeof(brgemm_batch_element_t);
+    const auto batch_offset = (dim_t)bs * sizeof(brgemm_batch_element_t);
     if (brg.type == brgemm_addr) {
         if (brg.layout == brgemm_row_major) {
             mov(reg_A,
@@ -1785,6 +1798,7 @@ void jit_brgemm_amx_uker_base_t::set_A_B_matrices() {
     if (brg.brgattr.max_bs == 1) return;
 
     if (brg.type == brgemm_addr) {
+        reg_aux1_batch.restore();
         if (brg.layout == brgemm_row_major) {
             mov(reg_A, ptr[reg_aux1_batch + GET_OFF_BATCH_ELEMENT(ptr.A)]);
             mov(reg_B, ptr[reg_aux1_batch + GET_OFF_BATCH_ELEMENT(ptr.B)]);
@@ -1793,6 +1807,7 @@ void jit_brgemm_amx_uker_base_t::set_A_B_matrices() {
             mov(reg_B, ptr[reg_aux1_batch + GET_OFF_BATCH_ELEMENT(ptr.A)]);
         }
     } else if (brg.type == brgemm_offs) {
+        reg_aux1_batch.restore();
         if (brg.layout == brgemm_row_major) {
             mov(reg_A, ptr[param1 + GET_OFF(ptr_A)]);
             mov(reg_B, ptr[param1 + GET_OFF(ptr_B)]);
@@ -1808,8 +1823,8 @@ void jit_brgemm_amx_uker_base_t::set_A_B_matrices() {
 }
 
 void jit_brgemm_amx_uker_base_t::maybe_sprinkle_prefetches() {
-    auto jit_prefetches = [&](prf_sprinkled_t &prf_sprinkled,
-                                  Xbyak::Reg64 base) {
+    auto jit_prefetches
+            = [&](prf_sprinkled_t &prf_sprinkled, Xbyak::Reg64 base) {
         // Calculate the number of cache lines to jit
         float total_cache_lines_to_prefetch
                 = (float)prf_sprinkled.prefetch_offsets.size();
@@ -1838,7 +1853,7 @@ void jit_brgemm_amx_uker_base_t::maybe_sprinkle_prefetches() {
     current_num_amx_ops++;
 }
 void jit_brgemm_amx_uker_base_t::maybe_tileloadd_nt(
-        brgemm_iteration_t &bi, matrix_kind_t mk, int xdb, size_t offset) {
+        brgemm_iteration_t &bi, matrix_kind_t mk, int xdb, dim_t offset) {
 
     const bool is_A = mk == matrix_kind_t::matrix_A;
     bool load_nt = is_A ? brg.load_nt_A : brg.load_nt_B;
@@ -2185,7 +2200,7 @@ void jit_brgemm_amx_uker_base_t::bf32_downconvert_to_vnni(
 }
 
 void jit_brgemm_amx_uker_base_t::maybe_pre_process_data(brgemm_iteration_t &bi,
-        const Tmm &t1, reg64_t reg_base, size_t offset, reg64_t reg_stride,
+        const Tmm &t1, reg64_t reg_base, dim_t offset, reg64_t reg_stride,
         matrix_kind_t mk) {
 
     const auto &tloop = imap_[bi.apply_postops];
@@ -2239,7 +2254,7 @@ void jit_brgemm_amx_uker_base_t::maybe_pre_process_data(brgemm_iteration_t &bi,
     if (buf_offt) add(reg_buf, buf_offt);
     mov(reg_converted_stride, zmm_width_in_bytes);
 
-    const int max_tiles = amx::get_max_tiles(amx::get_target_palette());
+    const int max_tiles = amx::get_max_palette_size();
     JIT_ASSERT(t1.getIdx() >= 0 && t1.getIdx() < max_tiles);
     const auto num_rows = palette_.rows[t1.getIdx()];
     const auto num_col_bytes = palette_.cols[t1.getIdx()];
@@ -2268,22 +2283,34 @@ void jit_brgemm_amx_uker_base_t::maybe_pre_process_data(brgemm_iteration_t &bi,
 
 void jit_brgemm_amx_uker_base_t::pre_process_k_tail_fused_copy_a(
         brgemm_iteration_t &bi, int bdb, const Tmm &t1, reg64_t reg_base,
-        size_t offset_src, size_t offset_dst, bool mem_advice_A) {
+        dim_t offset_src, dim_t offset_dst, bool mem_advice_A) {
     if (offset_dst) add(reg_buf, offset_dst);
     copy_k_tail_to_wsp(t1, reg_base, offset_src, reg_stride_lda, mem_advice_A);
     if (offset_dst) sub(reg_buf, offset_dst);
 }
 
+bool jit_brgemm_amx_uker_base_t::process_k_tail_only_last_tile() {
+    // Check whether loading from the original A matrix will cause out of bounds exception.
+    // The check is on the last tile on K dim and tile before last on M dim. If
+    // loading that tile exceeds the A matrix, then we need to process K tail
+    // on every M tile.
+    int last_bd_block = brg.bdb_tail == 0 ? brg.bd_block : brg.bdb_tail;
+    return brg.rd_block - brg.rdb_tail <= last_bd_block * brg.reduce_dim;
+}
+
 bool jit_brgemm_amx_uker_base_t::maybe_pre_process_k_tail(
         brgemm_iteration_t &bi, int bdb, const Tmm &t1, reg64_t reg_base,
-        size_t offset, reg64_t reg_stride, matrix_kind_t mk,
+        dim_t offset, reg64_t reg_stride, matrix_kind_t mk,
         bool use_memadvice) {
     const auto &tloop = imap_[bi.apply_postops];
 
-    const auto need_k_tail_processing = mk == matrix_A && brg.amx_wary_k_tail()
-            && brg.rdb_tail != 0 && bi.bdi->idx == tloop.bdis.size() - 1
-            && bdb == bi.bdi->block2() - 1 && bi.last_bsi
-            && tloop.is_last_rdi(bi.rdi);
+    bool need_k_tail_processing = mk == matrix_A && brg.amx_wary_k_tail()
+            && brg.rdb_tail != 0 && tloop.is_last_rdi(bi.rdi);
+
+    if (process_k_tail_only_last_tile()) {
+        need_k_tail_processing &= bi.bdi->idx == tloop.bdis.size() - 1
+                && bdb == bi.bdi->block2() - 1 && bi.last_bsi;
+    }
 
     if (!need_k_tail_processing) return false;
 
@@ -2293,8 +2320,8 @@ bool jit_brgemm_amx_uker_base_t::maybe_pre_process_k_tail(
     if (transform_offset) add(reg_buf, transform_offset);
     mov(reg_converted_stride, zmm_width_in_bytes);
 
-    // reuse transformed data from matrix A for ldi > 0
-    if (bi.ldi->idx == 0) {
+    // reuse transformed data from matrix A for ldi > 0 if using only one tile
+    if (bi.ldi->idx == 0 || !process_k_tail_only_last_tile()) {
         copy_k_tail_to_wsp(t1, reg_base, offset, reg_stride, use_memadvice);
     }
     // load into tmm from the transformed data.
@@ -2305,9 +2332,11 @@ bool jit_brgemm_amx_uker_base_t::maybe_pre_process_k_tail(
     return true;
 }
 void jit_brgemm_amx_uker_base_t::copy_k_tail_to_wsp(const Tmm &t1,
-        jit_brgemm_amx_uker_base_t::reg64_t &reg_base, size_t src_offset,
+        jit_brgemm_amx_uker_base_t::reg64_t &reg_base, dim_t src_offset,
         jit_brgemm_amx_uker_base_t::reg64_t &reg_src_stride,
         bool use_memadvice) {
+    const int max_tiles = amx::get_max_palette_size();
+    JIT_ASSERT(t1.getIdx() >= 0 && t1.getIdx() < max_tiles);
     const auto num_rows = palette_.rows[t1.getIdx()];
     const auto num_col_bytes = palette_.cols[t1.getIdx()];
 
@@ -2412,8 +2441,10 @@ void jit_brgemm_amx_uker_base_t::rdb_loop(brgemm_iteration_t &bi) {
 void jit_brgemm_amx_uker_base_t::bs_loop_body(brgemm_iteration_t &bi) {
     if (brg.brgattr.var_bs) {
         set_A_B_matrices();
+        reg_aux1_batch.restore();
         add(reg_aux1_batch, sizeof(brgemm_batch_element_t));
         prefetcht0(ptr[reg_aux1_batch]);
+        reg_aux1_batch.save();
     } else {
         set_A_B_matrices(bi.bsi->pos);
     }
@@ -2467,6 +2498,7 @@ void jit_brgemm_amx_uker_base_t::bs_loop(brgemm_iteration_t &bi) {
             jz(end_BS_loop_label, T_NEAR);
 
             mov(reg_aux1_batch, reg_addr_batch);
+            reg_aux1_batch.save();
             // first bs iteration
             cmp(reg_BS_loop, 1);
             jg(first_BS_loop_label, T_NEAR);
@@ -2583,7 +2615,7 @@ void jit_brgemm_amx_uker_base_t::bdb_loop_body(brgemm_iteration_t &bi) {
     else
         assert(!"Unknown loop order!");
     if (ununroll_bd_loop) { jmp(reg_iter_label); }
-};
+}
 
 void jit_brgemm_amx_uker_base_t::bdb_loop(brgemm_iteration_t &bi) {
     const auto &tloop = imap_[bi.apply_postops];
@@ -2696,7 +2728,7 @@ void jit_brgemm_amx_uker_base_t::fill_imap() {
                 const auto bdm_sz = bdi.rel_pos(lidx) + bdi.blocks[lidx].block;
                 bdi.bd_mask.resize(bdm_sz);
                 bdi.adj_bd_mask.resize(bdm_sz);
-                for (size_t i = 0; i < bdm_sz; i++) {
+                for (dim_t i = 0; i < bdm_sz; i++) {
                     bdi.bd_mask[i] = bd_mask_buffer_ptr_[bdi.pos(0) + i];
                     bdi.adj_bd_mask[i] = adj_bd_mask_buffer_[bdi.pos(0) + i];
                 }
@@ -2771,7 +2803,7 @@ void jit_brgemm_amx_uker_base_t::fill_imap() {
                 rdi_prefetch.blocks.emplace_back(rdi_pos, brg.rdb_tail, true);
             }
             rdi.idx = tloop.rdis.size();
-            tloop.rdis.push_back(rdi);
+            tloop.rdis.push_back(std::move(rdi));
         }
 
         // The case where bs_max is > 1, and prefetches are enabled
@@ -2951,30 +2983,31 @@ void jit_brgemm_amx_uker_base_t::generate() {
     mov(reg_mask, tail_mask);
     kmovq(ld_tail_mask, reg_mask);
 
-    LDA_size_ = brg.typesize_A * brg.LDA;
-    LDB_size_ = brg.typesize_B * brg.LDB;
-    LDC_size_ = brg.typesize_C * brg.LDC;
-    LDD_size_ = brg.typesize_D * brg.LDD;
+    LDA_size_ = static_cast<dim_t>(brg.typesize_A) * brg.LDA;
+    LDB_size_ = static_cast<dim_t>(brg.typesize_B) * brg.LDB;
+    LDC_size_ = static_cast<dim_t>(brg.typesize_C) * brg.LDC;
+    LDD_size_ = static_cast<dim_t>(brg.typesize_D) * brg.LDD;
 
-    LDA2_size_ = brg.typesize_A * brg.LDA2;
-    LDB2_size_ = brg.typesize_B * brg.LDB2;
-    LDC2_size_M_ = brg.typesize_C * brg.LDC2_M;
-    LDC2_size_N_ = brg.typesize_C * brg.LDC2_N;
+    LDA2_size_ = static_cast<dim_t>(brg.typesize_A) * brg.LDA2;
+    LDB2_size_ = static_cast<dim_t>(brg.typesize_B) * brg.LDB2;
+    LDC2_size_M_ = static_cast<dim_t>(brg.typesize_C) * brg.LDC2_M;
+    LDC2_size_N_ = static_cast<dim_t>(brg.typesize_C) * brg.LDC2_N;
 
-    ld_block_B_size_ = brg.typesize_B
+    ld_block_B_size_ = static_cast<dim_t>(brg.typesize_B)
             * ((brg.brgattr.LDB2 != 0) ? brg.brgattr.LDB2 : brg.ld_block);
-    ld_block_C_size_ = brg.typesize_C * brg.ld_block;
-    ld_block_D_size_ = brg.typesize_D * brg.ld_block;
-    ld_block_bias_size_ = brg.typesize_bias * brg.ld_block;
+    ld_block_C_size_ = static_cast<dim_t>(brg.typesize_C) * brg.ld_block;
+    ld_block_D_size_ = static_cast<dim_t>(brg.typesize_D) * brg.ld_block;
+    ld_block_bias_size_ = static_cast<dim_t>(brg.typesize_bias) * brg.ld_block;
     if (brg.with_wei_scales) {
         ld_block_scales_size_
-                = types::data_type_size(brg.dt_wei_scales) * brg.ld_block;
+                = static_cast<dim_t>(types::data_type_size(brg.dt_wei_scales))
+                * brg.ld_block;
     }
-    ld_block_zp_size_ = sizeof(int32_t) * brg.ld_block;
-    ldb_tail_B_size_ = brg.typesize_B * brg.ldb_tail;
-    ldb_tail_C_size_ = brg.typesize_C * brg.ldb_tail;
-    ldb_tail_D_size_ = brg.typesize_D * brg.ldb_tail;
-    ldb_tail_zp_size_ = sizeof(int32_t) * brg.ldb_tail;
+    ld_block_zp_size_ = static_cast<dim_t>(sizeof(int32_t)) * brg.ld_block;
+    ldb_tail_B_size_ = static_cast<dim_t>(brg.typesize_B) * brg.ldb_tail;
+    ldb_tail_C_size_ = static_cast<dim_t>(brg.typesize_C) * brg.ldb_tail;
+    ldb_tail_D_size_ = static_cast<dim_t>(brg.typesize_D) * brg.ldb_tail;
+    ldb_tail_zp_size_ = static_cast<dim_t>(sizeof(int32_t)) * brg.ldb_tail;
 
     // if beta == 1 and C datatype is f32 it is better to perform addition by
     // reading tiles directly from C instead of by reading/writing by vectors

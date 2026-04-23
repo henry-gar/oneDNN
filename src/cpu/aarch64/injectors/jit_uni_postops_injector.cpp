@@ -1,7 +1,7 @@
 /*******************************************************************************
-* Copyright 2020-2023 Intel Corporation
+* Copyright 2020 Intel Corporation
 * Copyright 2022-2023 FUJITSU LIMITED
-* Copyright 2025 Arm Ltd. and affiliates
+* Copyright 2025-2026 Arm Ltd. and affiliates
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -66,7 +66,7 @@ jit_uni_postops_injector_t<isa>::jit_uni_postops_injector_t(
         if (post_op.is_eltwise()) {
             is_eltwise = true;
             alg_to_eltwise_injector_.emplace(i,
-                    jit_uni_eltwise_injector_f32_t<to_vla_sve(isa)>(host_,
+                    jit_uni_eltwise_injector_t<to_vla_sve(isa)>(host_,
                             post_op.eltwise, esp.save_state, esp.x_table,
                             esp.p_mask, esp.p_tmp0, esp.is_fwd, esp.use_dst));
         } else if (post_op.is_binary()) {
@@ -93,7 +93,7 @@ jit_uni_postops_injector_t<isa>::jit_uni_postops_injector_t(
         jit_generator_t *host, const post_ops_t &post_ops,
         const binary_injector::static_params_t &binary_static_params)
     : jit_uni_postops_injector_t(host, post_ops, binary_static_params,
-            eltwise_injector::static_params_t(), lambda_jit_injectors_t()) {}
+              eltwise_injector::static_params_t(), lambda_jit_injectors_t()) {}
 
 template <cpu_isa_t isa>
 jit_uni_postops_injector_t<isa>::jit_uni_postops_injector_t(
@@ -101,7 +101,7 @@ jit_uni_postops_injector_t<isa>::jit_uni_postops_injector_t(
         const binary_injector::static_params_t &binary_static_params,
         const lambda_jit_injectors_t &lambda_jit_injectors)
     : jit_uni_postops_injector_t(host, post_ops, binary_static_params,
-            eltwise_injector::static_params_t(), lambda_jit_injectors) {}
+              eltwise_injector::static_params_t(), lambda_jit_injectors) {}
 
 template <cpu_isa_t isa>
 jit_uni_postops_injector_t<isa>::jit_uni_postops_injector_t(
@@ -109,7 +109,7 @@ jit_uni_postops_injector_t<isa>::jit_uni_postops_injector_t(
         const binary_injector::static_params_t &binary_static_params,
         const eltwise_injector::static_params_t &eltwise_static_params)
     : jit_uni_postops_injector_t(host, post_ops, binary_static_params,
-            eltwise_static_params, lambda_jit_injectors_t()) {}
+              eltwise_static_params, lambda_jit_injectors_t()) {}
 
 template <cpu_isa_t isa>
 void jit_uni_postops_injector_t<isa>::compute_vector_range(size_t start_idx,
@@ -257,9 +257,7 @@ bool post_ops_ok(const post_ops_ok_args_t &post_ops_ok_args) {
     return true;
 }
 
-template class jit_uni_postops_injector_t<sve_512>;
-template class jit_uni_postops_injector_t<sve_256>;
-template class jit_uni_postops_injector_t<sve_128>;
+template class jit_uni_postops_injector_t<sve>;
 
 } // namespace injector
 } // namespace aarch64

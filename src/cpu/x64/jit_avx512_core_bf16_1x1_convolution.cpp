@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -75,12 +75,12 @@ void jit_avx512_core_bf16_1x1_convolution_fwd_t<dst_type>::execute_forward(
             const dw_wei_data_t *, DNNL_ARG_ATTR_POST_OP_DW | DNNL_ARG_WEIGHTS);
     const auto post_ops_binary_rhs_arg_vec
             = binary_injector::prepare_binary_args(pd()->jcp_.post_ops, ctx);
-    const auto post_ops_binary_rhs_arg_vec_dw = pd()->jcp_dw_ != nullptr
+    const auto &post_ops_binary_rhs_arg_vec_dw = pd()->jcp_dw_ != nullptr
             ? binary_injector::prepare_binary_args(pd()->jcp_dw_->post_ops, ctx,
-                    pd()->jcp_.post_ops.entry_.size() + 1)
+                      pd()->jcp_.post_ops.entry_.size() + 1)
             : std::vector<const void *> {};
 
-    auto scratchpad = ctx.get_scratchpad_grantor();
+    const auto &scratchpad = ctx.get_scratchpad_grantor();
 
     const auto &jcp = kernel_->jcp;
     if (pd()->wants_padded_bias()) {
@@ -112,7 +112,7 @@ void jit_avx512_core_bf16_1x1_convolution_fwd_t<dst_type>::execute_forward(
         bias_dw = const_cast<float *>(bias_in);
     }
 
-    parallel(jcp.nthr, [&](const int ithr, const int nthr) {
+    parallel(jcp.nthr, [= COMPAT_THIS_CAPTURE](const int ithr, const int nthr) {
         execute_forward_thr(ithr, nthr, src, weights, bias, weights_dw, bias_dw,
                 dst, scratchpad, post_ops_binary_rhs_arg_vec.data(),
                 post_ops_binary_rhs_arg_vec_dw.data());
@@ -186,9 +186,9 @@ void jit_avx512_core_bf16_1x1_convolution_fwd_t<dst_type>::execute_forward_thr(
         return remaining < tail_step ? remaining : default_step;
     };
 
-    auto init_bcast = [&](int iwork, int bcast_end, int &n, int &g,
-                              int &bcast_step, int &od, int &oh, int &ow,
-                              int &id, int &ih, int &iw) {
+    auto init_bcast
+            = [&](int iwork, int bcast_end, int &n, int &g, int &bcast_step,
+                      int &od, int &oh, int &ow, int &id, int &ih, int &iw) {
         int osb {0};
         nd_iterator_init(iwork, n, jcp.mb, g, jcp.ngroups, osb, nb_bcast);
         bcast_step = step(
@@ -278,8 +278,8 @@ void jit_avx512_core_bf16_1x1_convolution_fwd_t<dst_type>::execute_forward_thr(
         (*kernel_)(&p);
     };
 
-    auto conv_1x1 = [&](int bcast_start, int bcast_end, int ocb_start,
-                            int ocb_end) {
+    auto conv_1x1
+            = [&](int bcast_start, int bcast_end, int ocb_start, int ocb_end) {
         if (bcast_start >= bcast_end || ocb_start >= ocb_end) return;
         if (jcp.loop_order == loop_lbr) {
             int ocb = ocb_start;
@@ -464,9 +464,9 @@ void jit_avx512_core_bf16_1x1_convolution_bwd_data_t<
     auto diff_dst = CTX_IN_MEM(const diff_dst_data_t *, DNNL_ARG_DIFF_DST);
     auto weights = CTX_IN_MEM(const wei_data_t *, DNNL_ARG_WEIGHTS);
     auto diff_src = CTX_OUT_MEM(diff_src_data_t *, DNNL_ARG_DIFF_SRC);
-    auto scratchpad = ctx.get_scratchpad_grantor();
+    const auto &scratchpad = ctx.get_scratchpad_grantor();
     const auto &jcp = kernel_->jcp;
-    parallel(jcp.nthr, [&](const int ithr, const int nthr) {
+    parallel(jcp.nthr, [= COMPAT_THIS_CAPTURE](const int ithr, const int nthr) {
         assert(nthr == jcp.nthr);
         execute_backward_data_thr(
                 ithr, nthr, diff_dst, weights, diff_src, scratchpad);
@@ -676,7 +676,7 @@ void jit_avx512_core_bf16_1x1_convolution_bwd_weights_t<diff_weights_type>::
     auto src = CTX_IN_MEM(const src_data_t *, DNNL_ARG_SRC);
     auto diff_weights = CTX_OUT_MEM(diff_wei_data_t *, DNNL_ARG_DIFF_WEIGHTS);
 
-    auto scratchpad = ctx.get_scratchpad_grantor();
+    const auto &scratchpad = ctx.get_scratchpad_grantor();
     const auto &jcp = pd()->jcp_;
 
     float *diff_bias = nullptr;
@@ -734,8 +734,9 @@ void jit_avx512_core_bf16_1x1_convolution_bwd_weights_t<diff_weights_type>::
     const bool is_ddst_layout_nxc = utils::one_of(
             jcp.dst_tag, format_tag::nwc, format_tag::nhwc, format_tag::ndhwc);
 
-    auto maybe_zero_icpad = [&](const int g_start, const int g_end,
-                                    const int ocb_start, const int ocb_end) {
+    auto maybe_zero_icpad
+            = [= COMPAT_THIS_CAPTURE](const int g_start, const int g_end,
+                      const int ocb_start, const int ocb_end) {
         // write zeros to IC padded region.
         const int ic_tail = jcp.ic_without_padding % jcp.ic_block;
         if (ic_tail != 0) {
@@ -756,7 +757,7 @@ void jit_avx512_core_bf16_1x1_convolution_bwd_weights_t<diff_weights_type>::
         }
     };
 
-    auto ker = [&](const int ithr, const int nthr) {
+    auto ker = [= COMPAT_THIS_CAPTURE](const int ithr, const int nthr) {
         assert(nthr == jcp.nthr);
 
         const int ithr_ic_b = ithr % jcp.nthr_ic_b;
@@ -962,8 +963,8 @@ void jit_avx512_core_bf16_1x1_convolution_bwd_weights_t<diff_weights_type>::
 
                         p.bias_data = diff_bia
                                 ? &diff_bia[oc_off_idx
-                                        * (is_ddst_layout_nxc ? 1
-                                                              : jcp.oc_block)]
+                                          * (is_ddst_layout_nxc ? 1
+                                                                : jcp.oc_block)]
                                 : nullptr;
                         (*kernel_)(&p);
                     }
@@ -972,8 +973,8 @@ void jit_avx512_core_bf16_1x1_convolution_bwd_weights_t<diff_weights_type>::
         }
     };
 
-    auto ker_reduce_and_convert_diff_wei_bia = [&](const int ithr,
-                                                       const int nthr) {
+    auto ker_reduce_and_convert_diff_wei_bia
+            = [= COMPAT_THIS_CAPTURE](const int ithr, const int nthr) {
         assert(nthr == jcp.nthr);
 
         const int ithr_ic_b = ithr % jcp.nthr_ic_b;
@@ -1121,7 +1122,7 @@ void jit_avx512_core_bf16_1x1_convolution_bwd_weights_t<diff_weights_type>::
         }
     };
 
-    parallel(jcp.nthr, [&](const int ithr, const int nthr) {
+    parallel(jcp.nthr, [=](const int ithr, const int nthr) {
         assert(nthr == jcp.nthr);
         ker(ithr, jcp.nthr);
         if (dnnl_thr_syncable())
@@ -1129,17 +1130,19 @@ void jit_avx512_core_bf16_1x1_convolution_bwd_weights_t<diff_weights_type>::
     });
 
     if (!dnnl_thr_syncable()) {
-        parallel(jcp.nthr, [&](const int ithr, const int nthr) {
+        parallel(jcp.nthr, [=](const int ithr, const int nthr) {
             assert(nthr == jcp.nthr);
             ker_reduce_and_convert_diff_wei_bia(ithr, jcp.nthr);
         });
     }
 
-    if (pd()->jcp_.bia_dt == data_type::f32
-            && jcp.oc_without_padding % jcp.oc_block) {
-        auto diff_bias_in = CTX_OUT_MEM(float *, DNNL_ARG_DIFF_BIAS);
-        utils::array_copy(diff_bias_in, diff_bias, jcp.oc_without_padding);
-    }
+    parallel(1, [= COMPAT_THIS_CAPTURE](const int ithr, const int nthr) {
+        if (pd()->jcp_.bia_dt == data_type::f32
+                && jcp.oc_without_padding % jcp.oc_block) {
+            auto diff_bias_in = CTX_OUT_MEM(float *, DNNL_ARG_DIFF_BIAS);
+            utils::array_copy(diff_bias_in, diff_bias, jcp.oc_without_padding);
+        }
+    });
 }
 
 REG_AVX512_ISA(

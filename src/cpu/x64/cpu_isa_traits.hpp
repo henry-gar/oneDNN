@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2018-2025 Intel Corporation
+* Copyright 2018 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -44,6 +44,15 @@
 
 #if defined(NDEBUG) && !defined(XBYAK_NO_EXCEPTION)
 #define XBYAK_NO_EXCEPTION
+#endif
+
+// Several JIT kernels intentionally or unintentionally use size-mismatched memory operands
+// (e.g. zword[]-annotated addresses with 64-bit GPR instructions, or dword[] fields loaded into
+// Reg64 registers). These are architecturally correct on x86-64 but trigger this check. Until all
+// call sites are updated to use properly-sized operands or stripped annotations, set this to 0 to
+// suppress the false-positive errors.
+#if !defined(XBYAK_STRICT_CHECK_MEM_REG_SIZE)
+#define XBYAK_STRICT_CHECK_MEM_REG_SIZE 0
 #endif
 
 #if defined(_MSC_VER) && !defined(__INTEL_COMPILER)
@@ -94,10 +103,10 @@ enum cpu_isa_bit_t : unsigned {
     avx10_version_bits
     = ((1 << (avx10_version_bit_end - avx10_version_bit_start + 1)) - 1)
             << avx10_version_bit_start,
-    avx10 = avx2_bit | vex_vnni_bit | evex_core_bit | evex_core_vnni_bit
+    avx10_bit = avx2_bit | vex_vnni_bit | evex_core_bit | evex_core_vnni_bit
             | evex_core_bf16_bit | evex_core_fp16_bit,
-    avx10_1 = (1 << avx10_version_bit_start) | avx10,
-    avx10_2 = (2 << avx10_version_bit_start) | avx10 | vex_vnni_2_bit,
+    avx10_1_bit = (1 << avx10_version_bit_start) | avx10_bit,
+    avx10_2_bit = (2 << avx10_version_bit_start) | avx10_bit | vex_vnni_2_bit,
 };
 
 dnnl_cpu_isa_hints_t DNNL_API get_cpu_isa_hints(bool soft = false);
@@ -115,7 +124,7 @@ inline unsigned cvt2mask(dnnl_cpu_isa_hints_t hints) {
     }
     assert(!"Unexpected CPU ISA hint");
     return 0;
-};
+}
 
 inline bool is_hints_bit_set(cpu_isa_bit_t hint_bit, bool soft) {
     const dnnl_cpu_isa_hints_t hints = get_cpu_isa_hints(soft);
@@ -139,19 +148,19 @@ enum cpu_isa_t : unsigned {
     amx_int8 = amx_int8_bit | amx_tile,
     amx_bf16 = amx_bf16_bit | amx_tile,
     amx_fp16 = amx_fp16_bit | amx_tile,
-    avx10_1_512 = avx10_1 | zmm_bit | ymm_bit | xmm_bit,
+    avx10_1_512 = avx10_1_bit | zmm_bit | ymm_bit | xmm_bit,
     avx512_core_fp16 = avx10_1_512,
     avx10_1_512_amx = avx10_1_512 | amx_int8 | amx_bf16,
     avx512_core_amx = avx10_1_512_amx,
     avx10_1_512_amx_fp16 = avx10_1_512_amx | amx_fp16,
     avx512_core_amx_fp16 = avx10_1_512_amx_fp16,
-    avx10_2_512 = avx10_2 | xmm_bit | ymm_bit | zmm_bit,
-    avx10_2_512_amx_2
-    = avx10_2_512 | amx_tile | amx_int8 | amx_bf16 | amx_fp16 | amx_2_bit,
+    avx10_2 = avx10_2_bit | xmm_bit | ymm_bit | zmm_bit,
+    avx10_2_512 = avx10_2,
+    avx10_2_amx_2
+    = avx10_2 | amx_tile | amx_int8 | amx_bf16 | amx_fp16 | amx_2_bit,
+    avx10_2_512_amx_2 = avx10_2_amx_2,
     // NOTES: 1. isa_all by default has no isa specific hints
-    isa_all = ~0u & ~cpu_isa_hints_utils::hints_mask
-            & (~avx10_version_bits | (1 << avx10_version_bit_start))
-            & ~amx_2_bit,
+    isa_all = ~0u & ~cpu_isa_hints_utils::hints_mask,
 };
 
 std::string isa2str(cpu_isa_t isa);
@@ -249,11 +258,12 @@ struct cpu_isa_traits_t {}; /* ::vlen -> 32 (for avx2) */
 // pack struct so it can fit into a single 64-byte cache line
 #pragma pack(push, 1)
 struct palette_config_t {
+    static constexpr int max_size = 16;
     uint8_t palette_id;
     uint8_t startRow;
     uint8_t reserved[14];
-    uint16_t cols[16];
-    uint8_t rows[16];
+    uint16_t cols[max_size];
+    uint8_t rows[max_size];
 };
 #pragma pack(pop)
 
@@ -351,23 +361,34 @@ struct cpu_isa_traits_t<avx10_1_512_amx_fp16> {
 };
 
 template <>
-struct cpu_isa_traits_t<avx10_2_512> : public cpu_isa_traits_t<avx512_core> {
-    static constexpr dnnl_cpu_isa_t user_option_val = dnnl_cpu_isa_avx10_2_512;
-    static constexpr const char *user_option_env = "avx10_2_512";
+struct cpu_isa_traits_t<avx10_2> : public cpu_isa_traits_t<avx512_core> {
+    static constexpr dnnl_cpu_isa_t user_option_val = dnnl_cpu_isa_avx10_2;
+    static constexpr const char *user_option_env = "avx10_2";
 };
 
 template <>
-struct cpu_isa_traits_t<avx10_2_512_amx_2>
-    : public cpu_isa_traits_t<avx10_2_512> {
+struct cpu_isa_traits_t<avx10_2_amx_2> : public cpu_isa_traits_t<avx10_2> {
     static constexpr dnnl_cpu_isa_t user_option_val
-            = dnnl_cpu_isa_avx10_2_512_amx_2;
-    static constexpr const char *user_option_env = "avx10_2_512_amx_2";
+            = dnnl_cpu_isa_avx10_2_amx_2;
+    static constexpr const char *user_option_env = "avx10_2_amx_2";
 };
 
 inline const Xbyak::util::Cpu &cpu() {
     const static Xbyak::util::Cpu cpu_;
     return cpu_;
 }
+
+namespace apx {
+
+inline bool is_available() {
+    const bool xsave_supported = cpu().has(Xbyak::util::Cpu::tOSXSAVE);
+    if (!xsave_supported) return false;
+
+    const uint64_t xcr0_features = Xbyak::util::Cpu::getXfeature();
+    return ((xcr0_features >> 19) & 1) == 1;
+}
+
+} // namespace apx
 
 namespace amx {
 
@@ -379,6 +400,13 @@ int get_max_tiles(int palette);
 int get_max_column_bytes(int palette);
 int get_max_rows(int palette);
 bool DNNL_API is_available();
+
+// Helper function to get the maximum safe palette size for bounds checking
+inline int get_max_palette_size() {
+    const int max_tiles = get_max_tiles(get_target_palette());
+    constexpr int max_palette_size = palette_config_t::max_size;
+    return nstl::min(max_tiles, max_palette_size);
+}
 
 } // namespace amx
 
@@ -430,10 +458,11 @@ inline bool mayiuse(const cpu_isa_t cpu_isa, bool soft = false) {
             REG_AVX512_ISA(return cpu().has(Cpu::tAVX512_FP16)
                     && mayiuse(avx512_core_bf16, soft)
                     && mayiuse(avx2_vnni, soft));
-        case avx10_2_512:
+        case avx10_2:
             REG_AVX512_ISA(return cpu().getAVX10version() >= 2
                     && cpu().has(Cpu::tAVX512F) && mayiuse(avx2_vnni_2, soft)
-                    && cpu().has(Cpu::tAPX_F) && cpu().has(Cpu::tMOVRS));
+                    && cpu().has(Cpu::tAPX_F) && cpu().has(Cpu::tMOVRS)
+                    && x64::apx::is_available());
         case amx_tile:
             REG_AMX_ISA(return cpu().has(Cpu::tAMX_TILE)
                     && x64::amx::is_available());
@@ -453,9 +482,8 @@ inline bool mayiuse(const cpu_isa_t cpu_isa, bool soft = false) {
         case avx512_core_amx_fp16:
             REG_AMX_ISA(return mayiuse(avx512_core_amx, soft)
                     && mayiuse(amx_fp16, soft));
-        case avx10_2_512_amx_2:
-            REG_AMX_ISA(return mayiuse(avx10_2_512, soft)
-                    && mayiuse(amx_tile, soft) && cpu().has(Cpu::tAMX_TRANSPOSE)
+        case avx10_2_amx_2:
+            REG_AMX_ISA(return mayiuse(avx10_2, soft) && mayiuse(amx_tile, soft)
                     && cpu().has(Cpu::tAMX_TF32) && cpu().has(Cpu::tAMX_AVX512)
                     && cpu().has(Cpu::tAMX_MOVRS) && cpu().has(Cpu::tAMX_FP8));
         case isa_all: return false;
@@ -469,12 +497,17 @@ inline bool isa_has_int8_vnni(cpu_isa_t isa) {
 }
 
 inline bool isa_has_s8s8(cpu_isa_t isa) {
-    return is_superset(isa, avx2_vnni_2) || is_superset(isa, avx10_2_512)
+    return is_superset(isa, avx2_vnni_2) || is_superset(isa, avx10_2)
             || is_superset(isa, amx_int8);
 }
 
 inline bool isa_has_bf16(cpu_isa_t isa) {
     return is_superset(isa, avx512_core_bf16);
+}
+
+inline bool isa_has_f16(cpu_isa_t isa) {
+    return is_superset(isa, avx512_core_fp16)
+            || is_superset(isa, avx10_1_512_amx_fp16);
 }
 
 inline bool isa_has_masks(cpu_isa_t isa) {
@@ -484,7 +517,7 @@ inline bool isa_has_masks(cpu_isa_t isa) {
 // Check if the ISA has saturating conversion support
 inline bool isa_has_sat_cvt(cpu_isa_t isa, data_type_t dt) {
     return utils::one_of(dt, data_type::u8, data_type::s8)
-            && is_superset(isa, avx10_2_512);
+            && is_superset(isa, avx10_2);
 }
 
 inline int isa_max_vlen(cpu_isa_t isa) {
@@ -537,8 +570,8 @@ inline int isa_num_vregs(cpu_isa_t isa) {
     (isa) == avx10_1_512 ? prefix STRINGIFY(avx10_1_512) : \
     (isa) == avx10_1_512_amx ? prefix STRINGIFY(avx10_1_512_amx) : \
     (isa) == avx10_1_512_amx_fp16 ? prefix STRINGIFY(avx10_1_512_amx_fp16) : \
-    (isa) == avx10_2_512 ? prefix STRINGIFY(avx10_2_512) : \
-    (isa) == avx10_2_512_amx_2 ? prefix STRINGIFY(avx10_2_512_amx_2) : \
+    (isa) == avx10_2 ? prefix STRINGIFY(avx10_2) : \
+    (isa) == avx10_2_amx_2 ? prefix STRINGIFY(avx10_2_amx_2) : \
     prefix suffix_if_any)
 /* clang-format on */
 
@@ -577,25 +610,6 @@ inline size_t data_type_vnni_granularity(const data_type_t data_type) {
         default: assert(!"unknown data_type");
     }
     return size_t(0); /* should not be reachable */
-}
-
-inline size_t data_type_vnni_simd_elems(data_type_t data_type, cpu_isa_t isa) {
-    const size_t dt_size = types::data_type_size(data_type);
-    assert(dt_size > 0);
-    if (isa == avx2_vnni_2
-            && utils::one_of(data_type, data_type::f16, data_type::bf16))
-        // for xf16 avx2_vnni_2, we use same blocking as avx512_core_bf16 due
-        // to use of even-odd pair of cvt instructions.
-        return data_type_vnni_simd_elems(data_type::bf16, avx512_core_bf16);
-
-    // Note: Currently, int8 matmul has avx512_core hardcoded.
-    // TODO: Investigate and remove if possible.
-    if (data_type == data_type::s8 && isa != avx512_core)
-        return data_type_vnni_simd_elems(data_type, avx512_core);
-
-    size_t vlen = isa_max_vlen(isa);
-    assert(vlen >= dt_size);
-    return vlen / dt_size;
 }
 
 } // namespace x64

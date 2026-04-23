@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2024-2025 Intel Corporation
+* Copyright 2024 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -17,8 +17,12 @@
 /// @example sycl_single_op_partition.cpp
 /// > Annotated version: @ref graph_sycl_single_op_partition_cpp
 
+/// @page graph_sycl_single_op_partition_cpp_brief
+/// @brief This is an example to demonstrate how to build a simple op graph and run it
+/// on GPU.
+
 /// @page graph_sycl_single_op_partition_cpp Single op partition on GPU
-/// This is an example to demonstrate how to build a simple op graph and run it on gpu.
+/// \copybrief graph_sycl_single_op_partition_cpp_brief
 ///
 /// > Example code: @ref sycl_single_op_partition.cpp
 ///

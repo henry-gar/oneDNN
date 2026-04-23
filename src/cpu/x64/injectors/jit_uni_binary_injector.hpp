@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -62,6 +62,15 @@ bool all_binary_postop_rhs_per_oc_broadcast(const post_ops_t &post_ops,
         const memory_desc_wrapper &dst_d,
         const bcast_set_t &supported_strategy_set,
         const std::function<bool(const memory_desc_wrapper &)> &predicate);
+
+bool any_binary_postop_rhs_per_w_broadcast(const post_ops_t &post_ops,
+        const memory_desc_wrapper &dst_d,
+        const bcast_set_t &supported_strategy_set);
+
+void extend_binary_args_per_w(const post_ops_t &post_ops,
+        const std::vector<const void *> &orig_post_ops_binary_rhs_arg_vec,
+        std::vector<const void *> &post_ops_binary_rhs_arg_vec,
+        uint8_t *expanded_rhs, const std::vector<dim_t> &expanded_elems_len);
 
 /*
  * Represents params related to all binary post-ops right-hand side arguments
@@ -390,12 +399,20 @@ private:
             const std::map<int, size_t> &vmm_idx_to_out_elem_off_val,
             int vmm_idx, const Xbyak::Reg64 &addr_reg,
             const Xbyak::Reg64 &tmp_reg, std::size_t elem_size_bytes,
-            bool is_first) const;
+            bool is_first, const memory_desc_wrapper &rhs_d) const;
     void calculate_mb_sp_ncsp_base(
             const dim_t *strides, const Xbyak::Reg64 &tmp_reg) const;
     void calculate_mb_sp_ncsp_partial(const dim_t *strides,
             const std::size_t offset, const Xbyak::Reg64 &tmp_reg,
             std::size_t elem_size_bytes) const;
+    void calculate_mb_sp_ncsp_base_rhs_strided(const memory_desc_wrapper &dst_d,
+            const memory_desc_wrapper &rhs_d, const dim_t *dst_strides,
+            const Xbyak::Reg64 &addr_reg, const Xbyak::Reg64 &tmp_reg,
+            std::size_t elem_size_bytes) const;
+    void calculate_mb_sp_ncsp_partial_rhs_strided(
+            const memory_desc_wrapper &dst_d, const memory_desc_wrapper &rhs_d,
+            std::size_t dst_offset_bytes, const Xbyak::Reg64 &addr_reg,
+            const Xbyak::Reg64 &tmp_reg, std::size_t elem_size_bytes) const;
     void calculate_mb_sp_blocked_base(
             const dim_t *strides, const Xbyak::Reg64 &tmp_reg) const;
     void calculate_mb_sp_blocked_partial(const dim_t *strides,

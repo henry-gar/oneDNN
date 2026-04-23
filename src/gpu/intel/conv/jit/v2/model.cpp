@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -29,12 +29,12 @@ namespace jit {
 namespace v2 {
 
 struct hw_config_t {
-    hw_t hw;
+    dsl::hw_t hw;
     fma_kind_t fma = fma_kind_t::undef;
     int regs = 0;
 
     hw_config_t() = default;
-    hw_config_t(const hw_t &hw, fma_kind_t fma)
+    hw_config_t(const dsl::hw_t &hw, fma_kind_t fma)
         : hw(hw)
         , fma(fma)
         , regs(utils::one_of(fma, fma_kind_t::dpas, fma_kind_t::dpasw) ? 256

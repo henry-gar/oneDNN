@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2024-2025 Intel Corporation
+* Copyright 2024 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -42,8 +42,6 @@ status_t sdp_primitive_config_t::initial_check(
     // At least 3 inputs: Q, K, V
     VCHECK_SDP_PRIMITIVE(inputs.size() >= 3, status::invalid_arguments,
             "At least 3 inputs are required");
-    VCHECK_SDP_PRIMITIVE(outputs.size() == 1, status::unimplemented,
-            "does not support multiple outputs");
 
     const bool is_f32 = inputs[0].data_type == data_type::f32;
     bool has_genindex = false;
@@ -58,10 +56,6 @@ status_t sdp_primitive_config_t::initial_check(
                         && opk != graph::op_kind::Quantize,
                 status::unimplemented, "Not support quantized SDPA");
         if (opk == graph::op_kind::GenIndex) { has_genindex = true; }
-    }
-    if (is_f32 && !has_genindex) {
-        VCHECK_SDP_PRIMITIVE(false, status::unimplemented,
-                "only implicit causal mask for f32 sdpa");
     }
 
     // step1(pattern check): Not support sdpa variants with select as mask
@@ -85,8 +79,7 @@ status_t sdp_primitive_config_t::initial_check(
             is_compressed_ = true;
             const auto &group_shape = cur_op->get_attr<std::vector<int64_t>>(
                     op_attr::group_shape);
-            const auto &input_lt
-                    = cur_op->get_input_value(0)->get_logical_tensor();
+            const auto &input_lt = cur_op->get_input_logical_tensor(0);
             if (static_cast<int>(group_shape.size()) != ltw(input_lt).ndims())
                 return status::invalid_arguments;
             // TODO(zhitao): execute the reorder for scale and zps mannually if the
@@ -101,8 +94,7 @@ status_t sdp_primitive_config_t::initial_check(
         auto post_op = get_post_op(cur_op);
         if (post_op && mm1_post_op_kind.count(post_op->get_kind())) {
             mm1 = cur_op;
-            const auto &lt_score
-                    = mm1->get_output_value(0)->get_logical_tensor();
+            const auto &lt_score = mm1->get_output_logical_tensor(0);
             f32_inter = f32_inter
                     && (ltw(lt_score).data_type() == data_type::f32);
             // Not support select between mm1 and scale(optional)
@@ -116,8 +108,7 @@ status_t sdp_primitive_config_t::initial_check(
                 // Scale exists, update post_op and traverse to next op
                 scale = post_op;
                 post_op = get_post_op(post_op);
-                const auto &lt_ss
-                        = scale->get_output_value(0)->get_logical_tensor();
+                const auto &lt_ss = scale->get_output_logical_tensor(0);
                 f32_inter = f32_inter
                         && (ltw(lt_ss).data_type() == data_type::f32);
             }
@@ -126,8 +117,7 @@ status_t sdp_primitive_config_t::initial_check(
                 if (post_op->get_kind() == graph::op_kind::Add) {
                     // Mask exists, update post_op and traverse to next op
                     const auto mask = post_op;
-                    const auto &lt_ms
-                            = mask->get_output_value(0)->get_logical_tensor();
+                    const auto &lt_ms = mask->get_output_logical_tensor(0);
                     f32_inter = f32_inter
                             && (ltw(lt_ms).data_type() == data_type::f32);
                     post_op = get_post_op(post_op);
@@ -173,7 +163,6 @@ status_t sdp_primitive_config_t::initial_check(
     VCHECK_SDP_PRIMITIVE(
             mm1 && mm2, status::invalid_graph, "mm1 or mm2 is not found");
 
-    // step3(dims check): only support 4-dims now.
     int q_id = find_graph_inport(mm1->get_input_value(0));
     int k_id = find_graph_inport(mm1->get_input_value(1));
     int v_id = find_graph_inport(mm2->get_input_value(1));
@@ -181,9 +170,12 @@ status_t sdp_primitive_config_t::initial_check(
     VCHECK_SDP_PRIMITIVE(q_id != -1 && k_id != -1 && v_id != -1,
             status::unimplemented, "Q, K, V are not found");
 
+    VCHECK_SDP_PRIMITIVE(!is_f32 || has_genindex, status::unimplemented,
+            "f32 fused sdpa supported for causal mask only");
+
     // sdp_primitive only supports single scale value.
     if (scale) {
-        const auto &s = scale->get_input_value(1)->get_logical_tensor();
+        const auto &s = scale->get_input_logical_tensor(1);
         VCHECK_SDP_PRIMITIVE(ltw(s).nelems() == 1, status::unimplemented,
                 "Scale should be single value");
     }

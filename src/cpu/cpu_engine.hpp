@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2016-2025 Intel Corporation
+* Copyright 2016 Intel Corporation
 * Copyright 2020-2023 Arm Ltd. and affiliates
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
@@ -49,6 +49,12 @@
     DNNL_RV64GCV_ZVFH_ONLY(CPU_INSTANCE(__VA_ARGS__))
 #define CPU_INSTANCE_PPC64(...) DNNL_PPC64_ONLY(CPU_INSTANCE(__VA_ARGS__))
 
+#if DNNL_EXPERIMENTAL_GROUPED_MEMORY
+#define CPU_INSTANCE_GROUPED(...) CPU_INSTANCE(__VA_ARGS__)
+#else
+#define CPU_INSTANCE_GROUPED(...)
+#endif
+
 namespace dnnl {
 namespace impl {
 namespace cpu {
@@ -87,7 +93,7 @@ public:
             const op_desc_t *desc) {
         static const impl_list_item_t empty_list[] = {nullptr};
 
-// clang-format off
+        // clang-format off
 #define CASE(kind) \
     case primitive_kind::kind: \
         return get_##kind##_impl_list((const kind##_desc_t *)desc);
@@ -110,6 +116,7 @@ public:
             CASE(shuffle);
             CASE(softmax);
             case primitive_kind::sdpa: return empty_list;
+            case primitive_kind::gated_mlp: return empty_list;
             default: assert(!"unknown primitive kind"); return empty_list;
         }
 #undef CASE
@@ -163,7 +170,7 @@ public:
         dnnl::impl::cpu::aarch64::acl_thread_utils::set_acl_threading();
 #endif
         return status::success;
-    };
+    }
 };
 
 engine_t *get_service_engine();

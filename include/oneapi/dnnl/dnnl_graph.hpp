@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -277,6 +277,8 @@ public:
         s4 = dnnl_s4,
         /// 4-bit unsigned integer.
         u4 = dnnl_u4,
+        /// 64-bit signed integer.
+        s64 = dnnl_s64,
     };
 
     /// Layout type
@@ -842,6 +844,7 @@ public:
         ReLUBackward = dnnl_graph_op_relu_backward,
         Reorder = dnnl_graph_op_reorder,
         Round = dnnl_graph_op_round,
+        RMSNorm = dnnl_graph_op_rms_norm,
         Select = dnnl_graph_op_select,
         Sigmoid = dnnl_graph_op_sigmoid,
         SigmoidBackward = dnnl_graph_op_sigmoid_backward,
@@ -862,6 +865,7 @@ public:
         Wildcard = dnnl_graph_op_wildcard,
         GenIndex = dnnl_graph_op_gen_index,
         GreaterEqual = dnnl_graph_op_greater_equal,
+        Dropout = dnnl_graph_op_dropout,
         // Sentinel
         LastSymbol = dnnl_graph_op_last_symbol,
     };
@@ -1636,6 +1640,51 @@ inline size_t get_constant_tensor_cache_capacity(engine::kind kind) {
 }
 
 /// @} dnnl_graph_api_constant_tensor_cache
+
+/// @addtogroup dnnl_graph_api_dump_mode Dump Mode
+///
+/// Control graph dumping behavior
+///
+/// @{
+
+/// @enum graph_dump_mode
+/// Dump mode bitmask for graph debugging utilities.
+enum class graph_dump_mode : unsigned {
+    /// Disable all graph dumps.
+    none = dnnl_graph_dump_mode_none,
+    /// Dump subgraphs extracted during partitioning.
+    subgraph = dnnl_graph_dump_mode_subgraph,
+    /// Dump the full graph prior to partitioning.
+    graph = dnnl_graph_dump_mode_graph,
+};
+
+DNNL_DEFINE_BITMASK_OPS(graph_dump_mode)
+
+/// Configures graph dump modes at runtime.
+///
+/// @note
+///     Enabling graph dump affects performance.
+///     This setting overrides the ONEDNN_GRAPH_DUMP environment variable.
+///
+/// @param modes Bitmask composed of values from #dnnl::graph::graph_dump_mode.
+///     Accepted values:
+///      - #dnnl::graph::graph_dump_mode::graph: dump the full graph prior to
+///        partitioning.
+///      - #dnnl::graph::graph_dump_mode::subgraph: dump each partitioned subgraph.
+///      - #dnnl::graph::graph_dump_mode::none: disable all graph dumping.
+///
+///     Bitmask combinations using bitwise operators are supported. For
+///     instance, `graph | subgraph` enables both modes, `none | graph`
+///     behaves like `graph`, and `none & graph` behaves like `none`.
+/// @returns #dnnl::status::invalid_arguments if the
+///     @p modes value contains unsupported bits or graph dump is disabled,
+///     and #dnnl::status::success on success.
+inline status set_dump_mode(graph_dump_mode modes) {
+    return static_cast<status>(dnnl_graph_set_dump_mode(
+            static_cast<dnnl_graph_dump_mode_t>(static_cast<unsigned>(modes))));
+}
+
+/// @} dnnl_graph_api_dump_mode
 
 } // namespace graph
 

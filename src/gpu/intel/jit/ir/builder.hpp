@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -19,7 +19,7 @@
 
 #include <array>
 
-#include "gpu/intel/jit/ir/ir.hpp"
+#include "gpu/intel/jit/ir/legacy.hpp"
 #include "gpu/intel/jit/ir/tensor.hpp"
 
 namespace dnnl {
@@ -31,15 +31,6 @@ namespace jit {
 class ir_builder_t {
 public:
     const stmt_t &stmt() const { return stmt_; }
-
-#define GENNAME(prefix) \
-    static std::string prefix(int idx) { return #prefix + std::to_string(idx); }
-    GENNAME(tg_idx)
-    GENNAME(thr_idx)
-    GENNAME(local_id)
-    GENNAME(local_size)
-    GENNAME(group_id)
-#undef GENNAME
 
 protected:
     void init_kernel_grid(const grid_info_t &kernel_grid,

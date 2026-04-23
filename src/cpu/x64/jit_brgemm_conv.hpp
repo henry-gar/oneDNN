@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2025 Intel Corporation
+* Copyright 2021 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -59,22 +59,22 @@ struct brgemm_convolution_fwd_t : public primitive_t {
 
         status_t init(engine_t *engine);
 
-        int brgs_sz_;
+        int brgs_sz_ {};
         std::shared_ptr<brgemm_containers::brgemm_desc_container_t>
                 brgemm_descriptors_;
         bool with_sum_ = false;
         jit_brgemm_conv_conf_t jcp_ = utils::zero<decltype(jcp_)>();
 
-        int ic_chunks;
-        bool need_postwork;
-        dim_t wei_g_stride, wei_ic_stride, wei_ocb_stride;
-        dim_t wei_kw_stride, wei_kh_stride, wei_kd_stride;
-        dim_t pbuf_w_sz, pbuf_h_sz, pbuf_d_sz;
+        int ic_chunks {};
+        bool need_postwork {};
+        dim_t wei_g_stride {}, wei_ic_stride {}, wei_ocb_stride {};
+        dim_t wei_kw_stride {}, wei_kh_stride {}, wei_kd_stride {};
+        dim_t pbuf_w_sz {}, pbuf_h_sz {}, pbuf_d_sz {};
         int ndims {0};
         int rd {0};
 
         // batch sizes info for unrolled kernels
-        int bs_c;
+        int bs_c {};
         // need custom hasher to use array as key in unordered_map
         template <int asize>
         struct hasher_t {
@@ -110,7 +110,7 @@ struct brgemm_convolution_fwd_t : public primitive_t {
 
         inline int maybe_invert(int k, int K) const {
             return desc()->use_inversion ? K - 1 - k : k;
-        };
+        }
 
         // This method calculates the value of k_l
         void init_batch(int icc, const char *src_base, const char *wei_base,
@@ -128,13 +128,16 @@ struct brgemm_convolution_fwd_t : public primitive_t {
                 bool do_init, int kd_b, int kd_e, int kh_b, int kh_e);
 
     protected:
-        int KD, KH, KW, EXT_KD, EXT_KH, EXT_KW, KS, KD_BLOCK, KH_BLOCK,
-                KW_BLOCK, KD_BLOCK_PAD, KH_BLOCK_PAD, ID, IH, IW, IDP, IHP, IWP,
-                OD, OH, OW, SD, SH, SW, FP, TP, LP, DD, DH, DW;
-        size_t acc_dsz, bia_dsz, src_dsz, wei_dsz, dst_dsz;
-        dim_t src_w_sz, src_h_sz, dst_w_sz, dst_h_sz, wei_ocb_sz;
-        dim_t adj_src_h_sz, adj_src_h_offset, src_iw_offset, src_d_offset,
-                wei_ic_offset, wei_kd_offset, wei_kh_offset, wei_kw_offset;
+        int KD {}, KH {}, KW {}, EXT_KD {}, EXT_KH {}, EXT_KW {}, KS {},
+                KD_BLOCK {}, KH_BLOCK {}, KW_BLOCK {}, KD_BLOCK_PAD {},
+                KH_BLOCK_PAD {}, ID {}, IH {}, IW {}, IDP {}, IHP {}, IWP {},
+                OD {}, OH {}, OW {}, SD {}, SH {}, SW {}, FP {}, TP {}, LP {},
+                DD {}, DH {}, DW {};
+        size_t acc_dsz {}, bia_dsz {}, src_dsz {}, wei_dsz {}, dst_dsz {};
+        dim_t src_w_sz {}, src_h_sz {}, dst_w_sz {}, dst_h_sz {}, wei_ocb_sz {};
+        dim_t adj_src_h_sz {}, adj_src_h_offset {}, src_iw_offset {},
+                src_d_offset {}, wei_ic_offset {}, wei_kd_offset {},
+                wei_kh_offset {}, wei_kw_offset {};
     };
 
     brgemm_convolution_fwd_t(const pd_t *apd);
@@ -178,7 +181,7 @@ private:
 
     inline int maybe_invert_range(int k, int k_inv, int K) const {
         return pd()->desc()->use_inversion ? K - k_inv : k;
-    };
+    }
 
     dim_t get_src_base_offset(
             const brgemm_thread_ctx_t &btc, const dim_t ic) const;
@@ -206,7 +209,7 @@ private:
             const char *__restrict &wei) const;
 
     status_t add_po_kernel(brgemm_desc_t *bcfg, int ker_idx, bool is_init);
-    void add_po_kernels(int i_N, int init_bcast_dim, int po_bcast_dim);
+    status_t add_po_kernels(int i_N, int init_bcast_dim, int po_bcast_dim);
     status_t add_brg_kernel(int brg_idx);
 
     status_t cal_compensation(const char *__restrict weights,

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -55,9 +55,9 @@ status_t stream_profiler_t::get_info(profiling_data_kind_t data_kind,
                 = *utils::downcast<xpu::ocl::event_t *>(ev.event.get());
         cl_ulong beg, end;
         assert(ocl_event.size() == 1);
-        OCL_CHECK(clGetEventProfilingInfo(ocl_event[0].get(),
+        OCL_CHECK(xpu::ocl::clGetEventProfilingInfo(ocl_event[0].get(),
                 CL_PROFILING_COMMAND_START, sizeof(beg), &beg, nullptr));
-        OCL_CHECK(clGetEventProfilingInfo(ocl_event[0].get(),
+        OCL_CHECK(xpu::ocl::clGetEventProfilingInfo(ocl_event[0].get(),
                 CL_PROFILING_COMMAND_END, sizeof(end), &end, nullptr));
         if (is_per_kernel) {
             data[idx++] = static_cast<uint64_t>(end - beg);

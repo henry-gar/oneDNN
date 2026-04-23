@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -18,8 +18,9 @@
 #define GPU_INTEL_JIT_IR_SLM_REDUCE_BUILDER_HPP
 
 #include "gpu/intel/jit/ir/hw.hpp"
-#include "gpu/intel/jit/ir/ir.hpp"
+#include "gpu/intel/jit/ir/legacy.hpp"
 #include "gpu/intel/jit/ir/tensor.hpp"
+#include "gpu/intel/jit/pass/alloc.hpp"
 #include "ngen.hpp"
 
 #include <vector>

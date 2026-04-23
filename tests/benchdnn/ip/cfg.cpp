@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2018-2025 Intel Corporation
+* Copyright 2018 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -18,7 +18,8 @@
 
 namespace ip {
 
-cfg_t::cfg_t(const prb_t *prb, const std::vector<data_kind_t> &kinds) {
+cfg_t::cfg_t(const prb_t *prb, const std::vector<data_kind_t> &kinds)
+    : base_cfg_t {prb->attr.acc_mode} {
     output_data_kind_ = (prb->dir & FLAG_FWD) ? DST
             : (prb->dir & FLAG_WEI)           ? WEI
                                               : SRC;

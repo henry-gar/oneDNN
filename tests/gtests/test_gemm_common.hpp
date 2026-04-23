@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2018-2025 Intel Corporation
+* Copyright 2018 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -651,6 +651,10 @@ protected:
         SKIP_IF(data_traits_t<c_dt>::data_type == memory::data_type::bf16
                         && get_test_engine_kind() == engine::kind::cpu,
                 "CPU does not support bf16bf16bf16 GEMM.");
+
+        SKIP_IF(get_test_engine_kind() == engine::kind::cpu
+                        && DNNL_CPU_RUNTIME == DNNL_RUNTIME_THREADPOOL,
+                "Asynchronous Threadpool runtime is not supported");
 
         catch_expected_failures(
                 [&]() { Test(); }, p.expect_to_fail, p.expected_status, false);

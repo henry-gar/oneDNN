@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2023 Intel Corporation
+* Copyright 2021 Intel Corporation
 * Copyright 2022-2025 FUJITSU LIMITED
 * Copyright 2025 Arm Ltd. and affiliates
 *
@@ -64,9 +64,11 @@ void jit_uni_deconv_zp_pad_str_kernel_base_t::compute() {
 
         const int n_inner_ic_blk = jcp_.is_depthwise
                 ? 1
-                : (is_last_icb && ic_tail_exists ? utils::div_up(
-                           jcp_.ic_without_padding % jcp_.ic_block, 4)
-                                                 : (jcp_.ic_block / 4));
+                : (is_last_icb && ic_tail_exists
+                                  ? utils::div_up(jcp_.ic_without_padding
+                                                    % jcp_.ic_block,
+                                            4)
+                                  : (jcp_.ic_block / 4));
 
         const dim_t outer_wei_offset = icb * outer_icb_step;
 

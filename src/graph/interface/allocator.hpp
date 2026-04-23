@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -52,41 +52,6 @@ public:
             dnnl_graph_ocl_deallocate_f ocl_free)
         : ocl_malloc_(ocl_malloc), ocl_free_(ocl_free) {}
 #endif
-
-    bool operator==(const dnnl_graph_allocator &other) const {
-        return host_malloc_ == other.host_malloc_
-                && host_free_ == other.host_free_
-#ifdef DNNL_WITH_SYCL
-                && sycl_malloc_ == other.sycl_malloc_
-                && sycl_free_ == other.sycl_free_
-#endif
-#if DNNL_GPU_RUNTIME == DNNL_RUNTIME_OCL
-                && ocl_malloc_ == other.ocl_malloc_
-                && ocl_free_ == other.ocl_free_
-#endif
-                ;
-    }
-
-    size_t hash() const {
-        size_t seed = 0;
-        seed = dnnl::impl::hash_combine(
-                seed, reinterpret_cast<uintptr_t>(host_malloc_));
-        seed = dnnl::impl::hash_combine(
-                seed, reinterpret_cast<uintptr_t>(host_free_));
-#ifdef DNNL_WITH_SYCL
-        seed = dnnl::impl::hash_combine(
-                seed, reinterpret_cast<uintptr_t>(sycl_malloc_));
-        seed = dnnl::impl::hash_combine(
-                seed, reinterpret_cast<uintptr_t>(sycl_free_));
-#endif
-#if DNNL_GPU_RUNTIME == DNNL_RUNTIME_OCL
-        seed = dnnl::impl::hash_combine(
-                seed, reinterpret_cast<uintptr_t>(ocl_malloc_));
-        seed = dnnl::impl::hash_combine(
-                seed, reinterpret_cast<uintptr_t>(ocl_free_));
-#endif
-        return seed;
-    }
 
     enum class mem_type_t {
         persistent = 0,

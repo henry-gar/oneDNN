@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -15,11 +15,7 @@
 *******************************************************************************/
 
 #include "gpu/intel/jit/pass/pass.hpp"
-
-#include "gpu/intel/jit/ir/message.hpp"
-#include "gpu/intel/jit/ir/reorder.hpp"
-#include "gpu/intel/jit/pass/simplify.hpp"
-#include "gpu/intel/jit/utils/trace.hpp"
+#include "gemmstone/../../dsl/ir/pass/trace.hpp"
 
 namespace dnnl {
 namespace impl {
@@ -37,7 +33,7 @@ public:
 };
 
 stmt_t inject_external_var_let(const stmt_t &_stmt, ir_context_t &ir_ctx) {
-    trace_start();
+    ir::trace_start();
     auto stmt = _stmt;
     external_var_visitor_t v;
     v.visit(stmt);
@@ -46,47 +42,18 @@ stmt_t inject_external_var_let(const stmt_t &_stmt, ir_context_t &ir_ctx) {
             v.external_vars.begin(), v.external_vars.end());
     std::sort(external_vars.begin(), external_vars.end(),
             [&](const expr_t &a, const expr_t &b) {
-                return a.as<var_t>().name < b.as<var_t>().name;
-            });
+        return a.as<var_t>().name < b.as<var_t>().name;
+    });
     for (auto &var : external_vars)
         stmt = let_t::make(var, {}, stmt);
 
-    trace_pass("inject_external_var_let", stmt, ir_ctx);
+    ir::trace_pass("inject_external_var_let", stmt, ir_ctx);
     return stmt;
-}
-
-class spurious_send_mask_cast_remover_t : public ir_mutator_t {
-public:
-    object_t _mutate(const cast_t &obj) override {
-        if (in_send_ && obj.is_bool_vec_u16() && obj.expr.type().is_bool())
-            return mutate(obj.expr);
-        return ir_mutator_t::_mutate(obj);
-    }
-
-    object_t _mutate(const func_call_t &obj) override {
-        if (!is_func_call<send_t>(obj)) return obj;
-
-        in_send_ = true;
-        auto new_obj = ir_mutator_t::_mutate(obj);
-        in_send_ = false;
-        return new_obj;
-    }
-
-private:
-    bool in_send_ = false;
-};
-
-stmt_t remove_spurious_send_mask_cast(const stmt_t &s, ir_context_t &ir_ctx) {
-    spurious_send_mask_cast_remover_t mutator;
-    trace_start();
-    auto ret = mutator.mutate(s);
-    trace_pass("remove_spurious_send_mask_cast", ret, ir_ctx);
-    return ret;
 }
 
 class store_splitter_t : public ir_mutator_t {
 public:
-    store_splitter_t(const hw_t &hw) : hw_(hw) {}
+    store_splitter_t(const dsl::hw_t &hw) : hw_(hw) {}
 
     object_t _mutate(const store_t &obj) override {
         int elems = obj.value.type().elems();
@@ -131,13 +98,13 @@ private:
         return expr_t();
     }
 
-    hw_t hw_;
+    dsl::hw_t hw_;
 };
 
 stmt_t split_wide_stores(const stmt_t &s, ir_context_t &ir_ctx) {
-    trace_start();
+    ir::trace_start();
     auto ret = store_splitter_t(ir_ctx.hw()).mutate(s);
-    trace_pass("split_wide_stores", ret, ir_ctx);
+    ir::trace_pass("split_wide_stores", ret, ir_ctx);
     return ret;
 }
 
@@ -185,9 +152,9 @@ private:
 };
 
 stmt_t fixup_if_conditions(const stmt_t &s, ir_context_t &ir_ctx) {
-    trace_start();
+    ir::trace_start();
     auto ret = if_condition_fixer_t(ir_ctx.options().simd()).mutate(s);
-    trace_pass("fixup_if_conditions", ret, ir_ctx);
+    ir::trace_pass("fixup_if_conditions", ret, ir_ctx);
     return ret;
 }
 
@@ -214,9 +181,9 @@ private:
 };
 
 stmt_t optimize_int64_exprs(const stmt_t &s, ir_context_t &ir_ctx) {
-    trace_start();
+    ir::trace_start();
     auto ret = int64_expr_optimizer_t().mutate(s);
-    trace_pass("optimize_int64_exprs", ret, ir_ctx);
+    ir::trace_pass("optimize_int64_exprs", ret, ir_ctx);
     return ret;
 }
 

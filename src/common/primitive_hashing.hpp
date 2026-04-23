@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -73,6 +73,7 @@ size_t get_desc_hash(const batch_normalization_desc_t &desc);
 size_t get_desc_hash(const binary_desc_t &desc);
 size_t get_desc_hash(const convolution_desc_t &desc);
 size_t get_desc_hash(const eltwise_desc_t &desc);
+size_t get_desc_hash(const gated_mlp_desc_t &desc);
 size_t get_desc_hash(const gemm_desc_t &desc);
 size_t get_desc_hash(const group_normalization_desc_t &desc);
 size_t get_desc_hash(const inner_product_desc_t &desc);
@@ -170,6 +171,7 @@ struct hash<dnnl::impl::primitive_hashing::key_t> {
             CASE(convolution)
             CASE(deconvolution)
             CASE(eltwise)
+            CASE(gated_mlp)
             CASE(gemm)
             CASE(group_normalization)
             CASE(inner_product)

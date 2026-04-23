@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -31,6 +31,8 @@ static status_t init_conf_common(
     const memory_desc_wrapper wei_d(pd->invariant_wei_md());
     const memory_desc_wrapper dst_d(pd->invariant_dst_md());
     data_type_t acc_data_type = pd->desc()->accum_data_type;
+
+    conf.require_stateless_addressing = pd->has_large_buffers();
 
     const int ndims = src_d.ndims();
 
@@ -147,6 +149,7 @@ static status_t init_kernel_ctx_common(compute::kernel_ctx_t &kernel_ctx,
         kernel_ctx.set_data_type(data_type::f16);
     else
         kernel_ctx.set_data_type(data_type::f32);
+    kernel_ctx.require_stateless_addressing(conf.require_stateless_addressing);
 
     def_data_type(kernel_ctx, conf.src_dt, "SRC");
     def_data_type(kernel_ctx, conf.wei_dt, "WEI");

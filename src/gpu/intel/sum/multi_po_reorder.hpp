@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -187,8 +187,10 @@ struct multi_po_reorder_t : public primitive_t {
                 }
             }
             exec_ctx_t r_ctx(ctx, std::move(r_args));
-            nested_scratchpad_t ns(ctx, key_nested_multiple + r, reorders_[r]);
-            r_ctx.set_scratchpad_grantor(ns.grantor());
+            auto *nested_grantor = create_nested_grantor(
+                    ctx.get_scratchpad_grantor(), key_nested_multiple + r,
+                    reorders_[r]->pd()->scratchpad_registry());
+            r_ctx.set_scratchpad_grantor(nested_grantor);
             CHECK(reorders_[r]->execute(r_ctx));
         }
         return status::success;

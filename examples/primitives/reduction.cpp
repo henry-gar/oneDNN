@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -17,10 +17,12 @@
 /// @example reduction.cpp
 /// > Annotated version: @ref reduction_example_cpp
 
-/// @page reduction_example_cpp Reduction Primitive Example
-/// This C++ API example demonstrates how to create and execute a
+/// @page reduction_example_cpp_brief
+/// @brief This C++ API example demonstrates how to create and execute a
 /// [Reduction](@ref dev_guide_reduction) primitive.
-///
+
+/// @page reduction_example_cpp Reduction Primitive Example
+/// \copybrief reduction_example_cpp_brief
 /// @include reduction.cpp
 
 #include <cmath>

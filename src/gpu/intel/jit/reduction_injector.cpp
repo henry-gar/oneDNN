@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2024-2025 Intel Corporation
+* Copyright 2024 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -24,6 +24,7 @@
 #include "common/utils.hpp"
 #include "gpu/intel/compute/device_info.hpp"
 #include "gpu/intel/jit/reduction_injector.hpp"
+#include "gpu/intel/jit/utils/type_bridge.hpp"
 #include "ngen_core.hpp"
 #include "ngen_emulation.hpp"
 
@@ -130,10 +131,7 @@ void reduction_injector_f32_t<ngen_generator_t>::compute(
         const ngen::GRF &src_ptr, const ngen::GRFRange &acc, dim_t stride,
         dim_t iters) {
     using namespace alg_kind;
-#ifdef DNNL_DEV_MODE
-    int pre_regs = ra.get_alloced_regs();
-#endif
-    assert(src_ptr.getType() == ngen::DataType::uq);
+    gpu_assert(src_ptr.getType() == ngen::DataType::uq);
 
     int dt_size = sizeof(float);
     int reg_size = ngen::GRF::bytes(hw());
@@ -202,13 +200,6 @@ void reduction_injector_f32_t<ngen_generator_t>::compute(
     ra.release(loop_index);
     ra.release(val);
     ra.release(loop_flag);
-
-#ifdef DNNL_DEV_MODE
-    int remaining_regs = ra.get_alloced_regs() - pre_regs;
-    gpu_assert(remaining_regs == 0)
-            << remaining_regs
-            << " registers are allocated that need to be released.";
-#endif
 }
 
 template <typename ngen_generator_t>
@@ -285,6 +276,7 @@ REG_XEHPG_ISA(template struct reduction_injector_f32_t<code_gen<gpu_xe_hpg>>);
 REG_XEHPC_ISA(template struct reduction_injector_f32_t<code_gen<gpu_xe_hpc>>);
 REG_XE2_ISA(template struct reduction_injector_f32_t<code_gen<gpu_xe2>>);
 REG_XE3_ISA(template struct reduction_injector_f32_t<code_gen<gpu_xe3>>);
+REG_XE3P_ISA(template struct reduction_injector_f32_t<code_gen<gpu_xe3p>>);
 
 #ifdef NGEN_ASM
 template struct reduction_injector_f32_t<ngen::AsmCodeGenerator>;

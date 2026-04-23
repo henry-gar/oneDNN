@@ -1,7 +1,7 @@
 /*******************************************************************************
-* Copyright 2021-2023 Intel Corporation
+* Copyright 2021 Intel Corporation
 * Copyright 2024-2025 FUJITSU LIMITED
-* Copyright 2025 Arm Ltd. and affiliates
+* Copyright 2025-2026 Arm Ltd. and affiliates
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -16,16 +16,18 @@
 * limitations under the License.
 *******************************************************************************/
 
+#include <cassert>
+
 #include "common/c_types_map.hpp"
 #include "common/dnnl_thread.hpp"
 #include "common/type_helpers.hpp"
 #include "common/utils.hpp"
 #include "cpu/aarch64/cpu_isa_traits.hpp"
+#include "cpu/aarch64/jit_brgemm_conv.hpp"
+#include "cpu/aarch64/jit_brgemm_conv_comp_pad_kernel.hpp"
+#include "cpu/aarch64/jit_brgemm_conv_utils.hpp"
 #include "cpu/cpu_primitive.hpp"
 #include "cpu/scale_utils.hpp"
-
-#include "cpu/aarch64/injectors/jit_uni_binary_injector.hpp"
-#include "cpu/aarch64/jit_brgemm_conv.hpp"
 
 namespace dnnl {
 namespace impl {
@@ -166,7 +168,7 @@ status_t brgemm_convolution_fwd_t<isa>::pd_t::add_brg_descriptor(int vM,
                                  : vM;
     auto brg_idx
             = get_brg_idx(vM - 1, i_init, i_N, i_K, kd_b, kd_e, kh_b, kh_e);
-    // if brgemm_t already created then skip this iteration
+    // if brgemm_desc_t already created then skip this iteration
     if ((*brgemm_descriptors_)[brg_idx] != nullptr) return status::success;
     if (vN == 0 || vK == 0) return status::success;
 
@@ -241,7 +243,7 @@ status_t brgemm_convolution_fwd_t<isa>::pd_t::add_brg_descriptor(int vM,
     const auto kh_l = nstl::min(KH_BLOCK, kh_e - kh_b);
     const auto bs = kd_l * kh_l * jcp_.kw;
 
-    brgemm_t brg;
+    brgemm_desc_t brg;
     brgattr.bd_mask = bd_mask.data();
     brgattr.static_offsets = stoffs.data();
     brgemm_strides_t brg_strides;
@@ -254,6 +256,9 @@ status_t brgemm_convolution_fwd_t<isa>::pd_t::add_brg_descriptor(int vM,
     CHECK(brgemm_desc_init(&brg, isa, jcp_.brg_type, src_type, wei_type, false,
             false, brgemm_row_major, alpha, vbeta, jcp_.LDA, jcp_.LDB, jcp_.LDC,
             vbrgM, vN, vK, strides_ptr));
+
+    // FIXME: use_uker is currently always false. We should add support or
+    // remove the dead code.
     brgattr.use_uker = jcp_.use_uker;
     brgattr.use_interleave_stores = jcp_.use_interleave_stores;
     brgattr.hint_prefetching = jcp_.hint_prefetching;
@@ -336,15 +341,15 @@ status_t brgemm_convolution_fwd_t<isa>::pd_t::init(engine_t *engine) {
 
     const auto adj_M = nstl::max(jcp_.M, jcp_.M_tail);
 
+    // FIXME: use_uker is currently always false. We should add support or
+    // remove the dead code.
+    //
     // 1. The unrolled kernel can be used for exec_trans and exec_base.
     // For exec_base it makes sense to use unrolled kernel only if
     // there is no padding by width.
     // 2. For exec_trans block by kw is always KW
-    // 3. 'false' is used intentionally to disable the condition, ensuring that
-    // the assert fails only when jcp_.use_uker is true, regardless of exec_type.
-    assert(IMPLICATION(jcp_.use_uker,
-            false && one_of(jcp_.exec_type, exec_base, exec_trans)));
-    assert(IMPLICATION(jcp_.use_interleave_stores, jcp_.use_uker));
+    assert(!jcp_.use_uker);
+    assert(!jcp_.use_interleave_stores);
 
     bs_c = 0;
 
@@ -440,9 +445,8 @@ status_t brgemm_convolution_fwd_t<isa>::pd_t::init(engine_t *engine) {
             * ((jcp_.exec_type == exec_trans && jcp_.kh_sets > 1) ? 0 : 1);
     wei_kw_offset = static_cast<dim_t>(wei_dsz) * wei_kw_stride;
 
-    batchsizes.resize(KD * KD * KH * KH);
-    fill(batchsizes.begin(), batchsizes.end(), -1);
-
+    // FIXME: use_uker is currently always false. We should add support or
+    // remove the dead code.
     if (jcp_.use_uker) {
 
         assert(KD % KD_BLOCK == 0);
@@ -465,15 +469,15 @@ status_t brgemm_convolution_fwd_t<isa>::pd_t::init(engine_t *engine) {
                 const auto bs = kd_l * kh_l * jcp_.kw;
                 if (bs <= 0) continue;
 
-                const auto bs_idx = get_bs_idx(kd_s, kd_f, kh_s, kh_f);
-                if (batchsizes[bs_idx] == -1) {
-                    batchsizes[bs_idx] = bs_c;
+                const std::array<int, 4> key = {kd_s, kd_f, kh_s, kh_f};
+                if (batchsizes.find(key) == batchsizes.end()) {
+                    batchsizes.insert({key, bs_c});
                     bs_c++;
                 }
             }
         }
     } else {
-        batchsizes[get_bs_idx(0, KD, 0, KH)] = bs_c;
+        batchsizes.insert({{0, KD, 0, KH}, bs_c});
         bs_c++;
     }
 
@@ -481,22 +485,6 @@ status_t brgemm_convolution_fwd_t<isa>::pd_t::init(engine_t *engine) {
     brgemm_descriptors_->resize(brgs_sz_);
 
     const auto &p = attr()->post_ops_;
-
-    // TODO: fix failing post ops for bf16 on sve 128
-    const bool is_bf16
-            = src_type == data_type::bf16 && wei_type == data_type::bf16;
-    if (is_bf16 && get_max_cpu_isa() == sve_128) {
-        for (auto const &entry : p.entry_) {
-            const bool is_failing_po = entry.is_eltwise()
-                    && one_of(entry.eltwise.alg,
-                            // these fail due to label offset being too large
-                            alg_kind::eltwise_tanh, alg_kind::eltwise_gelu_tanh,
-                            alg_kind::eltwise_gelu_erf,
-                            // this po segfaults TODO: check issues with f32
-                            alg_kind::eltwise_log);
-            VDISPATCH_CONV(!is_failing_po, VERBOSE_BAD_ALGORITHM);
-        }
-    }
 
     const int sum_idx = p.find(primitive_kind::sum);
     with_sum = (sum_idx != -1);
@@ -543,11 +531,11 @@ status_t brgemm_convolution_fwd_t<isa>::pd_t::init(engine_t *engine) {
                             && jcp_.r_pad == 0))
                 && vM != jcp_.M && vM != jcp_.M_tail)
             continue;
-        for_(int kd_b = 0; kd_b < KD; kd_b++)
-        for_(int kd_e = 1; kd_e <= KD; kd_e++)
-        for_(int kh_b = 0; kh_b < KH; kh_b++)
-        for (int kh_e = 1; kh_e <= KH; kh_e++) {
-            if (batchsizes[get_bs_idx(kd_b, kd_e, kh_b, kh_e)] == -1) continue;
+        for (const auto &key_value_pair : batchsizes) {
+            const int kd_b = key_value_pair.first[0];
+            const int kd_e = key_value_pair.first[1];
+            const int kh_b = key_value_pair.first[2];
+            const int kh_e = key_value_pair.first[3];
             for_(int i_init = i_init_begin; i_init < i_init_end; i_init++)
             for_(int i_N = N_begin; i_N < N_end; i_N++)
             for (int i_K = K_begin; i_K < K_end; i_K++) {
@@ -655,7 +643,7 @@ status_t brgemm_convolution_fwd_t<isa>::add_brg_kernel(int M, int i_N, int i_K,
 
 template <cpu_isa_t isa>
 status_t brgemm_convolution_fwd_t<isa>::add_po_kernel(
-        brgemm_t *bcfg, int ker_idx, bool is_init) {
+        brgemm_desc_t *bcfg, int ker_idx, bool is_init) {
     if (!bcfg) return status::success;
     const auto _pd = pd();
     const auto &jcp = _pd->jcp_;
@@ -667,7 +655,7 @@ status_t brgemm_convolution_fwd_t<isa>::add_po_kernel(
     bcfg->beta = is_init ? 0 : 1;
     CHECK(safe_ptr_assign(kernels_po_[ker_idx],
             new jit_brgemm_kernel_post_ops_t<isa>(jcp, *bcfg, *_pd->attr())));
-    kernels_po_[ker_idx]->create_kernel();
+    kernels_po_.at(ker_idx)->create_kernel();
     return status::success;
 }
 
@@ -688,7 +676,7 @@ void brgemm_convolution_fwd_t<isa>::add_po_kernels(
         if (brgs[brg_idx]) {
             auto init_cfg = *(brgs[brg_idx]);
             auto ker_init_idx = get_ker_po_idx(init_bcast_dim - 1, false, i_N);
-            if (init_cfg.load_dim > 0 && kernels_po_[ker_init_idx] == nullptr) {
+            if (init_cfg.load_dim > 0 && kernels_po_.count(ker_init_idx) == 0) {
                 init_cfg.bcast_dim = init_bcast_dim;
                 add_po_kernel(&init_cfg, ker_init_idx, true);
             }
@@ -699,7 +687,7 @@ void brgemm_convolution_fwd_t<isa>::add_po_kernels(
         if (brgs[brg_idx]) {
             auto po_cfg = *(brgs[brg_idx]);
             auto ker_po_idx = get_ker_po_idx(po_bcast_dim - 1, true, i_N);
-            if (po_cfg.load_dim > 0 && kernels_po_[ker_po_idx] == nullptr) {
+            if (po_cfg.load_dim > 0 && kernels_po_.count(ker_po_idx) == 0) {
                 po_cfg.bcast_dim = po_bcast_dim;
                 add_po_kernel(&po_cfg, ker_po_idx, false);
             }
@@ -825,14 +813,6 @@ status_t brgemm_convolution_fwd_t<isa>::init(engine_t *engine) {
             : 0;
     int i_init_end = 2;
 
-    int num_po_kernels = nstl::max(jcp.M, jcp.M_tail);
-    kernels_po_.resize(num_po_kernels * 2 * 2);
-    for (int i = 0; i < num_po_kernels; i++) {
-        for_(int i_init = 0; i_init < 2; i_init++)
-        for (int i_N = 0; i_N < 2; i_N++)
-            kernels_po_[get_ker_po_idx(i, i_init, i_N)] = nullptr;
-    }
-
     if (jcp.exec_type == exec_trans) {
         CHECK(safe_ptr_assign(copy_to_pbuffer_,
                 new jit_sve_core_brgemm_conv_trans_kernel_t(jcp)));
@@ -845,12 +825,11 @@ status_t brgemm_convolution_fwd_t<isa>::init(engine_t *engine) {
         CHECK(comp_vpad_pbuffer_->create_kernel());
     }
 
-    for_(int kd_b = 0; kd_b < KD; kd_b++)
-    for_(int kd_e = 1; kd_e <= KD; kd_e++)
-    for_(int kh_b = 0; kh_b < KH; kh_b++)
-    for (int kh_e = 1; kh_e <= KH; kh_e++) {
-        if (_pd->batchsizes[_pd->get_bs_idx(kd_b, kd_e, kh_b, kh_e)] == -1)
-            continue;
+    for (const auto &key_value_pair : _pd->batchsizes) {
+        const int kd_b = key_value_pair.first[0];
+        const int kd_e = key_value_pair.first[1];
+        const int kh_b = key_value_pair.first[2];
+        const int kh_e = key_value_pair.first[3];
 
         for_(int i_N = N_begin; i_N < N_end; i_N++)
         for_(int i_M = M_begin; i_M < M_end; i_M++)
@@ -894,13 +873,11 @@ status_t brgemm_convolution_fwd_t<isa>::init(engine_t *engine) {
 
                 auto M = ow_f - ow_s;
                 if (M <= 0) continue;
-                for_(int kd_b = 0; kd_b < KD; kd_b++)
-                for_(int kd_e = 1; kd_e <= KD; kd_e++)
-                for_(int kh_b = 0; kh_b < KH; kh_b++)
-                for (int kh_e = 1; kh_e <= KH; kh_e++) {
-                    if (_pd->batchsizes[_pd->get_bs_idx(kd_b, kd_e, kh_b, kh_e)]
-                            == -1)
-                        continue;
+                for (const auto &key_value_pair : _pd->batchsizes) {
+                    const int kd_b = key_value_pair.first[0];
+                    const int kd_e = key_value_pair.first[1];
+                    const int kh_b = key_value_pair.first[2];
+                    const int kh_e = key_value_pair.first[3];
                     for_(int i_init = 0; i_init < 2; i_init++)
                     for_(int i_N = 0; i_N < 2; i_N++)
                     for (int i_K = 0; i_K < 2; i_K++) {
@@ -936,13 +913,11 @@ status_t brgemm_convolution_fwd_t<isa>::init(engine_t *engine) {
 
                 auto M = ow_f - ow_s;
                 if (M <= 0) continue;
-                for_(int kd_b = 0; kd_b < KD; kd_b++)
-                for_(int kd_e = 1; kd_e <= KD; kd_e++)
-                for_(int kh_b = 0; kh_b < KH; kh_b++)
-                for (int kh_e = 1; kh_e <= KH; kh_e++) {
-                    if (_pd->batchsizes[_pd->get_bs_idx(kd_b, kd_e, kh_b, kh_e)]
-                            == -1)
-                        continue;
+                for (const auto &key_value_pair : _pd->batchsizes) {
+                    const int kd_b = key_value_pair.first[0];
+                    const int kd_e = key_value_pair.first[1];
+                    const int kh_b = key_value_pair.first[2];
+                    const int kh_e = key_value_pair.first[3];
                     for_(int i_init = 0; i_init < 2; i_init++)
                     for_(int i_N = 0; i_N < 2; i_N++)
                     for (int i_K = 0; i_K < 2; i_K++) {
@@ -1149,12 +1124,12 @@ status_t brgemm_convolution_fwd_t<isa>::execute(const exec_ctx_t &ctx) const {
                     + (jcp.s8s8_compensation_required ? s8s8_comp_offset : 0)
             : nullptr;
 
-    const memory_tracking::grantor_t scratchpad = ctx.get_scratchpad_grantor();
+    const auto &scratchpad = ctx.get_scratchpad_grantor();
     brgemm_batch_element_t *const __restrict brg_batch_global
             = brgemm_convolution_utils::uses_batch_elements(
                       jcp.brg_type, jcp.exec_type)
             ? scratchpad.template get<brgemm_batch_element_t>(
-                    key_brgemm_primitive_batch)
+                      key_brgemm_primitive_batch)
             : nullptr;
     char *const __restrict c_buffer_global = (jcp.use_buffer)
             ? scratchpad.template get<char>(key_brgemm_primitive_buffer)
@@ -1168,12 +1143,12 @@ status_t brgemm_convolution_fwd_t<isa>::execute(const exec_ctx_t &ctx) const {
             : nullptr;
     int32_t *src_zp_comp_base = jcp.src_zero_point
             ? (jcp.req_cal_comp_pad ? scratchpad.template get<int32_t>(
-                       key_brgemm_primitive_zp_comp_a)
+                                              key_brgemm_primitive_zp_comp_a)
                                     : zp_compensation)
             : nullptr;
     int32_t *s8s8_comp_base = jcp.s8s8_compensation_required
             ? (jcp.req_cal_comp_pad ? scratchpad.template get<int32_t>(
-                       key_brgemm_primitive_buffer_comp)
+                                              key_brgemm_primitive_buffer_comp)
                                     : s8s8_compensation)
             : nullptr;
 
@@ -1399,7 +1374,7 @@ void brgemm_convolution_fwd_t<isa>::perform_outwork(
     auto call_outwork_ker = [&](bool is_postwork, bool has_postcomp,
                                     int ow_pw_s, int ow_pw_l) {
         auto ker_po_idx = get_ker_po_idx(ow_pw_l - 1, is_postwork, is_oc_tail);
-        const auto outwork_ker = kernels_po_[ker_po_idx].get();
+        const auto outwork_ker = kernels_po_.at(ker_po_idx).get();
         assert(outwork_ker != nullptr && ow_pw_l == outwork_ker->brg.bcast_dim);
         if (is_postwork) {
             p.apply_comp = has_postcomp;
@@ -1414,10 +1389,10 @@ void brgemm_convolution_fwd_t<isa>::perform_outwork(
                     + dst_dsz
                             * (btc.od * dst_h_sz + btc.oh * dst_w_sz
                                     + ow_pw_s * jcp.oc_without_padding);
-            p.ptr_in = static_cast<void *>(
-                    jcp.use_buffer ? (
-                            btc.c_buffer + acc_dsz * (ow_pw_s - ow) * jcp.LDC)
-                                   : p.ptr_out);
+            p.ptr_in = static_cast<void *>(jcp.use_buffer
+                            ? (btc.c_buffer
+                                      + acc_dsz * (ow_pw_s - ow) * jcp.LDC)
+                            : p.ptr_out);
         } else {
             p.apply_comp = has_postcomp;
             char *const ptr_Cz = jcp.use_buffer
@@ -1507,7 +1482,7 @@ void brgemm_convolution_fwd_t<isa>::maybe_conv_inp(int ithr,
     const auto icb = icc * jcp.nb_ic_blocking;
 
 #define bmask(icb, odb, ohb, owb) \
-    inp_buffer_mask[(((icb)*jcp.nb_od + (odb)) * jcp.nb_oh + (ohb)) \
+    inp_buffer_mask[(((icb) * jcp.nb_od + (odb)) * jcp.nb_oh + (ohb)) \
                     * jcp.nb_ow \
             + (owb)]
 
@@ -1697,10 +1672,10 @@ void brgemm_convolution_fwd_t<isa>::ker_base(brgemm_thread_ctx_t &btc) const {
                     * (btc.g * _pd->wei_g_stride
                             + btc.ocb * _pd->wei_ocb_stride);
 
-    const auto call_brgemm = [&](int brg_idx, int ic_block_s, int n_ic_blocks,
-                                     int comp_ker_offs, bool do_postops,
-                                     bool do_only_comp) {
-        if (k_l <= 0) return;
+    const auto call_brgemm
+            = [&](int brg_idx, int ic_block_s, int n_ic_blocks,
+                      int comp_ker_offs, bool do_postops, bool do_only_comp) {
+        assert(k_l > 0 && "invalid batch range");
         const auto brg_ker = brgemm_kernels_[brg_idx];
 
         assert(jcp.brg_type != brgemm_static_offs);
@@ -1740,21 +1715,21 @@ void brgemm_convolution_fwd_t<isa>::ker_base(brgemm_thread_ctx_t &btc) const {
         const auto ow_l = ow_e - ow_b;
         assert(0 <= ow_l && ow_l <= jcp.ow_block);
 
-        const auto comp_ker_offs = get_comp_offset(
-                btc.g, btc.ocb, ow_b, kd_s, kd_f, kh_s, kh_f, kw_b, kw_e);
-
-        const auto ker_i = ow_l - 1;
-        int kernel_idx[2][2];
-        kernel_idx[false][false] = _pd->get_brg_idx(
-                ker_i, false, is_oc_tail, false, kd_s, kd_f, kh_s, kh_f);
-        kernel_idx[true][false] = _pd->get_brg_idx(
-                ker_i, true, is_oc_tail, false, kd_s, kd_f, kh_s, kh_f);
-        kernel_idx[false][true] = _pd->get_brg_idx(
-                ker_i, false, is_oc_tail, true, kd_s, kd_f, kh_s, kh_f);
-        kernel_idx[true][true] = _pd->get_brg_idx(
-                ker_i, true, is_oc_tail, true, kd_s, kd_f, kh_s, kh_f);
-
         if (ow_l > 0 && k_l > 0) {
+            const auto comp_ker_offs = get_comp_offset(
+                    btc.g, btc.ocb, ow_b, kd_s, kd_f, kh_s, kh_f, kw_b, kw_e);
+
+            const auto ker_i = ow_l - 1;
+            int kernel_idx[2][2];
+            kernel_idx[false][false] = _pd->get_brg_idx(
+                    ker_i, false, is_oc_tail, false, kd_s, kd_f, kh_s, kh_f);
+            kernel_idx[true][false] = _pd->get_brg_idx(
+                    ker_i, true, is_oc_tail, false, kd_s, kd_f, kh_s, kh_f);
+            kernel_idx[false][true] = _pd->get_brg_idx(
+                    ker_i, false, is_oc_tail, true, kd_s, kd_f, kh_s, kh_f);
+            kernel_idx[true][true] = _pd->get_brg_idx(
+                    ker_i, true, is_oc_tail, true, kd_s, kd_f, kh_s, kh_f);
+
             if (nb_ic_b > 0) {
                 const auto brg_idx = kernel_idx[do_init][false];
                 call_brgemm(brg_idx, 0, nb_ic_b, comp_ker_offs,
@@ -1875,7 +1850,7 @@ void brgemm_convolution_fwd_t<isa>::ker_trans(
 
     const auto call_brgemm = [&](int brg_idx, int ic_block_s, int n_ic_blocks,
                                      bool do_postops) {
-        if (k_l <= 0) return;
+        assert(k_l > 0 && "invalid batch range");
         const auto brg_ker = brgemm_kernels_[brg_idx];
 
         const auto kh_ee = jcp.kh_sets > 1 ? kh_b + 1 : kh_e;
@@ -1883,7 +1858,7 @@ void brgemm_convolution_fwd_t<isa>::ker_trans(
                 + src_dsz
                         * ((jcp.copy_block_only ? 0
                                                 : ((icb + ic_block_s)
-                                                        * _pd->pbuf_d_sz)));
+                                                          * _pd->pbuf_d_sz)));
         const void *ptrA {nullptr}, *ptrB {nullptr};
 
         if (jcp.brg_type == brgemm_static_offs) {
@@ -1987,6 +1962,7 @@ void brgemm_convolution_fwd_t<isa>::ker_vpad(brgemm_thread_ctx_t &btc) const {
 
     const auto call_brgemm = [&](int brg_idx, int ic_block_s, int n_ic_blocks,
                                      int comp_ker_offs, bool do_postops) {
+        assert(k_l > 0 && "invalid batch range");
         const auto brg_ker = brgemm_kernels_[brg_idx];
 
         assert(jcp.brg_type != brgemm_static_offs);

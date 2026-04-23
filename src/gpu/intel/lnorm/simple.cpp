@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2024-2025 Intel Corporation
+* Copyright 2024 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -38,8 +38,9 @@ static status_t init_conf_common(
 
     conf.src_dt = src_mdw.data_type();
     conf.dst_dt = dst_mdw.data_type();
+    conf.require_stateless_addressing = pd->has_large_buffers();
     conf.ndims = ndims;
-    conf.norm_axis = into<dim_idx_t>(pd->norm_axis());
+    conf.norm_axis = pd->norm_axis();
     conf.src_md_info = memory_desc_info_t::create(src_mdw);
     conf.dst_md_info = memory_desc_info_t::create(dst_mdw);
     conf.stat_md_info = memory_desc_info_t::create(stat_mdw);
@@ -236,6 +237,7 @@ static status_t init_kernel_ctx_common(
         compute::kernel_ctx_t &kernel_ctx, const conf_t &conf) {
     kernel_ctx.set_data_type(conf.is_fwd ? conf.src_dt : conf.dst_dt);
     def_data_type(kernel_ctx, conf.weights_data_type, "WEI");
+    kernel_ctx.require_stateless_addressing(conf.require_stateless_addressing);
 
     kernel_ctx.define_int("C", conf.norm_axis);
     kernel_ctx.define_int("NDIMS", conf.ndims);

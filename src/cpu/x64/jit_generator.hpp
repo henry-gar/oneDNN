@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2016-2025 Intel Corporation
+* Copyright 2016 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -40,8 +40,12 @@
 #endif
 
 #define DECLARE_CPU_JIT_AUX_FUNCTIONS(gen_name) \
-    const char *name() const override { return STRINGIFY(gen_name); } \
-    const char *source_file() const override { return __FILE__; } \
+    const char *name() const override { \
+        return STRINGIFY(gen_name); \
+    } \
+    const char *source_file() const override { \
+        return __FILE__; \
+    } \
     static const char *jit_name() { \
         static constexpr char ret[] = "/oneDNN:" STRINGIFY(gen_name); \
         return ret; \
@@ -53,6 +57,11 @@
     do { \
         assert(condition); \
         if (!(condition)) XBYAK_THROW(Xbyak::ERR_INTERNAL); \
+    } while (false)
+#define JIT_ASSERT_RET(condition, ret) \
+    do { \
+        assert(condition); \
+        if (!(condition)) XBYAK_THROW_RET(Xbyak::ERR_INTERNAL, ret); \
     } while (false)
 
 namespace dnnl {
@@ -187,6 +196,15 @@ public:
         return size_of_abi_save_regs;
     }
 
+    inline bool may_use_rbp() const {
+        bool use_rbp = true;
+#if defined(DNNL_ENABLE_MEM_DEBUG) || defined(DNNL_SAFE_RBP)
+        // Disable RBP usage to preserve call stack for debugging/backtracing.
+        use_rbp = false;
+#endif
+        return use_rbp;
+    }
+
     void preamble() {
         if (xmm_to_preserve) {
             sub(rsp, xmm_to_preserve * xmm_len);
@@ -199,12 +217,11 @@ public:
             // Stack magic: save rsp into rbp state to be able to unwind stack.
             if (i == 0) mov(rbp, rsp);
         }
-#ifndef DNNL_ENABLE_MEM_DEBUG
-        // do not use RBP in mem debug mode to enable backtracing from jit code
-        if (is_valid_isa(avx512_core)) {
+
+        if (may_use_rbp() && is_valid_isa(avx512_core)) {
+            // Initialize RBP as scaled EVEX offset base
             mov(reg_EVEX_max_8b_offt, 2 * EVEX_max_8b_offt);
         }
-#endif
 
 #ifdef DNNL_ENABLE_MEM_DEBUG
         // This section poisons vector registers with NaNs to catch situations
@@ -288,20 +305,19 @@ public:
 
         assert(raw_offt <= INT_MAX);
         auto offt = static_cast<int>(raw_offt);
-
         int scale = 0;
 
-#ifndef DNNL_ENABLE_MEM_DEBUG
-        // do not use RBP in mem debug mode to enable backtracing from jit code
-        if (EVEX_max_8b_offt <= offt && offt < 3 * EVEX_max_8b_offt) {
-            offt = offt - 2 * EVEX_max_8b_offt;
-            scale = 1;
-        } else if (3 * EVEX_max_8b_offt <= offt
-                && offt < 5 * EVEX_max_8b_offt) {
-            offt = offt - 4 * EVEX_max_8b_offt;
-            scale = 2;
+        if (may_use_rbp()) {
+            // do not use RBP in mem debug mode to enable backtracing from jit code
+            if (EVEX_max_8b_offt <= offt && offt < 3 * EVEX_max_8b_offt) {
+                offt = offt - 2 * EVEX_max_8b_offt;
+                scale = 1;
+            } else if (3 * EVEX_max_8b_offt <= offt
+                    && offt < 5 * EVEX_max_8b_offt) {
+                offt = offt - 4 * EVEX_max_8b_offt;
+                scale = 2;
+            }
         }
-#endif
 
         auto re = RegExp() + base + offt;
         if (scale) re = re + reg_EVEX_max_8b_offt * scale;
@@ -508,13 +524,13 @@ public:
             movups(addr, x);
     }
 
-    void uni_vmovdqu16(const Xbyak::Xmm &x, const Xbyak::Address &addr) {
+    void uni_vmovdqu16(const Xbyak::Xmm &x, const Xbyak::Operand &op) {
         if (is_valid_isa(avx512_core))
-            vmovdqu16(x, addr);
+            vmovdqu16(x, op);
         else if (is_valid_isa(avx))
-            vmovups(x, addr);
+            vmovups(x, op);
         else
-            movups(x, addr);
+            movups(x, op);
     }
 
     void uni_vmovups(const Xbyak::Address &addr, const Xbyak::Xmm &x) {
@@ -648,9 +664,7 @@ public:
             const Xbyak::Xmm &x1, const Xbyak::Operand &op, Xbyak::uint8 imm) {
         if (is_valid_isa(avx))
             vpshufd(x1, op, imm);
-        else {
-            pshufd(x1, op, imm);
-        }
+        else { pshufd(x1, op, imm); }
     }
 
     void uni_vrcpss(const Xbyak::Xmm &x, const Xbyak::Operand &op) {

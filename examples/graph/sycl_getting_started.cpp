@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -17,9 +17,12 @@
 /// @example sycl_getting_started.cpp
 /// > Annotated version: @ref graph_sycl_getting_started_cpp
 
-/// @page graph_sycl_getting_started_cpp Getting started with SYCL extensions API and Graph API
-/// This is an example to demonstrate how to build a simple graph and run on
+/// @page graph_sycl_getting_started_cpp_brief
+/// @brief This is an example to demonstrate how to build a simple graph and run on
 /// SYCL device.
+
+/// @page graph_sycl_getting_started_cpp Getting started with SYCL extensions API and Graph API
+/// \copybrief graph_sycl_getting_started_cpp_brief
 ///
 /// > Example code: @ref sycl_getting_started.cpp
 ///
@@ -251,9 +254,9 @@ void sycl_getting_started_tutorial(dnnl::engine::kind ekind) {
     //[Define sycl queue]
     sycl::queue q = (ekind == engine::kind::gpu)
             ? sycl::queue(
-                    sycl::gpu_selector_v, sycl::property::queue::in_order {})
+                      sycl::gpu_selector_v, sycl::property::queue::in_order {})
             : sycl::queue(
-                    sycl::cpu_selector_v, sycl::property::queue::in_order {});
+                      sycl::cpu_selector_v, sycl::property::queue::in_order {});
     //[Define sycl queue]
 
     /// Create a #dnnl::engine based on SYCL device and context. Also,

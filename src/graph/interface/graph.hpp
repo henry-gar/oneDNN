@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -101,12 +101,12 @@ public:
         , ops_(deep_copy(other.ops_))
         , engine_kind_(other.engine_kind_)
         , fpmath_(other.fpmath_)
-        , partition_impls_(other.partition_impls_) {};
+        , partition_impls_(other.partition_impls_) {}
 
     dnnl_graph_graph(const std::vector<op_ptr> &ops,
             graph::engine_kind_t kind = graph::engine_kind::cpu,
             graph::fpmath_mode_t fpmath_mode = graph::fpmath_mode::strict)
-        : ops_(ops), engine_kind_(kind), fpmath_ {fpmath_mode, false} {};
+        : ops_(ops), engine_kind_(kind), fpmath_ {fpmath_mode, false} {}
 
     dnnl_graph_graph &operator=(const dnnl_graph_graph &other) = delete;
 
@@ -126,8 +126,8 @@ public:
 
         if (std::none_of(ops_.begin(), ops_.end(),
                     [&l_n](const std::vector<op_ptr>::value_type &op) {
-                        return op->get_id() == l_n->get_id();
-                    })) {
+            return op->get_id() == l_n->get_id();
+        })) {
             const graph::op_schema_t *opm
                     = graph::op_schema_registry_t::get_op_schema(
                             l_n->get_kind());
@@ -212,8 +212,8 @@ public:
                 op_t &producer = in_val->get_producer();
                 if (std::none_of(ops_.begin(), ops_.end(),
                             [&producer](const op_ptr &op) {
-                                return op.get() == &producer;
-                            })) {
+                    return op.get() == &producer;
+                })) {
                     in_vals.emplace_back(in_val.get());
                 }
             }
@@ -230,6 +230,13 @@ public:
     std::vector<value_t *> get_output_values() const {
         std::vector<value_t *> out_vals;
         for (const op_ptr &n : ops_) {
+            // Handle End op: directly mark its input as output
+            if (n->get_kind() == graph::op_kind::End) {
+                auto end_input = n->get_input_value(0);
+                out_vals.emplace_back(end_input.get());
+                continue;
+            }
+
             for (const value_ptr &out_val : n->get_output_values()) {
                 std::vector<value_t::consumer_t> consumers
                         = out_val->get_consumers();
@@ -239,8 +246,8 @@ public:
                     op_t &csm_op = csm.get_op();
                     if (std::none_of(ops_.begin(), ops_.end(),
                                 [&csm_op](const op_ptr &op) {
-                                    return op.get() == &csm_op;
-                                })) {
+                        return op.get() == &csm_op;
+                    })) {
                         has_outer_consumer = true;
                         break;
                     }
@@ -353,51 +360,49 @@ public:
         auto graph_in_vals = get_input_values();
         auto graph_out_vals = get_output_values();
 
-        auto set_logical_tensors =
-                [](std::vector<value_t *> &edges,
-                        const std::vector<graph::logical_tensor_t> &givens,
-                        bool check_given, bool must_have_shape) {
-                    for (auto &edge : edges) {
-                        size_t edge_id = edge->get_logical_tensor().id;
+        auto set_logical_tensors
+                = [](std::vector<value_t *> &edges,
+                          const std::vector<graph::logical_tensor_t> &givens,
+                          bool check_given, bool must_have_shape) {
+            for (auto &edge : edges) {
+                size_t edge_id = edge->get_logical_tensor().id;
 
-                        // partition in/outs should not have default id. There
-                        // must be some errors in previous graph transformation
-                        // stage
-                        if (edge_id == std::numeric_limits<size_t>::max())
-                            return graph::status::invalid_graph;
+                // partition in/outs should not have default id. There
+                // must be some errors in previous graph transformation
+                // stage
+                if (edge_id == std::numeric_limits<size_t>::max())
+                    return graph::status::invalid_graph;
 
-                        bool found = false;
-                        for (const auto &given : givens) {
-                            if (edge_id == given.id) {
-                                if (check_given) {
-                                    // check given lts
-                                    bool valid = given.data_type
-                                            != graph::data_type::undef;
-                                    if (must_have_shape) {
-                                        valid = valid && given.ndims >= 0;
-                                        for (size_t i = 0;
-                                                i < static_cast<size_t>(
-                                                        given.ndims);
-                                                i++) {
-                                            const bool known = given.dims[i]
-                                                    != DNNL_GRAPH_UNKNOWN_DIM;
-                                            valid = valid && known;
-                                        }
-                                    }
-                                    if (!valid)
-                                        return graph::status::invalid_arguments;
+                bool found = false;
+                for (const auto &given : givens) {
+                    if (edge_id == given.id) {
+                        if (check_given) {
+                            // check given lts
+                            bool valid = given.data_type
+                                    != graph::data_type::undef;
+                            if (must_have_shape) {
+                                valid = valid && given.ndims >= 0;
+                                for (size_t i = 0;
+                                        i < static_cast<size_t>(given.ndims);
+                                        i++) {
+                                    const bool known = given.dims[i]
+                                            != DNNL_GRAPH_UNKNOWN_DIM;
+                                    valid = valid && known;
                                 }
-
-                                edge->set_logical_tensor(given);
-                                found = true;
-                                break;
                             }
+                            if (!valid) return graph::status::invalid_arguments;
                         }
 
-                        if (!found) return graph::status::invalid_arguments;
+                        edge->set_logical_tensor(given);
+                        found = true;
+                        break;
                     }
-                    return graph::status::success;
-                };
+                }
+
+                if (!found) return graph::status::invalid_arguments;
+            }
+            return graph::status::success;
+        };
 
         graph::status_t ret;
         ret = set_logical_tensors(graph_in_vals, inputs, true, true);

@@ -1,5 +1,6 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
+* Copyright 2025 ZTE Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -16,7 +17,13 @@
 #ifndef CPU_RV64_RVV_POSTOPS_HPP
 #define CPU_RV64_RVV_POSTOPS_HPP
 
+#include <memory>
+#include <vector>
 #include <riscv_vector.h>
+
+#include "common/primitive_desc_iterator.hpp"
+#include "cpu/rv64/rvv_binary.hpp"
+#include "cpu/rv64/rvv_eltwise.hpp"
 
 namespace dnnl {
 namespace impl {
@@ -24,10 +31,88 @@ namespace cpu {
 namespace rv64 {
 
 struct rvv_postops_t {
-    rvv_postops_t(const post_ops_t &po)
-        : alg_(po.len() > 0 ? po.entry_[0].eltwise.alg : alg_kind::undef) {
+    rvv_postops_t(const post_ops_t &po) : po_(po) {
         assert(po.len() <= 1 && "rvv_postops_t supports at most one post-op");
+        if (po.len() > 0) {
+            if (po.entry_[0].is_eltwise()) {
+                alg_ = po.entry_[0].eltwise.alg;
+            } else if (po.entry_[0].is_binary()) {
+                alg_ = po.entry_[0].binary.alg;
+            }
+        }
     }
+
+    rvv_postops_t() = default;
+
+    status_t init(engine_t *engine, const post_ops_t &post_ops,
+            const memory_desc_t &dst_md, int post_op_start_index = 0) {
+        post_op_start_index_ = post_op_start_index;
+
+        post_ops_t local_post_ops = post_ops;
+        CHECK(local_post_ops.set_default_formats(&dst_md));
+        dst_data_type_ = dst_md.data_type;
+
+        if (dst_data_type_ != data_type::f32) return status::unimplemented;
+
+        post_op_primitives_.clear();
+        po_ = local_post_ops;
+
+        const int num_post_ops = local_post_ops.len() - post_op_start_index_;
+        if (num_post_ops > 0) post_op_primitives_.reserve(num_post_ops);
+
+        for (int i = post_op_start_index_; i < local_post_ops.len(); i++) {
+            auto &po = local_post_ops.entry_[i];
+
+            if (po.is_binary()) {
+                binary_desc_t po_desc;
+                po_desc.primitive_kind = primitive_kind::binary;
+                po_desc.alg_kind = po.binary.alg;
+                po_desc.src_desc[0] = dst_md;
+                po_desc.src_desc[1] = po.binary.src1_desc;
+                po_desc.src_desc[2] = po.binary.src2_desc;
+                po_desc.dst_desc = dst_md;
+
+                auto empty_attr = dnnl_primitive_attr();
+                primitive_desc_iterator_t it(engine,
+                        reinterpret_cast<const op_desc_t *>(&po_desc),
+                        &empty_attr, nullptr);
+                if (++it == it.end()) return status::unimplemented;
+
+                std::shared_ptr<primitive_desc_t> bin_pd = *it;
+                std::shared_ptr<primitive_t> bin_prim;
+                CHECK(bin_pd->create_primitive(bin_prim, engine));
+                post_op_primitives_.push_back(bin_prim);
+
+            } else if (po.is_eltwise()) {
+                eltwise_desc_t po_desc;
+                po_desc.primitive_kind = primitive_kind::eltwise;
+                po_desc.prop_kind = prop_kind::forward_inference;
+                po_desc.alg_kind = po.eltwise.alg;
+                po_desc.alpha = po.eltwise.alpha;
+                po_desc.beta = po.eltwise.beta;
+                po_desc.src_desc = dst_md;
+                po_desc.dst_desc = dst_md;
+
+                auto empty_attr = dnnl_primitive_attr();
+                primitive_desc_iterator_t it(engine,
+                        reinterpret_cast<const op_desc_t *>(&po_desc),
+                        &empty_attr, nullptr);
+                if (++it == it.end()) return status::unimplemented;
+
+                std::shared_ptr<primitive_desc_t> elt_pd = *it;
+                std::shared_ptr<primitive_t> elt_prim;
+                CHECK(elt_pd->create_primitive(elt_prim, engine));
+                post_op_primitives_.push_back(elt_prim);
+
+            } else {
+                return status::unimplemented;
+            }
+        }
+
+        return status::success;
+    }
+
+    explicit rvv_postops_t(alg_kind_t alg) : alg_(alg) {}
 
     static bool post_ops_ok(const post_ops_t &po) {
         if (po.len() == 0) return true;
@@ -42,6 +127,11 @@ struct rvv_postops_t {
         }
     }
 
+    /**
+     * @warning This function is part of the old post-ops integration style
+     * and is kept for compatibility with existing usages (e.g. rvv_matmul).
+     * New post-ops implementations should use the primitive-based `execute` method.
+     */
     inline vfloat32m1_t apply(vfloat32m1_t v, size_t vl) const {
         switch (alg_) {
             case alg_kind::eltwise_relu: {
@@ -52,8 +142,15 @@ struct rvv_postops_t {
         }
     }
 
+    status_t execute(
+            const exec_ctx_t &ctx, void *src, void *dst = nullptr) const;
+
 private:
-    alg_kind_t alg_;
+    alg_kind_t alg_ = alg_kind::undef;
+    post_ops_t po_;
+    int post_op_start_index_ = 0;
+    data_type_t dst_data_type_ = data_type::undef;
+    std::vector<std::shared_ptr<primitive_t>> post_op_primitives_;
 };
 
 } // namespace rv64

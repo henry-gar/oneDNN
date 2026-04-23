@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -75,8 +75,9 @@ struct reusable_params_t {
     bool with_relu;
     bool with_leaky_relu;
     bool calculate_stats;
+    bool require_stateless_addressing;
 
-    uint8_t padding[4] = {0};
+    uint8_t padding[3] = {0};
 
     // Close to one set of configurations per block layout (9 common cases)
     compute::dispatch_compile_params_t calc_stat_params;

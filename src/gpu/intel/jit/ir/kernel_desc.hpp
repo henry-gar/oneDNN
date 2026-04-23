@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -18,8 +18,8 @@
 #define GPU_INTEL_JIT_IR_KERNEL_DESC_HPP
 
 #include "common/serialization.hpp"
+#include "gemmstone/dsl/kernel.hpp"
 #include "gpu/intel/compute/utils.hpp"
-#include "gpu/intel/jit/ir/hw.hpp"
 
 namespace dnnl {
 namespace impl {
@@ -34,26 +34,31 @@ class kernel_t;
 
 namespace jit {
 
+namespace dsl = gemmstone::dsl;
+
 class kernel_info_t;
 class kernel_params_base_t;
-namespace kernel {
-class iface_t;
-}
 
 class kernel_desc_base_t {
 public:
     virtual ~kernel_desc_base_t() = default;
     virtual std::string kernel_name() const = 0;
-    virtual kernel::options_t options(const impl::engine_t *engine) const = 0;
-    virtual bool with_dpas() const = 0;
+    virtual dsl::kernel::options_t options(const impl::engine_t *engine) const
+            = 0;
     virtual compute::range_t local_range() const = 0;
-    virtual void init_kernel_iface(kernel::iface_t &kernel_iface) const = 0;
+    virtual void init_kernel_iface(dsl::kernel::iface_t &kernel_iface) const
+            = 0;
     virtual void init_kernel_info(kernel_info_t &kernel_info,
             const kernel_params_base_t &params,
-            const impl::engine_t *engine) const = 0;
+            const impl::engine_t *engine) const
+            = 0;
     virtual status_t create_kernel(compute::kernel_t &kernel,
-            primitive_t *primitive, impl::engine_t *engine) const = 0;
+            primitive_t *primitive, impl::engine_t *engine) const
+            = 0;
     virtual serialization_stream_t serialize() const = 0;
+#if __cplusplus >= 202002L
+    bool operator==(const kernel_desc_base_t &) const = default;
+#endif
 };
 
 class kernel_params_base_t {

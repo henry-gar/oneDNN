@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -16,8 +16,9 @@
 
 #include "gpu/intel/jit/pass/overflow.hpp"
 
+#include "gemmstone/../../dsl/ir/pass/trace.hpp"
 #include "gpu/intel/jit/pass/expr_scalarizer.hpp"
-#include "gpu/intel/jit/utils/trace.hpp"
+#include "gpu/intel/logging.hpp"
 
 namespace dnnl {
 namespace impl {
@@ -139,7 +140,8 @@ private:
         auto *binary = e.as_ptr<binary_op_t>();
         if (binary) {
             return binary_op_t::make(binary->op_kind,
-                    cast(binary->a, type_t::u64(e.type().elems())), binary->b);
+                    cast(binary->a, dsl::type_t::u64(e.type().elems())),
+                    binary->b);
         }
 
         gpu_error_not_expected() << "Can't fix overflow: " << e;
@@ -265,9 +267,9 @@ private:
 };
 
 stmt_t fix_int32_overflow(const stmt_t &s, ir_context_t &ir_ctx) {
-    trace_start();
+    ir::trace_start();
     auto ret = overflow_fixer_t(ir_ctx).mutate(s);
-    trace_pass("fix_int32_overflow", ret, ir_ctx);
+    ir::trace_pass("fix_int32_overflow", ret, ir_ctx);
     return ret;
 }
 

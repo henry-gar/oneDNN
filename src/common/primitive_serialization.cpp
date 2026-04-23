@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2025 Intel Corporation
+* Copyright 2021 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -187,6 +187,7 @@ void serialize(serialization_stream_t &sstream, const primitive_attr_t &attr) {
     // acc_mode
     sstream.append(attr.acc_mode_);
 
+    // scales
     if (!attr.scales_.has_default_values()) {
         sstream.append('s');
         attr.scales_.serialize(sstream);
@@ -213,7 +214,7 @@ void serialize(serialization_stream_t &sstream, const primitive_attr_t &attr) {
 
     if (!attr.dropout_.has_default_values()) {
         sstream.append('d');
-        serialize(sstream, attr.dropout_.user_dropout_desc_);
+        attr.dropout_.serialize(sstream);
     }
 
     serialize(sstream, attr.post_ops_);
@@ -580,6 +581,7 @@ void serialize(serialization_stream_t &sstream, const sum_desc_t &desc) {
 void serialize(serialization_stream_t &sstream, const sdpa_desc_t &desc) {
     // Kind
     sstream.append(desc.primitive_kind);
+    sstream.append(desc.prop_kind);
     serialize(sstream, desc.q_desc);
     serialize(sstream, desc.k_desc);
     serialize(sstream, desc.v_desc);
@@ -587,7 +589,12 @@ void serialize(serialization_stream_t &sstream, const sdpa_desc_t &desc) {
     desc.kq_zero_points.serialize(sstream);
     desc.vs_scales.serialize(sstream);
     desc.vs_zero_points.serialize(sstream);
+    serialize(sstream, desc.dS_desc);
     serialize(sstream, desc.dst_desc);
+    serialize(sstream, desc.diff_dst_desc);
+    serialize(sstream, desc.diff_q_desc);
+    serialize(sstream, desc.diff_k_desc);
+    serialize(sstream, desc.diff_v_desc);
     serialize(sstream, desc.attn_mask_desc);
     serialize(sstream, desc.scale_desc);
     sstream.append(desc.kq_acc_dt);
@@ -596,6 +603,17 @@ void serialize(serialization_stream_t &sstream, const sdpa_desc_t &desc) {
     sstream.append(desc.kv_head_number);
     sstream.append(desc.mask_type);
     sstream.append(desc.softmax_alg);
+}
+
+void serialize(serialization_stream_t &sstream, const gated_mlp_desc_t &desc) {
+    // Kind
+    sstream.append(desc.primitive_kind);
+    serialize(sstream, desc.src_desc);
+    serialize(sstream, desc.w_gate_desc);
+    serialize(sstream, desc.w_up_desc);
+    serialize(sstream, desc.w_down_desc);
+    serialize(sstream, desc.dst_desc);
+    sstream.append(desc.activation);
 }
 
 } // namespace impl

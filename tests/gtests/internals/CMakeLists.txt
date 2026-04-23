@@ -1,5 +1,5 @@
 #===============================================================================
-# Copyright 2020-2023 Intel Corporation
+# Copyright 2020 Intel Corporation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -49,5 +49,17 @@ register_exe(${TEST_EXE}_env_vars_onednn
         "${MAIN_SRC_GTEST};${CMAKE_CURRENT_SOURCE_DIR}/test_env_vars_onednn.cpp"
         "test" "dnnl_gtest")
 list(REMOVE_ITEM TEST_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_env_vars_onednn.cpp)
+
+# Register GMLP tests as a separate executable
+register_exe(${TEST_EXE}_gmlp
+    "${MAIN_SRC_GTEST};${CMAKE_CURRENT_SOURCE_DIR}/test_gated_mlp.cpp;${CMAKE_CURRENT_SOURCE_DIR}/test_utils.cpp"
+        "test" "dnnl_gtest")
+list(REMOVE_ITEM TEST_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_gated_mlp.cpp)
+
+# Register SDPA tests as a separate executable due to their runtime
+register_exe(${TEST_EXE}_sdpa
+        "${MAIN_SRC_GTEST};${CMAKE_CURRENT_SOURCE_DIR}/test_sdpa.cpp;${CMAKE_CURRENT_SOURCE_DIR}/test_utils.cpp"
+        "test" "dnnl_gtest")
+list(REMOVE_ITEM TEST_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_sdpa.cpp)
 
 register_exe(${TEST_EXE} "${TEST_SOURCES}" "test" "dnnl_gtest")

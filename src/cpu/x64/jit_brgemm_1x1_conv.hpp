@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2025 Intel Corporation
+* Copyright 2021 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -70,8 +70,8 @@ struct brgemm_1x1_convolution_fwd_t : public primitive_t {
         std::shared_ptr<brgemm_containers::brgemm_desc_container_t> brgs_;
         std::forward_list<brgemm_init_params_t> brgemm_init_params_;
 
-        bool need_postwork_;
-        int ic_chunks_;
+        bool need_postwork_ {};
+        int ic_chunks_ {};
 
         jit_brgemm_conv_conf_t jcp_ = utils::zero<decltype(jcp_)>();
 

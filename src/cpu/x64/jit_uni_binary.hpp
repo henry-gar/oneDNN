@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -40,7 +40,7 @@ struct jit_uni_binary_t : public primitive_t {
 
         status_t init(engine_t *engine);
 
-        jit_binary_conf_t get_conf() const { return conf_; };
+        jit_binary_conf_t get_conf() const { return conf_; }
 
     private:
         op_t get_op_type(const memory_desc_wrapper &src0_d);
@@ -62,6 +62,8 @@ struct jit_uni_binary_t : public primitive_t {
         bool is_different_layouts_allowed(const memory_desc_wrapper &src0_d,
                 const memory_desc_wrapper &src1_d) const;
         bool is_applicable();
+
+        void init_scratchpad();
 
         jit_binary_conf_t conf_;
     };

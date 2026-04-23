@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -129,9 +129,12 @@ struct brgemm_inner_product_fwd_t : public primitive_t {
                 if (jbgp_.is_amx) {
                     brgattr.max_bs = bs;
                     brgattr.wary_A_k_tail_read = false;
-                    brgattr.hint_expected_A_size = jbgp_.mb * jbgp_.ic;
-                    brgattr.hint_expected_B_size = jbgp_.oc * jbgp_.ic;
-                    brgattr.hint_expected_C_size = jbgp_.mb * jbgp_.oc;
+                    brgattr.hint_expected_A_size
+                            = static_cast<dim_t>(jbgp_.mb) * jbgp_.ic;
+                    brgattr.hint_expected_B_size
+                            = static_cast<dim_t>(jbgp_.oc) * jbgp_.ic;
+                    brgattr.hint_expected_C_size
+                            = static_cast<dim_t>(jbgp_.mb) * jbgp_.oc;
                     brgattr.hint_innermost_loop = brgemm_innermost_undef;
                     brgattr.use_uker = jbgp_.use_uker;
                     brgattr.use_interleave_stores = jbgp_.use_interleave_stores;
@@ -309,9 +312,12 @@ struct brgemm_inner_product_bwd_data_t : public primitive_t {
                     brgemm_attr_t brgattr;
                     brgattr.max_bs = bs;
                     brgattr.wary_A_k_tail_read = false;
-                    brgattr.hint_expected_A_size = jbgp_.mb * jbgp_.oc;
-                    brgattr.hint_expected_B_size = jbgp_.oc * jbgp_.ic;
-                    brgattr.hint_expected_C_size = jbgp_.mb * jbgp_.ic;
+                    brgattr.hint_expected_A_size
+                            = static_cast<dim_t>(jbgp_.mb) * jbgp_.oc;
+                    brgattr.hint_expected_B_size
+                            = static_cast<dim_t>(jbgp_.oc) * jbgp_.ic;
+                    brgattr.hint_expected_C_size
+                            = static_cast<dim_t>(jbgp_.mb) * jbgp_.ic;
                     brgattr.hint_innermost_loop = brgemm_innermost_undef;
                     brgattr.use_uker = jbgp_.use_uker;
                     brgattr.use_interleave_stores = jbgp_.use_interleave_stores;
@@ -351,10 +357,11 @@ struct brgemm_inner_product_bwd_data_t : public primitive_t {
             auto adj_oc = jbgp_.use_buffer_a
                     ? utils::rnd_up(jbgp_.oc, jbgp_.oc_block)
                     : jbgp_.oc;
-            auto bs = (is_K_tail) ? 1
-                                  : ((is_bs_tail) ? (adj_oc / jbgp_.oc_block)
-                                                          % jbgp_.nb_oc_blocking
-                                                  : jbgp_.nb_oc_blocking);
+            auto bs = (is_K_tail)
+                    ? 1
+                    : ((is_bs_tail) ? (adj_oc / jbgp_.oc_block)
+                                              % jbgp_.nb_oc_blocking
+                                    : jbgp_.nb_oc_blocking);
 
             return bs;
         }
@@ -498,9 +505,12 @@ struct brgemm_inner_product_bwd_weights_t : public primitive_t {
                     brgemm_attr_t brgattr;
                     brgattr.max_bs = bs;
                     brgattr.wary_A_k_tail_read = false;
-                    brgattr.hint_expected_A_size = jbgp_.mb * jbgp_.ic;
-                    brgattr.hint_expected_B_size = jbgp_.mb * jbgp_.oc;
-                    brgattr.hint_expected_C_size = jbgp_.ic * jbgp_.oc;
+                    brgattr.hint_expected_A_size
+                            = static_cast<dim_t>(jbgp_.mb) * jbgp_.ic;
+                    brgattr.hint_expected_B_size
+                            = static_cast<dim_t>(jbgp_.mb) * jbgp_.oc;
+                    brgattr.hint_expected_C_size
+                            = static_cast<dim_t>(jbgp_.ic) * jbgp_.oc;
                     brgattr.hint_innermost_loop = brgemm_innermost_undef;
                     brgattr.use_uker = jbgp_.use_uker;
                     brgattr.use_interleave_stores = jbgp_.use_interleave_stores;
@@ -537,10 +547,11 @@ struct brgemm_inner_product_bwd_weights_t : public primitive_t {
         }
 
         int get_brg_batchsize(bool is_bs_tail, bool is_K_tail) const {
-            auto bs = (is_K_tail) ? 1
-                                  : ((is_bs_tail) ? (jbgp_.os / jbgp_.os_block)
-                                                          % jbgp_.nb_os_blocking
-                                                  : jbgp_.nb_os_blocking);
+            auto bs = (is_K_tail)
+                    ? 1
+                    : ((is_bs_tail) ? (jbgp_.os / jbgp_.os_block)
+                                              % jbgp_.nb_os_blocking
+                                    : jbgp_.nb_os_blocking);
             return bs;
         }
 

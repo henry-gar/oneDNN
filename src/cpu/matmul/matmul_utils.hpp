@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 * Copyright 2022 Arm Ltd. and affiliates
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
@@ -39,9 +39,9 @@ struct matmul_helper_t {
     int ndims() const { return dst_md_.ndims(); }
     bool batched() const { return ndims() > 2; }
 
-    dim_t batch() const { return get_batch_size(dst_md_); };
-    dim_t src_batch() const { return get_batch_size(src_md_); };
-    dim_t wei_batch() const { return get_batch_size(weights_md_); };
+    dim_t batch() const { return get_batch_size(dst_md_); }
+    dim_t src_batch() const { return get_batch_size(src_md_); }
+    dim_t wei_batch() const { return get_batch_size(weights_md_); }
 
     dim_t M() const { return dst_md_.dims()[ndims() - 2]; }
     dim_t N() const { return dst_md_.dims()[ndims() - 1]; }
@@ -213,7 +213,8 @@ private:
         dim_t batch_size = 1;
         for (int b_idx = 0; b_idx < batch_dims; b_idx++) {
             dim_t batch_dim = tensor_md.dims()[b_idx];
-            if (DNNL_RUNTIME_DIM_VAL == batch_dim) return DNNL_RUNTIME_DIM_VAL;
+            if (is_runtime_value(batch_dim))
+                return runtime_value_for(batch_size);
 
             batch_size *= batch_dim;
         }

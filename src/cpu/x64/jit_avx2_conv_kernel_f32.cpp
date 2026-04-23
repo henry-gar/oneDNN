@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2016-2025 Intel Corporation
+* Copyright 2016 Intel Corporation
 * Copyright 2018 YANDEX LLC
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
@@ -84,11 +84,11 @@ void jit_avx2_conv_fwd_kernel_f32_t::oh_step_unroll_kw(
     int ic_tail = jcp.ic_tail;
 
     for (int ki = 0; ki < kw; ki++) {
-        int jj_start = nstl::max(0, div_up(pad_l - ki * dilate_w, stride_w));
+        int jj_start = div_up(nstl::max(0, pad_l - ki * dilate_w), stride_w);
         int jj_end = ur_w
-                - nstl::max(0,
-                        div_up(ki * dilate_w + pad_r - (kw - 1) * dilate_w,
-                                stride_w));
+                - div_up(nstl::max(0,
+                                 ki * dilate_w + pad_r - (kw - 1) * dilate_w),
+                        stride_w);
 
         auto compute = [&](int cur_ic_blk) {
             for (int ifm2 = 0; ifm2 < cur_ic_blk; ifm2++) {
@@ -219,18 +219,17 @@ void jit_avx2_conv_fwd_kernel_f32_t::apply_postops(
                     rhs_arg_params_tail;
             iterate(oc_blocks, ur_w, oc_tail,
                     [&](const bool mask_flag, const int i, const int j) {
-                        const size_t aux_output_offset
-                                = get_output_offset(i, j);
-                        const auto vmm_idx = get_ymm_idx(ur_w, i, j);
-                        vmm_idxs.emplace(vmm_idx);
+                const size_t aux_output_offset = get_output_offset(i, j);
+                const auto vmm_idx = get_ymm_idx(ur_w, i, j);
+                vmm_idxs.emplace(vmm_idx);
 
-                        rhs_arg_params_tail.vmm_idx_to_out_reg.emplace(
-                                vmm_idx, reg_output);
-                        rhs_arg_params_tail.vmm_idx_to_out_elem_off_val.emplace(
-                                vmm_idx, aux_output_offset);
-                        if (mask_flag)
-                            rhs_arg_params_tail.vmm_tail_idx_.emplace(vmm_idx);
-                    });
+                rhs_arg_params_tail.vmm_idx_to_out_reg.emplace(
+                        vmm_idx, reg_output);
+                rhs_arg_params_tail.vmm_idx_to_out_elem_off_val.emplace(
+                        vmm_idx, aux_output_offset);
+                if (mask_flag)
+                    rhs_arg_params_tail.vmm_tail_idx_.emplace(vmm_idx);
+            });
             rhs_arg_params = rhs_arg_params_tail;
             rhs_arg_params.vmm_tail_idx_.clear();
 
@@ -1487,6 +1486,26 @@ status_t jit_avx2_conv_bwd_weights_kernel_f32_t::init_conf(jit_conv_conf_t &jcp,
     jcp.oc_block = simd_w;
     jcp.nb_oc = div_up(jcp.oc, jcp.oc_block);
     jcp.nb_ic_blocking = jcp.nb_oc_blocking = 1;
+
+    jcp.typesize_in = types::data_type_size(src_d.data_type());
+    jcp.typesize_out = types::data_type_size(diff_dst_d.data_type());
+
+    const bool is_src_layout_blocked = jcp.src_tag == dat_tag_nCx8c;
+    const bool is_dst_layout_blocked = jcp.dst_tag == dat_tag_nCx8c;
+
+    dim_t src_size = static_cast<dim_t>(jcp.mb)
+            * (is_src_layout_blocked ? rnd_up(jcp.ic, jcp.ic_block) : jcp.ic)
+            * jcp.id * jcp.ih * jcp.iw * jcp.typesize_in;
+
+    VDISPATCH_CONV_IC(src_size <= INT_MAX, VERBOSE_UNSUPPORTED_FEATURE,
+            "src size > INT_MAX is not supported");
+
+    dim_t diff_dst_size = static_cast<dim_t>(jcp.mb)
+            * (is_dst_layout_blocked ? rnd_up(jcp.oc, jcp.oc_block) : jcp.oc)
+            * jcp.id * jcp.ih * jcp.iw * jcp.typesize_in;
+
+    VDISPATCH_CONV_IC(diff_dst_size <= INT_MAX, VERBOSE_UNSUPPORTED_FEATURE,
+            "diff_dst size > INT_MAX is not supported");
 
     return status::success;
 }

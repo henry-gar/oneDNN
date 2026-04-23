@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -124,8 +124,8 @@ private:
     name##_param_t name##_; \
     param_init_t name##_init_ \
             = register_param([](const container_config_t *c) { \
-                  return &((const params_t *)c)->name##_; \
-              });
+        return &((const params_t *)c)->name##_; \
+    });
 
     INIT_PARAM(use_fused_atomics_reduction);
     INIT_PARAM(ic_block);
@@ -141,9 +141,10 @@ public:
     void override_set(const std::string &s, bool is_env) override {
         auto params = get_all_params();
         auto parts = gpu_utils::split(s);
+        const std::string sep = "=";
         for (auto &p : parts) {
             if (p.empty()) continue;
-            auto sub_parts = gpu_utils::split(p, "=");
+            auto sub_parts = gpu_utils::split(p, sep);
             gpu_assert(sub_parts.size() == 2);
             auto &key = sub_parts[0];
             auto &value = sub_parts[1];
@@ -169,6 +170,7 @@ public:
     bool is_blocked_16n16c = false;
     bool is_blocked_32n16c = false;
     bool is_nhwc = false;
+    bool require_stateless_addressing = true;
 };
 
 void maybe_override_bn_conf_params_env(params_t &conf);

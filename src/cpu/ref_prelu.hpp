@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -154,6 +154,7 @@ struct ref_prelu_bwd_t : public primitive_t {
                 nthr_ = nstl::min(nthr_, work_amount);
                 scratchpad_size = prelu::get_scalar_scratchpad_offset(
                         nthr_, nthr_, src_d.nelems());
+                scratchpad_size += nthr_; // For final reduction.
             } else {
                 dim_t group_size, buf_size;
                 nthr_ = nstl::min(nthr_, static_cast<int>(weights_d.nelems()));

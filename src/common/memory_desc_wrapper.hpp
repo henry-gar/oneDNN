@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2016-2025 Intel Corporation
+* Copyright 2016 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -72,9 +72,75 @@ struct memory_desc_wrapper : public c_compatible {
         return format_kind() == format_kind::cublaslt_blocked;
     }
     bool is_sparse_desc() const { return format_kind() == format_kind::sparse; }
+    bool is_grouped_desc() const {
+#if DNNL_EXPERIMENTAL_GROUPED_MEMORY
+        return is_sparse_desc()
+                && sparse_desc().encoding == sparse_encoding::grouped;
+#else
+        return false;
+#endif
+    }
 
     bool is_host_scalar_desc() const {
         return format_kind() == format_kind::host_scalar;
+    }
+
+    /**
+     * Checks whether the memory descriptor represents a canonical (row-major)
+     * layout.
+     *
+     * A canonical layout is defined as one where the strides follow the
+     * standard row-major ordering of the remaining dimensions, ignoring any
+     * dimensions of size 1.
+     *
+     * @note Format tags (e.g., "abc", "acb") may correspond to different
+     *   stride arrays but the same physical layout when unit dimensions are
+     *   present. Therefore, checking for canonical layout is more reliable than
+     *   matching a specific tag.
+     *
+     * Example:
+     *   dims    = [10, 12, 1]
+     *   strides = [12, 1, 1]
+     *   tag     = "abc"
+     *   -> remove unit dims: dims = [10,12], strides = [12,1]
+     *   -> canonical (true)
+     *
+     *   dims    = [10, 1, 12]
+     *   strides = [12, 12, 1]
+     *   tag     = "acb"
+     *   -> remove unit dims: dims = [10,12], strides = [12,1]
+     *   -> canonical (true)
+     *
+     *   dims    = [10, 12, 3]
+     *   strides = [36, 1, 3]
+     *   tag     = "acb"
+     *   -> canonical (false)
+     *
+     * @return true if the descriptor has canonical layout, false otherwise.
+     */
+    bool is_canonical() const {
+        if (!is_plain()) return false;
+
+        dims_t normalized_dims = {};
+        dims_t normalized_strides = {};
+
+        int normalized_ndims = 0;
+        for (int i = 0; i < ndims(); ++i) {
+            if (dims()[i] != 1) {
+                normalized_dims[normalized_ndims] = dims()[i];
+                normalized_strides[normalized_ndims] = strides()[i];
+                normalized_ndims++;
+            }
+        }
+
+        if (normalized_ndims == 0) return true;
+
+        dim_t expected_stride = 1;
+        for (int i = normalized_ndims - 1; i >= 0; --i) {
+            if (normalized_strides[i] != expected_stride) return false;
+            expected_stride *= normalized_dims[i];
+        }
+        return true;
     }
 
     const blocking_desc_t &blocking_desc() const {
@@ -125,7 +191,7 @@ struct memory_desc_wrapper : public c_compatible {
      * is true, and the number of data elements otherwise */
     dim_t nelems(bool with_padding = false) const {
         if (is_zero()) return 0;
-        if (has_runtime_dims()) return DNNL_RUNTIME_DIM_VAL;
+        if (has_runtime_dims()) return runtime_value_for<dim_t>();
         return utils::array_product(
                 with_padding ? padded_dims() : dims(), ndims());
     }
@@ -146,7 +212,9 @@ struct memory_desc_wrapper : public c_compatible {
     /** For sub-byte data types returns number of elements per byte.
      * For the rest data types returns 1. */
     size_t sub_byte_data_type_multiplier() const {
-        if (utils::one_of(data_type(), data_type::s4, data_type::u4)) return 2;
+        if (utils::one_of(data_type(), data_type::s4, data_type::u4,
+                    data_type::f4_e2m1, data_type::f4_e3m0))
+            return 2;
         return 1;
     }
 
@@ -182,12 +250,12 @@ struct memory_desc_wrapper : public c_compatible {
 
         auto calculate_size
                 = [ndims, &pdims](int cmask, size_t buff_data_size) {
-                      assert(utils::one_of(cmask, 1, 2, 3, 5, 13, 27));
-                      dim_t prod = 1;
-                      for (int d = 0; d < ndims; ++d)
-                          if (cmask & (1 << d)) { prod *= pdims[d]; }
-                      return (size_t)prod * buff_data_size;
-                  };
+            assert(utils::one_of(cmask, 1, 2, 3, 5, 13, 27));
+            dim_t prod = 1;
+            for (int d = 0; d < ndims; ++d)
+                if (cmask & (1 << d)) { prod *= pdims[d]; }
+            return (size_t)prod * buff_data_size;
+        };
 
         if (flag == compensation_conv_s8s8) {
             return calculate_size(extra().compensation_mask,
@@ -243,7 +311,7 @@ struct memory_desc_wrapper : public c_compatible {
             return 0;
         }
 
-        if (has_runtime_dims_or_strides()) return DNNL_RUNTIME_SIZE_VAL;
+        if (has_runtime_dims_or_strides()) return runtime_value_for<size_t>();
 
         if (is_wino_desc()) {
             return wino_desc().size;
@@ -330,7 +398,26 @@ struct memory_desc_wrapper : public c_compatible {
                         return utils::div_up(nelems(true), CHAR_BIT);
                     default: assert(!"unknown index"); return 0;
                 }
-            } else {
+            }
+#if DNNL_EXPERIMENTAL_GROUPED_MEMORY
+            else if (sparse_desc().encoding == sparse_encoding::grouped) {
+                // Grouped encoding has values buffer and offsets buffer
+                switch (index) {
+                    case 0:
+                        // Return size for values.
+                        return utils::div_up(nnz() * data_type_size(),
+                                sub_byte_data_type_multiplier());
+                    case 1: {
+                        // Return size for offsets (group_count offsets).
+                        const auto offsets_dt = metadata_type(0);
+                        return (sparse_desc().grouped_desc.group_count)
+                                * types::data_type_size(offsets_dt);
+                    }
+                    default: assert(!"unknown index"); return 0;
+                }
+            }
+#endif
+            else {
                 assert(!"unknown sparse encoding");
                 return 0;
             }
@@ -375,7 +462,7 @@ struct memory_desc_wrapper : public c_compatible {
     /** returns true if at least one dim is not known */
     bool has_runtime_dims() const {
         for (int d = 0; d < ndims(); ++d)
-            if (dims()[d] == DNNL_RUNTIME_DIM_VAL) return true;
+            if (is_runtime_value(dims()[d])) return true;
         return false;
     }
 
@@ -383,7 +470,7 @@ struct memory_desc_wrapper : public c_compatible {
     bool has_runtime_strides() const {
         if (!is_blocking_desc()) return false;
         for (int d = 0; d < ndims(); ++d)
-            if (blocking_desc().strides[d] == DNNL_RUNTIME_DIM_VAL) return true;
+            if (is_runtime_value(blocking_desc().strides[d])) return true;
         return false;
     }
 

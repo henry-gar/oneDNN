@@ -1,5 +1,5 @@
 #===============================================================================
-# Copyright 2019-2025 Intel Corporation
+# Copyright 2019 Intel Corporation
 # Copyright 2020 Arm Ltd. and affiliates
 # Copyright 2021 FUJITSU LIMITED
 #
@@ -29,7 +29,7 @@ foreach(SOURCE_FILE ${SOURCES_EXTRA})
     list(APPEND SOURCES "${SOURCE_FILE}")
 endforeach()
 
-if((DNNL_TARGET_ARCH STREQUAL "X64") OR (DNNL_TARGET_ARCH STREQUAL "AARCH64"))
+if((DNNL_TARGET_ARCH STREQUAL "X64") OR (DNNL_TARGET_ARCH STREQUAL "AARCH64") OR (DNNL_TARGET_ARCH STREQUAL "RV64"))
     file(GLOB_RECURSE SOURCES_JIT_UTILS
         ${CMAKE_CURRENT_SOURCE_DIR}/jit_utils/*.[ch]
         ${CMAKE_CURRENT_SOURCE_DIR}/jit_utils/*.[ch]pp

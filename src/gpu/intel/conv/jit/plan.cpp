@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -18,9 +18,9 @@
 
 #include "gpu/intel/conv/jit/config.hpp"
 #include "gpu/intel/jit/ir/gemm_schedule.hpp"
-#include "gpu/intel/jit/ir/message.hpp"
+#include "gpu/intel/jit/ir/legacy.hpp"
 #include "gpu/intel/jit/ir/reduce.hpp"
-#include "gpu/intel/jit/ir/reorder.hpp"
+#include "gpu/intel/jit/ir/send_builder.hpp"
 #include "gpu/intel/jit/ir/send_plan.hpp"
 #include "gpu/intel/jit/ir/tensor.hpp"
 
@@ -154,21 +154,21 @@ void init_fwd(const config_t &cfg_, gemm_schedule_t &gemm_schedule,
     auto &dst_layout = cfg_.dst_layout().compute();
 
     // Initialize views.
-    auto mb = var_t::make(type_t::s32(), "mb");
-    auto ic = var_t::make(type_t::s32(), "ic");
-    auto oc = var_t::make(type_t::s32(), "oc");
-    auto kd = var_t::make(type_t::s32(), "kd");
-    auto kh = var_t::make(type_t::s32(), "kh");
-    auto kw = var_t::make(type_t::s32(), "kw");
-    auto g = var_t::make(type_t::s32(), "g");
+    auto mb = var_t::make(dsl::type_t::s32(), "mb");
+    auto ic = var_t::make(dsl::type_t::s32(), "ic");
+    auto oc = var_t::make(dsl::type_t::s32(), "oc");
+    auto kd = var_t::make(dsl::type_t::s32(), "kd");
+    auto kh = var_t::make(dsl::type_t::s32(), "kh");
+    auto kw = var_t::make(dsl::type_t::s32(), "kw");
+    auto g = var_t::make(dsl::type_t::s32(), "g");
 
     expr_t ow, oh, od;
     bool check_od = false;
     bool check_oh = false;
     bool check_ow = false;
-    od = var_t::make(type_t::s32(), "od");
-    oh = var_t::make(type_t::s32(), "oh");
-    ow = var_t::make(type_t::s32(), "ow");
+    od = var_t::make(dsl::type_t::s32(), "od");
+    oh = var_t::make(dsl::type_t::s32(), "oh");
+    ow = var_t::make(dsl::type_t::s32(), "ow");
     check_ow = (prb_.ow < cfg_.padded_dim(pvars::ow));
 
     // Initialize masks.
@@ -311,16 +311,16 @@ void init_bwd_d(const config_t &cfg_, gemm_schedule_t &gemm_schedule,
     auto &dst_layout = cfg_.dst_layout().compute();
 
     // Initialize views.
-    auto g = var_t::make(type_t::s32(), "g");
-    auto mb = var_t::make(type_t::s32(), "mb");
-    auto ic = var_t::make(type_t::s32(), "ic");
-    auto oc = var_t::make(type_t::s32(), "oc");
-    auto id = var_t::make(type_t::s32(), "id");
-    auto ih = var_t::make(type_t::s32(), "ih");
-    auto iw = var_t::make(type_t::s32(), "iw");
-    auto kd = var_t::make(type_t::s32(), "kd");
-    auto kh = var_t::make(type_t::s32(), "kh");
-    auto kw = var_t::make(type_t::s32(), "kw");
+    auto g = var_t::make(dsl::type_t::s32(), "g");
+    auto mb = var_t::make(dsl::type_t::s32(), "mb");
+    auto ic = var_t::make(dsl::type_t::s32(), "ic");
+    auto oc = var_t::make(dsl::type_t::s32(), "oc");
+    auto id = var_t::make(dsl::type_t::s32(), "id");
+    auto ih = var_t::make(dsl::type_t::s32(), "ih");
+    auto iw = var_t::make(dsl::type_t::s32(), "iw");
+    auto kd = var_t::make(dsl::type_t::s32(), "kd");
+    auto kh = var_t::make(dsl::type_t::s32(), "kh");
+    auto kw = var_t::make(dsl::type_t::s32(), "kw");
 
     // Initialize masks.
     expr_t od_mask(true), oh_mask(true), ow_mask(true);
@@ -518,16 +518,16 @@ void init_bwd_w(const config_t &cfg_, gemm_schedule_t &gemm_schedule,
     auto &bia_layout = cfg_.bia_layout().compute();
 
     // Initialize thread group views.
-    auto g = var_t::make(type_t::s32(), "g");
-    auto mb = var_t::make(type_t::s32(), "mb");
-    auto ic = var_t::make(type_t::s32(), "ic");
-    auto oc = var_t::make(type_t::s32(), "oc");
-    auto od = var_t::make(type_t::s32(), "od");
-    auto oh = var_t::make(type_t::s32(), "oh");
-    auto ow = var_t::make(type_t::s32(), "ow");
-    auto kd = var_t::make(type_t::s32(), "kd");
-    auto kh = var_t::make(type_t::s32(), "kh");
-    auto kw = var_t::make(type_t::s32(), "kw");
+    auto g = var_t::make(dsl::type_t::s32(), "g");
+    auto mb = var_t::make(dsl::type_t::s32(), "mb");
+    auto ic = var_t::make(dsl::type_t::s32(), "ic");
+    auto oc = var_t::make(dsl::type_t::s32(), "oc");
+    auto od = var_t::make(dsl::type_t::s32(), "od");
+    auto oh = var_t::make(dsl::type_t::s32(), "oh");
+    auto ow = var_t::make(dsl::type_t::s32(), "ow");
+    auto kd = var_t::make(dsl::type_t::s32(), "kd");
+    auto kh = var_t::make(dsl::type_t::s32(), "kh");
+    auto kw = var_t::make(dsl::type_t::s32(), "kw");
 
     // Initialize masks.
     expr_t id_mask(true), ih_mask(true), iw_mask(true);
@@ -685,7 +685,7 @@ void init_bwd_w(const config_t &cfg_, gemm_schedule_t &gemm_schedule,
 }
 
 reorder_plan_t create_reorder_plan(
-        const hw_t &hw, const layout_t &src, const layout_t &dst) {
+        const dsl::hw_t &hw, const layout_t &src, const layout_t &dst) {
     if (src.is_equal_normalized(dst)) return reorder_plan_t();
     if ((src.type() == dst.type()
                 || (src.type().is_f32() && dst.type().is_tf32()))
@@ -735,7 +735,7 @@ dim_t reorder_plan_t::estimate_regs() const {
     return utils::div_up(ret, grf_size());
 }
 
-reduce_plan_t create_reduce_plan(const hw_t &hw, const layout_t &src,
+reduce_plan_t create_reduce_plan(const dsl::hw_t &hw, const layout_t &src,
         const layout_t &dst, uint32_t mask) {
     reduce_plan_t ret(hw);
     ret.src = src;
@@ -815,13 +815,13 @@ bool x2r_plan_t::can_split(abc_kind_t abc, int factor) const {
 
     auto has_outer_block
             = [](const layout_t &layout, dim_t block, const pvar_t &idx = {}) {
-                  if (block == 1) return true;
-                  if (layout.blocks().empty()) return false;
-                  auto &b = layout.blocks().back();
-                  if (!idx.is_undef() && b.idx != idx) return false;
-                  if (b.size % block != 0) return false;
-                  return true;
-              };
+        if (block == 1) return true;
+        if (layout.blocks().empty()) return false;
+        auto &b = layout.blocks().back();
+        if (!idx.is_undef() && b.idx != idx) return false;
+        if (b.size % block != 0) return false;
+        return true;
+    };
 
     bool is_a = (abc == abc_kind_t::a);
     auto &load = (is_a ? a_load : b_load);
@@ -986,7 +986,7 @@ int fma_plan_t::bmnk_stop_idx(bmnk_kind_t bmnk, int subtile_idx) const {
 
 stmt_t fma_plan_t::create_stmt(ir_context_t &ir_ctx, buffer_manager_t &buf_mgr,
         const std::string &a, const std::string &b, const std::string &c,
-        int subtile_idx) const {
+        int subtile_idx, dsl::type_t a_override, dsl::type_t b_override) const {
     int c_buf_size = into<int>(size_bytes(c_layout, ir_ctx.grf_size()));
     auto a_buf = buf_mgr.get(a);
     auto b_buf = buf_mgr.get(b);
@@ -1004,7 +1004,7 @@ stmt_t fma_plan_t::create_stmt(ir_context_t &ir_ctx, buffer_manager_t &buf_mgr,
     icoord_t b_idx(3);
     icoord_t c_idx(3);
 
-    auto fma_funcs = create_fma_funcs(ir_ctx.hw());
+    auto fma_funcs = create_fma_funcs(ir_ctx.hw(), a_override, b_override);
 
     stmt_t stmt;
     for (int b = b0; b < b1; b += b_blk) {
@@ -1049,11 +1049,14 @@ stmt_t fma_plan_t::create_fma_block(const std::vector<func_t> &fmas,
     return ret;
 }
 
-std::vector<func_t> fma_plan_t::create_fma_funcs(const hw_t &hw) const {
-    auto &a = a_layout;
-    auto &b = b_layout;
+std::vector<func_t> fma_plan_t::create_fma_funcs(const dsl::hw_t &hw,
+        dsl::type_t a_override, dsl::type_t b_override) const {
+    auto a = (a_override.is_undef()) ? a_layout : a_layout.with(a_override);
+    auto b = (b_override.is_undef()) ? b_layout : b_layout.with(b_override);
     auto &c = c_layout;
     std::vector<func_t> ret;
+    gpu_assert(a.type().bitsize() == a_layout.type().bitsize());
+    gpu_assert(b.type().bitsize() == b_layout.type().bitsize());
     switch (fma_kind) {
         case fma_kind_t::mad: {
             int simd = max_bmn_blk();
@@ -1146,13 +1149,13 @@ grf_usage_t plan_t::grf_usage() const {
     int a_g2r_buf_regs = use_a_slm
             ? 0
             : x2r.a_load.estimate_regs(/*with_buffer=*/true,
-                    /*with_headers=*/false,
-                    /*reuse_headers=*/false);
+                      /*with_headers=*/false,
+                      /*reuse_headers=*/false);
     int b_g2r_buf_regs = use_b_slm
             ? 0
             : x2r.b_load.estimate_regs(/*with_buffer=*/true,
-                    /*with_headers=*/false,
-                    /*reuse_headers=*/false);
+                      /*with_headers=*/false,
+                      /*reuse_headers=*/false);
     if (x2r.a_reorder && x2r.b_reorder) {
         gpu_assert(!use_a_slm && !use_b_slm);
         // Reuse load buffer when both reorders are enabled.
@@ -1255,17 +1258,17 @@ std::string plan_t::str() const {
     return jit::add_indent("conv_plan", oss.str());
 }
 
-type_t get_accumulation_type(
-        const config_t &cfg, const type_t &a, const type_t &b) {
-    if (a.is_int()) return type_t::s32();
-    if (a.is_f64()) return type_t::f64();
+dsl::type_t get_accumulation_type(
+        const config_t &cfg, const dsl::type_t &a, const dsl::type_t &b) {
+    if (a.is_int()) return dsl::type_t::s32();
+    if (a.is_f64()) return dsl::type_t::f64();
     if (cfg.fma_kind() == fma_kind_t::mad && a.is_f16() && b.is_f16()
             && !cfg.prb().is_bwd_w) {
         // FIXME: f16 must use f32 accumulator according to documentation.
         // Temporarily keeping f16 to avoid regressions.
-        return type_t::f16();
+        return dsl::type_t::f16();
     }
-    return type_t::f32();
+    return dsl::type_t::f32();
 }
 
 layout_t make_with_block(const layout_t &base, const layout_t &inner) {
@@ -1319,29 +1322,29 @@ struct fma_context_t {
             bool is_a, const layout_t &layout) const {
         // mad with s8/u8 is not supported, promote to strided s16.
         if (layout.type().is_x8())
-            return make_strided(layout.with(type_t::s16()), 2);
+            return make_strided(layout.with(dsl::type_t::s16()), 2);
         // mad with f16 requires aligned regioning for src1/src2.
         if (a_type.is_f16() && acc_type.is_f16()) {
             return layout.make_dense();
         }
         if (layout.type().is_bf16() && !hw.systolic_support())
-            return layout.with(type_t::f32()).make_dense();
+            return layout.with(dsl::type_t::f32()).make_dense();
         if (a_type.is_bf16()) {
             // bf16 mixed mode requires src1 to be converted to f32 when it's
             // broadcasted.
             if (is_a && is_src1_broadcast)
-                return layout.with(type_t::f32()).make_dense();
+                return layout.with(dsl::type_t::f32()).make_dense();
             // bf16 mixed mode mad requires src1 to be packed
             if (is_a) return layout.make_dense();
             // bf16 mixed mode mad requires src2 to be f32.
-            return layout.with(type_t::f32()).make_dense();
+            return layout.with(dsl::type_t::f32()).make_dense();
         }
         bool is_a_xf8_or_xf16_or_xf4 = (a_type.is_fp4() || a_type.is_fp8()
                 || a_type.is_bf16() || a_type.is_f16());
         bool is_b_xf8_or_xf16_or_xf4 = (b_type.is_fp4() || b_type.is_fp8()
                 || b_type.is_bf16() || b_type.is_f16());
         if (is_a_xf8_or_xf16_or_xf4 || is_b_xf8_or_xf16_or_xf4) {
-            return layout.with(type_t::f32()).make_dense();
+            return layout.with(dsl::type_t::f32()).make_dense();
         }
         return layout;
     }
@@ -1352,7 +1355,9 @@ struct fma_context_t {
         bool is_dpas = is_dp_fma(fma);
         bool is_a = (abc == abc_kind_t::a);
         auto type = (is_a ? a_type : b_type);
-        bool cvt_f16 = (layout.type().is_fp8() || layout.type().is_fp4());
+        bool cvt_f16 = ((hw < ngen::HW::Xe3p && layout.type().is_fp8())
+                || (hw.family() < ngen::ProductFamily::CRI
+                        && layout.type().is_fp4()));
         int type_size = (cvt_f16 ? 2 : type.size());
         if (is_dpas) {
             int sdepth = 8;
@@ -1378,7 +1383,7 @@ struct fma_context_t {
                     = make_with_block(bmnk_layout, layout_t(type, blocks));
             auto abc_layout
                     = mapper.map_from_bmnk(abc, bmnks, fma_layout, layout);
-            if (cvt_f16) return abc_layout.with(type_t::f16());
+            if (cvt_f16) return abc_layout.with(dsl::type_t::f16());
             return abc_layout;
         }
 
@@ -1454,13 +1459,28 @@ struct fma_context_t {
             int b_vec_idx) const {
         auto is_blocked_by
                 = [](const layout_t &layout, const pvar_t &dim, int block) {
-                      if (block == 1) return true;
-                      if (layout.nblocks() == 0) return false;
-                      auto &b0 = layout[0];
-                      if (b0.idx != dim) return false;
-                      if (b0.size % block != 0) return false;
-                      return true;
-                  };
+            if (block == 1) return true;
+            if (layout.nblocks() == 0) return false;
+
+            auto check = [&](const layout_block_t &b) {
+                bool ok = true;
+                ok &= (b.idx == dim);
+                ok &= (b.size % block == 0);
+
+                bool stride_ok = (b.stride == 1)
+                        || (layout.type().is_x16() && b.stride == 2);
+                ok &= stride_ok;
+                return ok;
+            };
+            auto &b0 = layout[0];
+            if (check(b0)) return true;
+
+            if (layout.nblocks() > 1) {
+                auto &b1 = layout[1];
+                if (b1.stride == b0.stride && check(b1)) return true;
+            }
+            return false;
+        };
         if (a_vec_idx != -1 && !is_blocked_by(a, a_vec_idx, vec_size))
             return false;
         if (b_vec_idx != -1 && !is_blocked_by(b, b_vec_idx, vec_size))
@@ -1482,13 +1502,13 @@ struct fma_context_t {
         }
     }
 
-    hw_t hw;
+    dsl::hw_t hw;
     int simd;
     int vec_size;
     fma_kind_t fma;
-    type_t a_type;
-    type_t b_type;
-    type_t acc_type;
+    dsl::type_t a_type;
+    dsl::type_t b_type;
+    dsl::type_t acc_type;
     bool is_src1_broadcast;
     bool ab_swap_transpose_;
     fma_layout_hint_t a_layout_hint;
@@ -1514,7 +1534,7 @@ int slm_memory_bank_granularity(ngen::HW hw) {
 }
 
 dim_t find_min_stride_without_conflicts(
-        const hw_t &hw, dim_t inner_bytes, dim_t dense_stride_bytes) {
+        const dsl::hw_t &hw, dim_t inner_bytes, dim_t dense_stride_bytes) {
     int write_step = 64;
     int stride_step = 16;
     dim_t stride_beg = dense_stride_bytes;
@@ -1589,7 +1609,7 @@ layout_t split_into_multi_blocks(
 }
 
 layout_t pad_slm_layout(
-        const hw_t &hw, const layout_t &layout, const grid_info_t &grid) {
+        const dsl::hw_t &hw, const layout_t &layout, const grid_info_t &grid) {
     // EUs are fused only in XeHP and XeHPG; otherwise no need to pad SLM.
     if (hw >= ngen::HW::XeHPC || hw <= ngen::HW::XeLP) return layout;
     auto tg_dim0 = grid.dim(0);
@@ -1788,8 +1808,8 @@ private:
             std::vector<expr_t> ret;
             ret.reserve(max_nvdims);
             for (int i = 0; i < max_nvdims; i++)
-                ret.push_back(
-                        var_t::make(type_t::s32(), "_" + std::to_string(i)));
+                ret.push_back(var_t::make(
+                        dsl::type_t::s32(), "_" + std::to_string(i)));
             return ret;
         }());
 
@@ -1854,7 +1874,7 @@ std::array<pvar_t, 2> dpas_dims(bool transpose) {
 bool is_dpas_src1_compatible(int simd, bool transpose, const layout_t &layout) {
     const int sdepth = 8;
     auto &type = layout.type();
-    auto c_type = (type.is_int() ? type_t::s32() : type_t::f32());
+    auto c_type = (type.is_int() ? dsl::type_t::s32() : dsl::type_t::f32());
     auto func = dpas_t::make(
             /*is_dpasw=*/false, simd, sdepth, /*rcount=*/1, c_type, type, type);
     auto &dpas = func.as<dpas_t>();
@@ -1866,7 +1886,7 @@ bool is_dpas_src1_compatible(int simd, bool transpose, const layout_t &layout) {
 bool is_dpas_src2_compatible(int simd, bool transpose, const layout_t &layout) {
     const int sdepth = 8;
     auto &type = layout.type();
-    auto c_type = (type.is_int() ? type_t::s32() : type_t::f32());
+    auto c_type = (type.is_int() ? dsl::type_t::s32() : dsl::type_t::f32());
     auto func = dpas_t::make(
             /*is_dpasw=*/false, simd, sdepth, /*rcount=*/1, c_type, type, type);
     auto &dpas = func.as<dpas_t>();
@@ -1959,17 +1979,17 @@ public:
         }
         if (status == plan_status_t::success) return status::success;
 
-        if (a_direct_view_ || b_direct_view_) {
-            gpu_trace() << "Retry plan initialization without direct view";
-            enable_direct_view(false);
-            status = try_init_plan();
-            if (status == plan_status_t::success) return status::success;
-        }
-
         if ((use_slm(abc_kind_t::a) || use_slm(abc_kind_t::b))
                 && !cfg_.slm().is_overridden()) {
             gpu_trace() << "Retry plan initialization without SLM";
             enable_slm(false);
+            status = try_init_plan();
+            if (status == plan_status_t::success) return status::success;
+        }
+
+        if (a_direct_view_ || b_direct_view_) {
+            gpu_trace() << "Retry plan initialization without direct view";
+            enable_direct_view(false);
             status = try_init_plan();
             if (status == plan_status_t::success) return status::success;
         }
@@ -2021,6 +2041,15 @@ private:
             plan_.reuse_headers = cfg_.pipeline().reuse_headers();
         }
         PLAN_CHECK(fixup_grf_usage(plan_));
+        auto k_tile = plan_.fma.bmnk_stop_idx(bmnk_kind_t::k, 0)
+                - plan_.fma.bmnk_start_idx(bmnk_kind_t::k, 0);
+        auto is_dpas = utils::one_of(
+                plan_.fma.fma_kind, fma_kind_t::dpas, fma_kind_t::dpasw);
+        auto k_blk_dpas_aligned
+                = plan_.fma.m_blk == 1 || plan_.fma.k_blk == k_tile;
+        if (cfg_.hw() >= ngen::HW::Xe3p && is_dpas && plan_.fma.m_blk % 2 != 0
+                && !k_blk_dpas_aligned)
+            return plan_status_t::invalid_fma_layout;
         set_plan();
         return plan_status_t::success;
     }
@@ -2206,11 +2235,51 @@ private:
         return plan_status_t::success;
     }
 
+    // Extends the view to cover 256 contiguous bytes for more efficient
+    // prefetching.
+    void maybe_extend_prefetch_thread_view_to_256_bytes(
+            view_t &thr_view) const {
+        auto thr_layout = thr_view.create_pseudo_vlayout();
+        auto &blocks = thr_layout.blocks();
+        if (blocks.size() <= 1) return;
+
+        auto &b0 = blocks[0];
+        auto &b1 = blocks[1];
+        if (!b1.stride.is_fixed() || !b0.stride.is_fixed()) return;
+        auto inner_var = thr_view.vvars()[b0.idx];
+        bool is_block_strided
+                = (b0.stride == stride_t(1)) && (b1.stride > b0.size);
+        int type_size = thr_layout.type().size();
+        dim_t full_dim_size
+                = gemm_schedule_.a_view().vdims()[b0.idx] * type_size;
+        bool size_ge_256b = (full_dim_size >= 256);
+        dim_t b0_size = b0.size * type_size;
+        bool prefetch_lt_256b = (b0_size < 256);
+        bool is_inner_loop = gemm_schedule_.is_inner_loop(inner_var);
+        // Extend if the following conditions are satisfied:
+        // - The inner block (b0) is dense and smaller than 256 bytes
+        // - The original tensor has at least 256 bytes across b0 dimension
+        // - The inner block dimensions corresponds to the inner loop
+        //   dimension. We want to prefetch extra cache lines only if they are
+        //   going to be used by the next iterations.
+        if (is_block_strided && size_ge_256b && prefetch_lt_256b
+                && is_inner_loop) {
+            gpu_assert(thr_view.vdims()[b0.idx] == b0.size);
+            int factor = 256 / b0_size;
+            thr_view.set_vdim(inner_var, b0.size * factor,
+                    thr_view.vstart()[b0.idx],
+                    /*overwrite=*/true);
+        }
+    }
+
     plan_status_t init_x_prefetch_plan(abc_kind_t abc, const view_t &tg_view,
             grid_info_t &grid, send_plan_t &prefetch) const {
         if (!use_prefetch(abc)) return plan_status_t::success;
         auto &tg = cfg_.thread_group_grid();
         auto thr_view = tg_view.split(tg, &grid);
+        if (cfg_.hw().family() == ngen::ProductFamily::CRI) {
+            maybe_extend_prefetch_thread_view_to_256_bytes(thr_view);
+        }
         auto params = get_send_params(cfg_.options(), send_op_t::prefetch,
                 send_address_t::a64, fma_kind_t::undef, abc, thr_view,
                 gemm_schedule_);
@@ -2336,7 +2405,7 @@ private:
 
         if (plan_.hw < ngen::HW::XeHPG) {
             // Verifies that SLM loads after k-slicing are at GRF granularity.
-            auto l_sub = l.sub(tile_t(rem_dims));
+            auto l_sub = l.sub(tile_t(std::move(rem_dims)));
             int bytes = l_sub.type().size();
             stride_t stride = 1;
             for (auto &b : l_sub.blocks()) {
@@ -2354,7 +2423,7 @@ private:
         auto &bmnk_mapper = gemm_schedule_.bmnk_mapper();
         object_map_t<expr_t, pvar_t> k_vars;
         auto k_sub_layout = [&](abc_kind_t abc_kind, const layout_t &l) {
-            layout_t k_layout = layout_t(type_t::u8());
+            layout_t k_layout = layout_t(dsl::type_t::u8());
             for (auto &b : l.blocks()) {
                 auto bmnk_kind = bmnk_mapper.bmnk_kind(abc_kind, b.idx);
                 if (bmnk_kind != bmnk_kind_t::k) continue;
@@ -2493,7 +2562,10 @@ private:
         auto c_layout = get_c_layout(a_layout, b_layout, c_blk_layout);
         bmnk_block_mapper_t c_mapper(mapper);
         c_mapper.push_blocks(abc_kind_t::a, x2r.a_layout.blocks());
-        c_mapper.push_blocks(abc_kind_t::b, x2r.b_layout.blocks());
+        for (auto &block : x2r.b_layout.blocks()) {
+            if (mapper.bmnk_kind(abc_kind_t::b, block.idx) == bmnk_kind_t::n)
+                c_mapper.push_block(abc_kind_t::b, block);
+        }
         auto c_prb_layout = c_mapper.map_from_bmnk(abc_kind_t::c,
                 {bmnk_kind_t::b, bmnk_kind_t::m, bmnk_kind_t::n}, c_layout);
 
@@ -2502,7 +2574,7 @@ private:
         bool requires_fadd
                 = prb_.is_bwd_w && gemm_schedule_.with_kernel_grid_k_slicing();
         if (!cfg_.hw().has_fp64_atomic_support() && requires_fadd
-                && c_layout.elems() % 8 != 0 && c_type == type_t::f64()) {
+                && c_layout.elems() % 8 != 0 && c_type == dsl::type_t::f64()) {
             return plan_status_t::invalid_c_layout;
         }
 
@@ -2544,7 +2616,7 @@ private:
 
         const auto src_zp_type = (cfg_.zp_cfg().do_src_compensation)
                 ? cfg_.zp_cfg().src_zp_type
-                : type_t::s32();
+                : dsl::type_t::s32();
         layout_t zp_layout(
                 src_zp_type, std::vector<dim_t> {zp_g_dim, zp_ic_dim}, zp_off);
         view_t zp_view(zp_layout);
@@ -2589,7 +2661,7 @@ private:
         return plan_ptr;
     }
 
-    send_params_t get_send_params(const kernel::options_t &options,
+    send_params_t get_send_params(const dsl::kernel::options_t &options,
             send_op_t op, send_address_t address, abc_kind_t abc,
             const view_t &view) const {
         auto params = jit::get_send_params(options, op, address, view);
@@ -2599,7 +2671,7 @@ private:
         return params;
     }
 
-    send_params_t get_send_params(const kernel::options_t &options,
+    send_params_t get_send_params(const dsl::kernel::options_t &options,
             send_op_t op, send_address_t address, fma_kind_t fma,
             abc_kind_t abc, const view_t &view,
             const gemm_schedule_t &gemm_schedule,

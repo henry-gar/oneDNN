@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -69,10 +69,12 @@ status_t ref_conf_t::init_dispatcher(const subproblem_t &subprb,
         const intel::engine_t &engine, gpu_primitive_attr_t *gpu_attr) {
 
     compute::named_buffer_t src_buf("SRC");
+    src_buf.data_type = conf.src_dt;
     src_buf.append_block(dims::outer, subprb.outer_block.block);
     src_buf.append_block(dims::reduction, subprb.reduction_block.block);
     src_buf.append_block(dims::inner, subprb.inner_block.block);
     compute::named_buffer_t dst_buf("DST", src_buf);
+    dst_buf.data_type = conf.dst_dt;
     dst_buf.remove_dim(dims::reduction);
 
     compute::reusable_dispatch_config_t config(&engine, dispatch_dims);
@@ -182,6 +184,7 @@ status_t reusable_ref_t::pd_t::init_conf(impl::engine_t *engine) {
                 phase.init_dispatcher(subprbs[i], *intel_engine, gpu_attr)
                         == status::success,
                 "failed to initialize dispatcher for subproblem");
+        phase.conf.params.require_stateless_addressing = has_large_buffers();
     }
 
     // Compute div from basic mdw dims
@@ -199,6 +202,10 @@ static void init_kernel_ctx_common(
     // Data types
     kernel_ctx.set_data_type(conf.src_dt);
     def_data_type(kernel_ctx, conf.dst_dt, "DST");
+
+    // Stateless addressing model
+    kernel_ctx.require_stateless_addressing(
+            conf.params.require_stateless_addressing);
 
     // Dispatcher
     conf.params.def_kernel_macros(kernel_ctx);
@@ -236,12 +243,12 @@ status_t reusable_ref_t::execute(const exec_ctx_t &ctx) const {
         const auto &append_off
                 = [use_int32_offset](
                           compute::kernel_arg_list_t &arg_list, dim_t off) {
-                      if (use_int32_offset) {
-                          arg_list.append(into<int32_t>(off));
-                      } else {
-                          arg_list.append(off);
-                      }
-                  };
+            if (use_int32_offset) {
+                arg_list.append(into<int32_t>(off));
+            } else {
+                arg_list.append(off);
+            }
+        };
 
         // Set up the reduction arg list
         compute::kernel_arg_list_t arg_list;

@@ -1,7 +1,6 @@
 [![UXL Foundation Logo](https://github.com/uxlfoundation/artwork/blob/main/foundation/uxl-foundation-logo-horizontal-color.png)][UXL Foundation]
 
-oneAPI Deep Neural Network Library (oneDNN)
-===========================================
+# oneAPI Deep Neural Network Library (oneDNN)
 
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/8762/badge)](https://www.bestpractices.dev/projects/8762)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/uxlfoundation/oneDNN/badge)](https://securityscorecards.dev/viewer/?uri=github.com/uxlfoundation/oneDNN)
@@ -11,9 +10,9 @@ performance library of basic building blocks for deep learning applications.
 oneDNN project is part of the [UXL Foundation] and is an implementation
 of the [oneAPI specification] for oneDNN component.
 
-The library is optimized for Intel(R) Architecture Processors, Intel Graphics,
-and Arm(R) 64-bit Architecture (AArch64)-based processors. oneDNN has
-experimental support for the following architectures: NVIDIA\* GPU,
+The library is optimized for Intel 64/AMD64 architecture based processors,
+Arm(R) 64-bit Architecture (AArch64)-based processors, and Intel Graphics.
+oneDNN has experimental support for the following architectures: NVIDIA\* GPU,
 AMD\* GPU, OpenPOWER\* Power ISA (PPC64), IBMz\* (s390x), and RISC-V.
 
 oneDNN is intended for deep learning applications and framework
@@ -35,7 +34,7 @@ Deep learning practitioners should use one of the applications enabled with oneD
 [UXL Foundation]: http://www.uxlfoundation.org
 [oneAPI specification]: https://oneapi-spec.uxlfoundation.org/specifications/oneapi/latest/elements/onednn/source/
 
-# Table of Contents
+## Table of Contents
 
 - [Documentation](#documentation)
 - [System Requirements](#system-requirements)
@@ -48,7 +47,7 @@ Deep learning practitioners should use one of the applications enabled with oneD
 - [Security](#security)
 - [Trademark Information](#trademark-information)
 
-# Documentation
+## Documentation
 
 * [oneDNN Developer Guide and Reference] explains the programming
   model, supported functionality, implementation details, and includes
@@ -63,7 +62,7 @@ Deep learning practitioners should use one of the applications enabled with oneD
 [API Reference]: https://uxlfoundation.github.io/oneDNN/group_dnnl_api.html
 [Release Notes]: https://github.com/uxlfoundation/oneDNN/releases
 
-# System Requirements
+## System Requirements
 
 oneDNN supports platforms based on the following architectures:
 - [Intel 64 or AMD64](https://en.wikipedia.org/wiki/X86-64),
@@ -111,25 +110,29 @@ require the use of run-time controls to enable them. See
 > [Linking Guide] for more details.
 
 The library is optimized for the following GPUs:
-* Intel Graphics for 11th-14th Generation Intel Core Processors
-* Intel Iris Xe MAX Graphics (formerly DG1)
-* Intel Arc(TM) A-Series Graphics (formerly Alchemist)
-* Intel Data Center GPU Flex Series (formerly Arctic Sound)
-* Intel Data Center GPU Max Series (formerly Ponte Vecchio)
-* Intel Graphics and Intel Arc Graphics for Intel Core Ultra processors
-  (formerly Meteor Lake, Arrow Lake and Lunar Lake)
-* Intel Arc B-Series Graphics and Intel Arc Pro B-Series Graphics
-  (formerly Battlemage)
-* Intel Arc Graphics for future Intel Core Ultra processors
-  (code name Panther Lake)
+* Intel discrete GPUs:
+  * Intel Iris Xe MAX Graphics (formerly DG1)
+  * Intel Arc(TM) A-Series Graphics (formerly Alchemist)
+  * Intel Data Center GPU Flex Series (formerly Arctic Sound)
+  * Intel Data Center GPU Max Series (formerly Ponte Vecchio)
+  * Intel Arc B-Series Graphics and Intel Arc Pro B-Series Graphics
+   (formerly Battlemage)
+  * future discrete GPUs based on Xe3p-XPC architecture (code name Crescent Island)
+* Intel Graphics integrated with:
+  * 11th-14th Generation Intel Core Processors
+  * Intel Graphics for Intel Core Ultra Series 1 processors (formerly Meteor Lake)
+  * Intel Graphics for Intel Core Ultra Series 2 processors (formerly Arrow Lake and Lunar Lake)
+  * Intel Graphics for Intel Core Ultra Series 3 processors (formerly Panther Lake)
+  * Intel Graphics for future Intel Core Series 3 processors (formerly Wildcat Lake)
+  * Intel Graphics for future Intel Core Ultra processors (code name Nova Lake)
 
 [CPU dispatcher control]: https://uxlfoundation.github.io/oneDNN/dev_guide_cpu_dispatcher_control.html
 [Linking Guide]: https://uxlfoundation.github.io/oneDNN/dev_guide_link.html
 
-## Requirements for Building from Source
+### Requirements for Building from Source
 
 oneDNN supports systems meeting the following requirements:
-* Operating system with Intel 64 / Arm 64 / Power / IBMz architecture support
+* Operating system with Intel 64/AMD64, AArch 64, PPC64, or s390x architecture support
 * C++ compiler with C++11 standard support
 * [CMake] 3.13 or later
 
@@ -152,11 +155,11 @@ dependencies.
 [sphinx-copybutton]:https://sphinx-copybutton.readthedocs.io/en/latest/
 [graphviz]:https://www.linuxfromscratch.org/blfs/view/8.2/general/graphviz.html
 
-### CPU Engine
+#### CPU Engine
 
-oneDNN CPU engine is used to execute primitives on Intel Architecture
-Processors, 64-bit Arm Architecture (AArch64) processors,
-64-bit Power ISA (PPC64) processors, IBMz (s390x), and compatible devices.
+oneDNN CPU engine is used to execute primitives on Intel 64/AMD64 based processors,
+64-bit Arm Architecture (AArch64) processors, 64-bit Power ISA (PPC64) processors,
+IBMz (s390x), and compatible devices.
 
 The CPU engine is built by default but can be disabled at build time by setting
 `ONEDNN_CPU_RUNTIME` to `NONE`. In this case, GPU engine must be enabled.
@@ -181,39 +184,18 @@ On a CPU based on Arm AArch64 architecture, oneDNN CPU engine can be built with
 machine learning applications and provides AArch64 optimized implementations
 of core functions. This functionality currently requires that ACL is downloaded
 and built separately. See [Build from Source] section of the Developer Guide for
-details. The minimum supported version of ACL is 52.4.0.
+details. The minimum supported version of ACL is 52.7.0.
 
 [Arm Compute Library (ACL)]: https://github.com/arm-software/ComputeLibrary
 
-### GPU Engine
+#### GPU Engine
 
-Intel Processor Graphics and Xe Architecture graphics are supported by
-the oneDNN GPU engine. The GPU engine is disabled in the default build
-configuration. The following additional requirements apply when GPU engine
-is enabled:
-* OpenCL runtime requires
-    * OpenCL\* runtime library (OpenCL version 1.2 or later)
-    * OpenCL driver (with kernel language support for OpenCL C 2.0 or later)
-      with Intel subgroups and USM extensions support
-* SYCL runtime requires
-    * [Intel oneAPI DPC++/C++ Compiler]
-    * OpenCL runtime library (OpenCL version 3.0 or later)
-    * [oneAPI Level Zero]
-* SYCL runtime with NVIDIA GPU support requires
-    * [oneAPI DPC++ Compiler with support for CUDA] or [oneAPI for NVIDIA GPUs]
-    * NVIDIA CUDA\* driver
-    * cuBLAS 10.1 or later
-    * cuDNN 7.6 or later
-* SYCL runtime with AMD GPU support requires
-    * [oneAPI DPC++ Compiler with support for HIP AMD] or [oneAPI for AMD GPUs]
-    * [AMD ROCm] version 5.3 or later
-    * [MIOpen] version 2.18 or later (optional if AMD ROCm includes the required
-    version of MIOpen)
-    * [rocBLAS] version 2.45.0 or later (optional if AMD ROCm includes
-    the required version of rocBLAS)
-* SYCL runtime with a generic GPU support requires
-    * oneAPI DPC++/C++ Compiler that supports the target GPU. Refer to the
-    [generic GPU vendor readme](src/gpu/generic/sycl/README.md) for more information.
+oneDNN GPU engine is used to execute primitives on various accelerators
+including Intel integrated and discrete GPUs, NVIDIA GPUs, AMD GPUs, and
+other devices supporting SYCL programming language. The GPU engine is disabled
+in the default build configuration and can be enabled by setting
+`ONEDNN_GPU_RUNTIME` build option to value other than `NONE`. Target accelerator
+vendor must be selected at build time using `ONEDNN_GPU_VENDOR` build option.
 
 > **WARNING**
 >
@@ -223,17 +205,48 @@ is enabled:
 > in similar behavior. The user can prevent this behavior by increasing the
 > [TdrDelay] value.
 
+The following additional requirements apply for Intel integrated and discrete
+GPUs:
+* With OpenCL(TM) runtime:
+  * OpenCL SDK (with OpenCL 1.2 support)
+  * Intel Graphics Driver with support for OpenCL C 2.0, Intel subgroups
+  support, and USM extensions support
+* With SYCL runtime:
+  * [Intel oneAPI DPC++/C++ Compiler]
+  * OpenCL SDK (with OpenCL 3.0 support)
+  * [oneAPI Level Zero]
+  * Intel Graphics Driver with support for OpenCL C 2.0, Intel subgroups
+    support, and USM extensions support
+
+The following additional requirements apply for NVIDIA GPUs:
+* [oneAPI DPC++ Compiler with support for CUDA] or [oneAPI for NVIDIA GPUs]
+* NVIDIA CUDA\* driver
+* cuBLAS 10.1 or later
+* cuDNN 7.6 or later
+
 > **WARNING**
 >
 > NVIDIA GPU support is experimental. General information, build instructions,
 > and implementation limitations are available in the
 > [NVIDIA backend readme](src/gpu/nvidia/README.md).
 
+The following additional requirements apply for AMD GPUs:
+* [oneAPI DPC++ Compiler with support for HIP AMD] or [oneAPI for AMD GPUs]
+* [AMD ROCm] version 5.3 or later
+* [MIOpen] version 2.18 or later (optional if AMD ROCm includes
+  the required version of MIOpen)
+* [rocBLAS] version 2.45.0 or later (optional if AMD ROCm includes
+  the required version of rocBLAS)
+
 > **WARNING**
 >
 > AMD GPU support is experimental. General information, build instructions,
 > and implementation limitations are available in the
 > [AMD backend readme](src/gpu/amd/README.md).
+
+Other devices supporting SYCL programming model require
+oneAPI DPC++/C++ Compiler that supports the target GPU. Refer to
+[generic GPU vendor] documentation for additional details.
 
 [oneAPI Level Zero]: https://github.com/oneapi-src/level-zero
 [oneAPI DPC++ Compiler with support for CUDA]: https://github.com/intel/llvm/blob/sycl/sycl/doc/GetStartedGuide.md#build-dpc-toolchain-with-support-for-nvidia-cuda
@@ -246,13 +259,14 @@ is enabled:
 [disabling hangcheck]: https://www.intel.com/content/www/us/en/docs/oneapi/installation-guide-linux/2023-0/gpu-disable-hangcheck.html
 [timeout detection and recovery]: https://learn.microsoft.com/en-us/windows-hardware/drivers/display/timeout-detection-and-recovery
 [TdrDelay]: https://learn.microsoft.com/en-us/windows-hardware/drivers/display/tdr-registry-keys#tdrdelay
+[generic GPU vendor](src/gpu/generic/sycl/README.md)
 
-## Runtime Dependencies
+### Runtime Dependencies
 
 When oneDNN is built from source, the library runtime dependencies and specific
 versions are defined by the build environment.
 
-### Linux
+#### Linux
 
 Common dependencies:
 * GNU C Library (`libc.so`)
@@ -263,8 +277,8 @@ Common dependencies:
 
 Runtime-specific dependencies:
 
-| Runtime configuration    | Compiler                      | Dependency
-| :----------------------- | :---------------------------- | :---------
+| Runtime configuration      | Compiler                      | Dependency
+| :------------------------- | :---------------------------- | :---------
 | `ONEDNN_CPU_RUNTIME=OMP`   | GCC                           | GNU OpenMP runtime (`libgomp.so`)
 | `ONEDNN_CPU_RUNTIME=OMP`   | Intel C/C++ Compiler          | Intel OpenMP runtime (`libiomp5.so`)
 | `ONEDNN_CPU_RUNTIME=OMP`   | Clang                         | Intel OpenMP runtime (`libiomp5.so`)
@@ -273,15 +287,15 @@ Runtime-specific dependencies:
 | `ONEDNN_GPU_RUNTIME=OCL`   | any                           | OpenCL loader (`libOpenCL.so`)
 | `ONEDNN_GPU_RUNTIME=SYCL`  | Intel oneAPI DPC++ Compiler   | Intel oneAPI DPC++ Compiler runtime (`libsycl.so`), OpenCL loader (`libOpenCL.so`), oneAPI Level Zero loader (`libze_loader.so`)
 
-### Windows
+#### Windows
 
 Common dependencies:
 * Microsoft Visual C++ Redistributable (`msvcrt.dll`)
 
 Runtime-specific dependencies:
 
-| Runtime configuration    | Compiler                      | Dependency
-| :----------------------- | :---------------------------- | :---------
+| Runtime configuration      | Compiler                      | Dependency
+| :------------------------- | :---------------------------- | :---------
 | `ONEDNN_CPU_RUNTIME=OMP`   | Microsoft Visual C++ Compiler | No additional requirements
 | `ONEDNN_CPU_RUNTIME=OMP`   | Intel C/C++ Compiler          | Intel OpenMP runtime (`iomp5.dll`)
 | `ONEDNN_CPU_RUNTIME=TBB`   | any                           | TBB (`tbb.dll`)
@@ -289,19 +303,19 @@ Runtime-specific dependencies:
 | `ONEDNN_GPU_RUNTIME=OCL`   | any                           | OpenCL loader (`OpenCL.dll`)
 | `ONEDNN_GPU_RUNTIME=SYCL`  | Intel oneAPI DPC++ Compiler   | Intel oneAPI DPC++ Compiler runtime (`sycl.dll`), OpenCL loader (`OpenCL.dll`), oneAPI Level Zero loader (`ze_loader.dll`)
 
-### macOS
+#### macOS
 
 Common dependencies:
 * System C/C++ runtime (`libc++.dylib`, `libSystem.dylib`)
 
 Runtime-specific dependencies:
 
-| Runtime configuration  | Compiler                      | Dependency
-| :--------------------- | :---------------------------- | :---------
+| Runtime configuration    | Compiler                      | Dependency
+| :----------------------- | :---------------------------- | :---------
 | `ONEDNN_CPU_RUNTIME=OMP` | Intel C/C++ Compiler          | Intel OpenMP runtime (`libiomp5.dylib`)
 | `ONEDNN_CPU_RUNTIME=TBB` | any                           | TBB (`libtbb.dylib`)
 
-# Installation
+## Installation
 
 You can download and install the oneDNN library using one of the following options:
 
@@ -322,7 +336,7 @@ You can download and install the oneDNN library using one of the following optio
 [Build Options]: https://uxlfoundation.github.io/oneDNN/dev_guide_build_options.html
 [Build from Source]: https://uxlfoundation.github.io/oneDNN/dev_guide_build.html
 
-# Validated Configurations
+## Validated Configurations
 
 x86-64 CPU engine was validated on RedHat\* Enterprise Linux 8 with
 * GNU Compiler Collection 8.5, 9.5, 11.1, 11.3
@@ -363,7 +377,7 @@ time of release
 [Intel Arc & Iris Xe Graphics Driver]: https://www.intel.com/content/www/us/en/download/785597/intel-arc-iris-xe-graphics-windows.html
 [Arm Compiler for Linux]: https://developer.arm.com/Tools%20and%20Software/Arm%20Compiler%20for%20Linux
 
-# Support
+## Support
 
 Submit questions, feature requests, and bug reports on the
 [GitHub issues] page.
@@ -375,7 +389,7 @@ You can also contact oneDNN developers via [UXL Foundation Slack] using
 [UXL Foundation Slack]: https://slack-invite.uxlfoundation.org/
 [#onednn]: https://uxlfoundation.slack.com/channels/onednn
 
-# Governance
+## Governance
 
 oneDNN project is governed by the [UXL Foundation] and you can get involved in
 this project in multiple ways. It is possible to join the [AI Special Interest
@@ -390,7 +404,7 @@ discussions.
 [AI Special Interest Group (SIG)]: https://github.com/uxlfoundation/foundation
 [mailing lists for the UXL Foundation]: https://lists.uxlfoundation.org/g/main/subgroups
 
-# Contributing
+## Contributing
 
 We welcome community contributions to oneDNN. You can find the oneDNN release
 schedule and work already in progress towards future milestones in Github's
@@ -413,8 +427,7 @@ collaboration, and contributors are expected to adhere to the
 [Milestones]: https://github.com/uxlfoundation/oneDNN/milestones
 [help wanted]: https://github.com/uxlfoundation/oneDNN/issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22
 
-
-# License
+## License
 
 oneDNN is licensed under [Apache License Version 2.0](LICENSE). Refer
 to the "[LICENSE](LICENSE)" file for the full license text and
@@ -435,6 +448,7 @@ license terms.
 
 Apache License Version 2.0:
 * [Xbyak_aarch64](https://github.com/fujitsu/xbyak_aarch64)
+* [OpenCL<sup>TM</sup> API Headers](https://github.com/KhronosGroup/OpenCL-Headers)
 
 Boost Software License, Version 1.0:
 * [Boost C++ Libraries](https://www.boost.org/)
@@ -457,27 +471,12 @@ software license terms, and open source software license terms. These
 separate license terms govern your use of the third party programs as
 set forth in the "[THIRD-PARTY-PROGRAMS](THIRD-PARTY-PROGRAMS)" file.
 
-# Security
+## Security
 
 [Security Policy](SECURITY.md) outlines our guidelines and procedures
 for ensuring the highest level of security and trust for our users
 who consume oneDNN.
 
-# Trademark Information
+-------------------------------------------------------------------------------
 
-Intel, the Intel logo, Arc, Intel Atom, Intel Core, Iris,
-OpenVINO, the OpenVINO logo, Pentium, VTune, and Xeon are trademarks
-of Intel Corporation or its subsidiaries.
-
-Arm and Neoverse are trademarks, or registered trademarks of Arm Ltd.
-
-\* Other names and brands may be claimed as the property of others.
-
-Microsoft, Windows, and the Windows logo are trademarks, or registered
-trademarks of Microsoft Corporation in the United States and/or other
-countries.
-
-OpenCL and the OpenCL logo are trademarks of Apple Inc. used by permission
-by Khronos.
-
-(C) Intel Corporation
+[Legal Information](doc/legal_information.md)

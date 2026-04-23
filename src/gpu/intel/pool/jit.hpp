@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -40,7 +40,7 @@ public:
         status_t init(impl::engine_t *);
 
         std::shared_ptr<conf_t> conf;
-        std::shared_ptr<jit::kernel::options_t> options;
+        std::shared_ptr<jit::dsl::kernel::options_t> options;
         std::shared_ptr<jit::layout_t> src;
         std::shared_ptr<jit::layout_t> dst;
     };

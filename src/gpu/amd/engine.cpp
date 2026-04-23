@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2024 Intel Corporation
+* Copyright 2020 Intel Corporation
 * Copyright 2020 Codeplay Software Limited
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
@@ -43,7 +43,7 @@ status_t engine_create(impl::engine_t **engine, engine_kind_t engine_kind,
 engine_t::engine_t(
         const ::sycl::device &dev, const ::sycl::context &ctx, size_t index)
     : impl::gpu::engine_t(
-            new xpu::sycl::engine_impl_t(engine_kind::gpu, dev, ctx, index)) {
+              new xpu::sycl::engine_impl_t(engine_kind::gpu, dev, ctx, index)) {
     assert(xpu::sycl::is_amd_gpu(dev));
     set_miopen_handle();
     set_rocblas_handle();
@@ -58,10 +58,9 @@ status_t engine_t::set_rocblas_handle() {
     rocblas_handle_.set(
             std::unique_ptr<rocblas_handle, void (*)(rocblas_handle *)>(
                     new rocblas_handle(handle), [](rocblas_handle *h) {
-                        if (h != nullptr)
-                            ROCBLAS_EXECUTE_FUNC_V(rocblas_destroy_handle, *h);
-                        delete h;
-                    }));
+        if (h != nullptr) ROCBLAS_EXECUTE_FUNC_V(rocblas_destroy_handle, *h);
+        delete h;
+    }));
     handle = nullptr;
     return status::success;
 }
@@ -75,10 +74,9 @@ status_t engine_t::set_miopen_handle() {
     miopen_handle_.set(
             std::unique_ptr<miopenHandle_t, void (*)(miopenHandle_t *)>(
                     new miopenHandle_t(handle), [](miopenHandle_t *h) {
-                        if (h != nullptr)
-                            MIOPEN_EXECUTE_FUNC_V(miopenDestroy, *h);
-                        delete h;
-                    }));
+        if (h != nullptr) MIOPEN_EXECUTE_FUNC_V(miopenDestroy, *h);
+        delete h;
+    }));
     handle = nullptr;
     return status::success;
 }

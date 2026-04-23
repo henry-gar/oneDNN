@@ -38,10 +38,32 @@ std::random_device &get_random_device();
 
 std::mt19937 &get_generator();
 
-void fill_random(std::vector<float> &out, const dnnl::memory::desc &desc);
+void fill_random(std::vector<float> &out, const dnnl::memory::desc &desc,
+        float min = -3.f, float max = 4.f);
 
 void fill_random_scales(
         std::vector<float> &out, const dnnl::memory::desc &desc);
+
+template <typename T>
+void fill_const(std::vector<T> &out, const float c) {
+    for (int i = 0; i < int(out.size()); ++i) {
+        out[i] = c;
+    }
+}
+
+template <typename T>
+void fill_lin(std::vector<T> &out, float mult = 1.f) {
+    for (int i = 0; i < int(out.size()); ++i) {
+        out[i] = i * mult;
+    }
+}
+
+template <typename T>
+void fill_hceye(std::vector<T> &out, int ldi = 32, float mult = 1.f) {
+    for (int i = 0; i < int(out.size()); ++i) {
+        out[i] = ((((i / ldi) % ldi == (i % ldi))) ? mult : 0.f);
+    }
+}
 
 void print_mem(const dnnl::memory &mem, const std::string &name = "");
 
@@ -50,6 +72,61 @@ void transpose(const dnnl::engine &eng, dnnl::memory &out, dnnl::memory &in);
 void transpose_strides(
         const dnnl::engine &eng, dnnl::memory &out, dnnl::memory &in);
 
+template <typename T>
+void move_data(dnnl::engine &eng, dnnl::stream &strm, std::vector<T> &v,
+        dnnl::memory &mem, bool to_mem = true) {
+    dnnl::memory::data_type vdt = dnnl::memory::data_type::undef;
+    if (std::is_same<T, bfloat16_t>::value) vdt = dnnl::memory::data_type::bf16;
+    if (std::is_same<T, float16_t>::value) vdt = dnnl::memory::data_type::f16;
+    if (std::is_same<T, float>::value) vdt = dnnl::memory::data_type::f32;
+    if (std::is_same<T, int>::value) vdt = dnnl::memory::data_type::s32;
+    if (std::is_same<T, int8_t>::value) vdt = dnnl::memory::data_type::s8;
+    if (std::is_same<T, uint8_t>::value) vdt = dnnl::memory::data_type::u8;
+    if (to_mem) {
+        dnnl::memory::desc vmd(
+                mem.get_desc().get_dims(), vdt, mem.get_desc().get_strides());
+        dnnl::memory vmem(
+                vmd, dnnl::engine(dnnl::engine::kind::cpu, 0), v.data());
+        auto strm = dnnl::stream(mem.get_engine());
+        dnnl::reorder((to_mem) ? vmem : mem, (to_mem) ? mem : vmem)
+                .execute(strm, (to_mem) ? vmem : mem, (to_mem) ? mem : vmem);
+    } else {
+        strm.wait();
+        void *ptr = static_cast<void *>(mem.map_data());
+        if (!ptr) throw std::runtime_error("get_data_handle returned nullptr.");
+        for (size_t i = 0; i < v.size(); ++i) {
+            switch (mem.get_desc().get_data_type()) {
+                case dnnl::memory::data_type::bf16:
+                    v[i] = static_cast<T>(
+                            reinterpret_cast<bfloat16_t *>(ptr)[i]);
+                    break;
+                case dnnl::memory::data_type::f16:
+                    v[i] = static_cast<T>(
+                            reinterpret_cast<float16_t *>(ptr)[i]);
+                    break;
+                case dnnl::memory::data_type::f32:
+                    v[i] = static_cast<T>(reinterpret_cast<float *>(ptr)[i]);
+                    break;
+                case dnnl::memory::data_type::s32:
+                    v[i] = static_cast<T>(reinterpret_cast<int *>(ptr)[i]);
+                    break;
+                case dnnl::memory::data_type::s8:
+                    v[i] = static_cast<T>(reinterpret_cast<int8_t *>(ptr)[i]);
+                    break;
+                case dnnl::memory::data_type::u8:
+                    v[i] = static_cast<T>(reinterpret_cast<uint8_t *>(ptr)[i]);
+                    break;
+                default:
+                    throw std::runtime_error(
+                            "Unsupported data type in move_data");
+            }
+        }
+        mem.unmap_data(ptr);
+        strm.wait();
+    }
+}
+
+/// TODO: substitute this with move_data, replace vector<unsigned> with vector<int>
 /// Read from handle, write to memory
 /// This function is similar to the function found in write_to_dnnl_memory but this
 /// function has been expanded to perform an inline conversion from the source data

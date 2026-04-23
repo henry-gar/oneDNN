@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -35,9 +35,8 @@ const char *dnnl_runtime2str(unsigned runtime) {
         case DNNL_RUNTIME_TBB: return "TBB";
         case DNNL_RUNTIME_OCL: return "OpenCL";
         case DNNL_RUNTIME_THREADPOOL: return "threadpool";
-#ifdef DNNL_WITH_SYCL
-        case DNNL_RUNTIME_SYCL: return "DPC++";
-#endif
+        case DNNL_RUNTIME_SYCL: return "SYCL";
+        case DNNL_RUNTIME_ZE: return "Level Zero";
         default: return "unknown";
     }
 }

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2025 Intel Corporation
+* Copyright 2021 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -1051,10 +1051,11 @@ jit_io_multi_dt_helper_t<Vmm>::jit_io_multi_dt_helper_t(jit_generator_t *host,
                     std::make_shared<jit_io_helper_t<Vmm>>(host, isa, dt,
                             io_conf, tail_conf,
                             dt == data_type::bf16 ? bf16_conf : utils::nullopt,
-                            store_saturation_needed ? utils::optional_t<
-                                    io_saturation_conf_t> {saturation_conf
-                                                                   ->second}
-                                                    : utils::nullopt,
+                            store_saturation_needed
+                                    ? utils::optional_t<
+                                              io_saturation_conf_t> {saturation_conf
+                                                                             ->second}
+                                    : utils::nullopt,
                             gather_conf,
                             utils::one_of(
                                     dt, data_type::f8_e4m3, data_type::f8_e5m2)

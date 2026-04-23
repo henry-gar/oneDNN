@@ -1,5 +1,5 @@
 /******************************************************************************
-* Copyright 2024-2025 Intel Corporation
+* Copyright 2024 Intel Corporation
 * Copyright 2023 KNS Group LLC (YADRO)
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,6 +20,8 @@
 
 #include "common/primitive.hpp"
 #include "cpu/cpu_pooling_pd.hpp"
+#include "cpu/rv64/cpu_isa_traits.hpp"
+#include "cpu/rv64/rvv_postops.hpp"
 
 namespace dnnl {
 namespace impl {
@@ -49,15 +51,37 @@ struct riscv_nchw_pooling_fwd_t : public primitive_t {
                     VERBOSE_UNSUPPORTED_TAG);
             VDISPATCH_POOLING(memory_desc_wrapper(dst_md()).is_dense(false),
                     VERBOSE_UNSUPPORTED_SPARSE_CFG);
-            static constexpr data_type_t d_type = data_type::f32;
-            const bool types_ok = src_md()->data_type == d_type
-                    && dst_md()->data_type == d_type;
-            VDISPATCH_POOLING(types_ok, VERBOSE_UNSUPPORTED_DT);
+            const bool is_f16 = src_md()->data_type == data_type::f16;
+            VDISPATCH_POOLING(utils::one_of(src_md()->data_type, data_type::f32,
+                                      data_type::f16),
+                    VERBOSE_UNSUPPORTED_DT);
+            VDISPATCH_POOLING(src_md()->data_type == dst_md()->data_type,
+                    VERBOSE_UNSUPPORTED_DT);
+            if (is_f16) {
+                VDISPATCH_POOLING(mayiuse(zvfh), VERBOSE_UNSUPPORTED_ISA);
+                VDISPATCH_POOLING(desc()->accum_data_type == data_type::f32,
+                        VERBOSE_UNSUPPORTED_DT);
+                // Fallback to reference if post-ops are requested for f16
+                if (!attr()->post_ops_.has_default_values())
+                    return status::unimplemented;
+            }
+            VDISPATCH_POOLING(
+                    platform::has_data_type_support(src_md()->data_type),
+                    VERBOSE_UNSUPPORTED_DT);
             VDISPATCH_POOLING(!has_zero_dim_memory(), VERBOSE_EMPTY_TENSOR, "");
             VDISPATCH_POOLING(!is_dilated(), VERBOSE_UNSUPPORTED_FEATURE,
                     "does not support dilations");
-            VDISPATCH_POOLING(
-                    attr()->has_default_values(), VERBOSE_UNSUPPORTED_ATTR);
+            using sm = primitive_attr_t::skip_mask_t;
+            VDISPATCH_POOLING(attr()->has_default_values(sm::post_ops),
+                    VERBOSE_UNSUPPORTED_ATTR);
+
+            if (!attr()->post_ops_.has_default_values()) {
+                const auto &po = attr()->post_ops_;
+                const bool ok = (po.len() == 1)
+                        && (po.entry_[0].is_binary()
+                                || po.entry_[0].is_eltwise());
+                VDISPATCH_POOLING(ok, VERBOSE_UNSUPPORTED_POSTOP);
+            }
             VDISPATCH_POOLING(
                     memory_desc_matches_tag(*src_md(), desired_fmt_tag),
                     VERBOSE_UNSUPPORTED_TAG_S, "src");
@@ -71,8 +95,18 @@ struct riscv_nchw_pooling_fwd_t : public primitive_t {
                     VERBOSE_UNSUPPORTED_FEATURE,
                     "kernel width exceeds maximum");
 
+            if (!attr()->post_ops_.has_default_values()) {
+                const auto &po = attr()->post_ops_;
+                if (po.len() == 1
+                        && (po.entry_[0].is_binary()
+                                || po.entry_[0].is_eltwise())) {
+                    CHECK(postops_.init(engine, po, *dst_md()));
+                }
+            }
             return status::success;
         }
+
+        rvv_postops_t postops_;
     };
 
     riscv_nchw_pooling_fwd_t(const pd_t *apd);

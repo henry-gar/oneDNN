@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -104,8 +104,14 @@ private:
     std::vector<memory_desc_t> prelu_md_;
 };
 
-float ref_dropout(
-        float src, uint8_t *mask, dim_t offset, float p, int64_t seed);
+// Note: `idx` here refers both to logical index of the point which determines
+// RNG process and also a physical offset inside a `mask` buffer. The only
+// format that has them coincide is `tag::abx` which is the only supported.
+// To extend the functionality to different formats would require alignment with
+// the definition of dropout operation and reproducibility requirements since
+// the `idx` determines RNG.
+float ref_dropout(float src, uint8_t *mask, dim_t idx, float p, int64_t seed,
+        int64_t offset);
 
 } // namespace cpu
 } // namespace impl

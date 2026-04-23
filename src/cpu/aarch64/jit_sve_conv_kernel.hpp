@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2022 Intel Corporation
+* Copyright 2020 Intel Corporation
 * Copyright 2020-2024 FUJITSU LIMITED
 * Copyright 2025 Arm Ltd. and affiliates
 *
@@ -49,7 +49,7 @@ struct jit_sve_conv_fwd_kernel_t : public jit_generator_t {
         : jcp(ajcp), attr_(attr), eltwise_injector_(nullptr) {
         if (jcp.with_eltwise)
             eltwise_injector_ = utils::make_unique<
-                    jit_uni_eltwise_injector_f32_t<to_vla_sve(isa)>>(
+                    jit_uni_eltwise_injector_t<to_vla_sve(isa)>>(
                     this, jcp.eltwise);
     }
 
@@ -163,7 +163,7 @@ private:
         }
     }
 
-    std::unique_ptr<jit_uni_eltwise_injector_f32_t<to_vla_sve(isa)>>
+    std::unique_ptr<jit_uni_eltwise_injector_t<to_vla_sve(isa)>>
             eltwise_injector_;
 
     inline void prepare_output(int ur_w);
@@ -204,16 +204,16 @@ private:
     }
 
     inline int get_ow_start(int ki, int pad_l) {
-        return nstl::max(0,
-                utils::div_up(pad_l - ki * (jcp.dilate_w + 1), jcp.stride_w));
+        return utils::div_up(
+                nstl::max(0, pad_l - ki * (jcp.dilate_w + 1)), jcp.stride_w);
     }
 
     inline int get_ow_end(int ur_w, int ki, int pad_r) {
         return ur_w
-                - nstl::max(0,
-                        utils::div_up(
-                                pad_r - (jcp.kw - 1 - ki) * (jcp.dilate_w + 1),
-                                jcp.stride_w));
+                - utils::div_up(
+                        nstl::max(0,
+                                pad_r - (jcp.kw - 1 - ki) * (jcp.dilate_w + 1)),
+                        jcp.stride_w);
     }
     inline bool is_src_layout_nxc() {
         return utils::one_of(jcp.src_tag, format_tag::ndhwc, format_tag::nhwc,
@@ -408,7 +408,7 @@ private:
                 = is_ddst_layout_nxc() ? jcp.ngroups * jcp.oc : jcp.oc_block;
 
         return typesize * (ow * ow_str + oc);
-    };
+    }
 
     inline bool is_dsrc_layout_nxc() {
         return utils::one_of(jcp.src_tag, format_tag::ndhwc, format_tag::nhwc,
@@ -587,7 +587,7 @@ private:
 
         ptrdiff_t local_input_offset = i_iw * w_shift + i_ic * ic_shift;
         return input_offset + typesize * local_input_offset;
-    };
+    }
 
     inline int get_iw_idx(int ow, int kw, int l_pad) {
         return ow * jcp.stride_w + kw * (jcp.dilate_w + 1) - l_pad;

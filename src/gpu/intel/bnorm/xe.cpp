@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -66,8 +66,8 @@ static void adjust_lws_calc_kernel(lookup_table::params_t &conf,
     auto eus_per_ss = intel_engine->device_info()->max_eus_per_wg();
     const int max_ss = div_up(eu_count, eus_per_ss);
 
-    auto gpu_arch = intel_engine->device_info()->gpu_arch();
-    const int max_slm_size = compute::device_info_t::max_slm_size(gpu_arch);
+    const int max_slm_size = compute::device_info_t::max_slm_size(
+            intel_engine->device_info()->gpu_product());
     auto generated_nd = dispatch.nd_range();
     const compute::range_t &base_gws = generated_nd.global_range();
     const compute::range_t &base_lws = generated_nd.local_range();
@@ -142,6 +142,7 @@ static status_t init_conf_common(lookup_table::params_t &conf, offsets_t &off,
     const memory_desc_wrapper data_mdw(
             pd->is_fwd() ? pd->src_md() : pd->diff_src_md());
     conf.impl = impl_t::xe;
+    conf.require_stateless_addressing = pd->has_large_buffers();
 
     init_conf_basic(conf, pd);
     set_offsets(data_mdw, off.src_off);
@@ -327,6 +328,7 @@ static status_t init_kernel_ctx_common(compute::kernel_ctx_t &kernel_ctx,
         const compute::dispatch_t &dispatch,
         const compute::dispatch_t &dispatch_reduce_aux, const offsets_t &off) {
     kernel_ctx.set_data_type(conf.data_type);
+    kernel_ctx.require_stateless_addressing(conf.require_stateless_addressing);
 
     kernel_ctx.define_int("NDIMS", conf.ndims);
     kernel_ctx.define_int("MB", conf.mb);
@@ -398,6 +400,7 @@ status_t xe_fwd_t::pd_t::init_conf(impl::engine_t *engine) {
 
 status_t xe_fwd_t::pd_t::init_kernel_ctx(
         compute::kernel_ctx_t &kernel_ctx) const {
+    kernel_ctx.register_buffer_size(*src_md());
     return init_kernel_ctx_common(kernel_ctx, conf, dispatch_calc_stat,
             dispatch_reduce_stat, dispatch, dispatch_reduce_aux, off);
 }
@@ -600,6 +603,7 @@ status_t xe_bwd_t::pd_t::init_conf(impl::engine_t *engine) {
 
 status_t xe_bwd_t::pd_t::init_kernel_ctx(
         compute::kernel_ctx_t &kernel_ctx) const {
+    kernel_ctx.register_buffer_size(*diff_src_md());
     return init_kernel_ctx_common(kernel_ctx, conf, dispatch_calc_stat,
             dispatch_reduce_stat, dispatch, dispatch_reduce_aux, off);
 }

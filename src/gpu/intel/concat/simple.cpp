@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2024-2025 Intel Corporation
+* Copyright 2024 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -49,7 +49,7 @@ static status_t normalize(simple_params_t &conf,
     const int max_sg_size = device_info->max_subgroup_size();
     const auto data_type_size = normalize.data_type_size();
     dim_t dst_bytes = ref_dst_mdw.size();
-    dim_t max_bytes = ref_dst_mdw.size();
+    dim_t max_nelems = ref_dst_mdw.nelems();
 
     std::vector<prb_info_t> infos;
     for (int simd : {32, 16, 8, 1}) {
@@ -79,8 +79,8 @@ static status_t normalize(simple_params_t &conf,
     dim_t final_padding = 0;
     for (int i = 0; i < pd->n_inputs(); ++i) {
         if (pd->src_md(i)->padded_dims[axis] == 0) continue;
-        max_bytes = std::max(max_bytes,
-                into<dim_t>(memory_desc_wrapper(pd->src_md(i)).size()));
+        max_nelems = std::max(max_nelems,
+                into<dim_t>(memory_desc_wrapper(pd->src_md(i)).nelems()));
         memcpy(&src_md, pd->src_md(i), sizeof(memory_desc_t));
         normalize(src_md);
         const auto &src_blkg = src_md.format_desc.blocking;
@@ -107,11 +107,19 @@ static status_t normalize(simple_params_t &conf,
 
     conf.n_blocks = 0;
     dim_t stride = 1;
+    const bool insert_ghost = data_type_size > (unsigned)info.type_size;
     for (int i = dst_blkg.inner_nblks - 1; i >= 0; --i) {
         auto blk = dst_blkg.inner_blks[i];
         auto idx = dst_blkg.inner_idxs[i];
-        if (i == dst_blkg.inner_nblks - 1)
-            blk = blk * data_type_size / info.type_size;
+        if (i == dst_blkg.inner_nblks - 1) {
+            // The ghost block is an inner axis block arising from using a data
+            // type smaller than the data type of the memory descriptor. The
+            // ghost block will change the strides of the concat dim blocks. If
+            // there is no ghost block or the inner block is an inner axis block,
+            // we simply scale the block by the ratio of the data type sizes.
+            auto &target = (idx == axis::concat && insert_ghost) ? stride : blk;
+            target = target * data_type_size / info.type_size;
+        }
         if (idx == axis::concat) {
             conf.blocks[conf.n_blocks] = blk;
             conf.strides[conf.n_blocks] = stride;
@@ -150,7 +158,8 @@ static status_t normalize(simple_params_t &conf,
     rt_conf.lws_d = compute::get_optimal_lws(
             rt_conf.gws_d, dim_idx::invalid, device_info->gpu_arch());
 
-    conf.use_large_index = (max_bytes > std::numeric_limits<int>::max());
+    conf.use_large_index = (max_nelems > std::numeric_limits<int32_t>::max());
+    conf.require_stateless_addressing = pd->has_large_buffers();
     return status::success;
 }
 
@@ -169,7 +178,7 @@ static status_t try_normalize_internal_padding(simple_params_t &conf,
     const int max_sg_size = device_info->max_subgroup_size();
     const auto data_type_size = normalize.data_type_size();
     dim_t dst_bytes = ref_dst_mdw.size();
-    dim_t max_bytes = ref_dst_mdw.size();
+    dim_t max_nelems = ref_dst_mdw.nelems();
 
     conf.read_block = 1;
     conf.write_block = 1;
@@ -180,6 +189,8 @@ static status_t try_normalize_internal_padding(simple_params_t &conf,
     dim_t final_padding = 0;
     for (int i = 0; i < pd->n_inputs(); ++i) {
         if (pd->src_md(i)->padded_dims[concat_dim] == 0) continue;
+        max_nelems = std::max(max_nelems,
+                into<dim_t>(memory_desc_wrapper(pd->src_md(i)).nelems()));
         memcpy(&src_md, pd->src_md(i), sizeof(memory_desc_t));
 
         normalize(src_md, padding::internal);
@@ -259,7 +270,8 @@ static status_t try_normalize_internal_padding(simple_params_t &conf,
     rt_conf.inner_axis = inner_offset;
     conf.data_type_size = static_cast<int>(data_type_size);
 
-    conf.use_large_index = (max_bytes > std::numeric_limits<int>::max());
+    conf.use_large_index = (max_nelems > std::numeric_limits<int32_t>::max());
+    conf.require_stateless_addressing = pd->has_large_buffers();
 
     // attempt to enable internal padding kernel
     size_t concat2_inner_axis = dst_md.dims[axis::inner];
@@ -340,6 +352,7 @@ static status_t init_conf_common(impl::engine_t *engine, const concat_pd_t *pd,
 
 compute::kernel_ctx_t simple_params_t::get_kernel_ctx() const {
     compute::kernel_ctx_t kernel_ctx;
+    kernel_ctx.require_stateless_addressing(require_stateless_addressing);
 
     kernel_ctx.define_int("WRITE_BLOCK", write_block);
     kernel_ctx.define_int("READ_BLOCK", read_block);
@@ -367,11 +380,29 @@ void push_idx_kernel_args(compute::kernel_arg_list_t &partial_list,
         const exec_ctx_t &ctx, const simple_params_t &conf,
         const simple_runtime_params_t &rt_conf, const concat_pd_t *pd) {
     const auto concat_dim = pd->concat_dim();
+    const auto &md = *pd->dst_md();
+    const auto &blkg = md.format_desc.blocking;
+
+    std::vector<dim_t> blocks(md.ndims, 1);
+    for (int i = 0; i < blkg.inner_nblks; ++i)
+        blocks[blkg.inner_idxs[i]] *= blkg.inner_blks[i];
+
+    dim_t ext_dim_elems = 1;
+    const auto min_ext_stride = blkg.strides[concat_dim]
+            * md.padded_dims[concat_dim] / blocks[concat_dim];
+    for (int i = 0; i < md.ndims; ++i)
+        if (blkg.strides[i] >= min_ext_stride)
+            ext_dim_elems *= md.padded_dims[i] / blocks[i];
 
     bool cutoff = (rt_conf.dst_concat_axis % rt_conf.read_overlap != 0);
+    padding::padding_t padding = padding::none;
     for (int idx = 0, valid_idx = 0; idx < pd->n_inputs(); ++idx) {
+        const auto &md = *pd->src_md(idx);
         // skip invalid inputs
-        if (pd->src_md(idx)->padded_dims[concat_dim] == 0) continue;
+        if (md.padded_dims[concat_dim] == 0) continue;
+        if (md.padded_dims[concat_dim] > md.dims[concat_dim])
+            padding = (padding == padding::none) ? padding::external
+                                                 : padding::internal;
 
         auto &src = CTX_IN_STORAGE(DNNL_ARG_MULTIPLE_SRC + idx);
         partial_list.append(src);
@@ -401,7 +432,9 @@ void push_idx_kernel_args(compute::kernel_arg_list_t &partial_list,
     // consider the external axis when computing write indices
     bool must_compute_ext_idx
             = (rt_conf.read_overlap * rt_conf.gws0_block > rt_conf.inner_axis)
-            || cutoff;
+            || (padding == padding::internal) || cutoff;
+    // We never have to compute the external dim index if it is always 0
+    must_compute_ext_idx &= (ext_dim_elems > 1);
     partial_list.append(static_cast<std::uint8_t>(must_compute_ext_idx));
 }
 

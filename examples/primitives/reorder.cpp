@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -17,9 +17,12 @@
 /// @example reorder.cpp
 /// > Annotated version: @ref reorder_example_cpp
 
-/// @page reorder_example_cpp Reorder Primitive Example
-/// This C++ API demonstrates how to create and execute a
+/// @page reorder_example_cpp_brief
+/// @brief This C++ API demonstrates how to create and execute a
 /// [Reorder](@ref dev_guide_reorder) primitive.
+
+/// @page reorder_example_cpp Reorder Primitive Example
+/// \copybrief reorder_example_cpp_brief
 ///
 /// Key optimizations included in this example:
 /// - Primitive attributes for output scaling.

@@ -14,19 +14,21 @@
 * limitations under the License.
 *******************************************************************************/
 
+#include "dsl/ir/pass/pass.hpp"
+#include "dsl/ir/pass/trace.hpp"
+#include "dsl/utils/logging.hpp"
+#include "dsl/utils/utils.hpp"
+#include "gemmstone/config.hpp"
+#include "gemmstone/dsl/dsl.hpp"
 #include "gemmstone/strategy.hpp"
-#include "gpu/intel/gemm/jit/generator_dsl/kernel_desc.hpp"
-#include "gpu/intel/gemm/jit/include/gemmstone/config.hpp"
-#include "gpu/intel/jit/dsl/dsl.hpp"
-#include "gpu/intel/jit/pass/pass.hpp"
-#include "gpu/intel/jit/utils/trace.hpp"
-#include "gpu/intel/utils.hpp"
+#include "generator_dsl/kernel_desc.hpp"
+#include "gpu/intel/jit/utils/type_bridge.hpp"
 
 GEMMSTONE_NAMESPACE_START
 
 using namespace dsl;
 
-inline ir::type_t into_ir(Type t, int elems = 1) {
+inline type_t into_ir(Type t, int elems = 1) {
     using namespace ir;
     switch (t) {
         case Type::invalid: return type_t::undef();
@@ -73,7 +75,7 @@ struct transform_t {
         , cache_hint(to_ir(cache_hint))
         , dims(std::move(dims)) {}
 
-    layout_t get_layout(const ir::tile_t &sizes, ir::type_t type) const {
+    layout_t get_layout(const tile_t &sizes, type_t type) const {
 
         auto col_var = dims[0];
         auto col = sizes[dims[0]];
@@ -119,23 +121,23 @@ struct transform_t {
 
             // Impossible to hit due to normalization
             case kind_t::transpose_vnni:
-            default: gpu_assert(false); return {};
+            default: stub(); return {};
         }
     }
 
-    static ir::send_cache_hint_t to_ir(ngen::CacheSettingsLSC hint) {
+    static send_cache_hint_t to_ir(ngen::CacheSettingsLSC hint) {
         switch (hint) {
             case ngen::CacheSettingsLSC::L1C_L3C:
-                return ir::send_cache_hint_t::load_once;
+                return send_cache_hint_t::load_once;
             case ngen::CacheSettingsLSC::Default:
-                return ir::send_cache_hint_t::hw_default;
-            default: gpu_assert(false); return ir::send_cache_hint_t::undef;
+                return send_cache_hint_t::hw_default;
+            default: stub(); return send_cache_hint_t::undef;
         }
     }
 
     kind_t kind = kind_t::none;
     int pack_size = 0;
-    ir::send_cache_hint_t cache_hint = ir::send_cache_hint_t::undef;
+    send_cache_hint_t cache_hint = send_cache_hint_t::undef;
     std::array<idx_t, 2> dims = {};
 };
 
@@ -195,8 +197,8 @@ transform_t get_transform(const MatrixAddressingStrategy &matrix_strategy,
         }
         default: stub(); return {};
     }
-};
-ir::pvar_map_t<expr_t> get_strides(
+}
+idx_map_t<expr_t> get_strides(
         MatrixLayout layout, std::array<idx_t, 2> pvars, expr_t ld) {
     switch (layout) {
         case MatrixLayout::N: return {{pvars[0], 1}, {pvars[1], ld}};
@@ -213,7 +215,7 @@ struct tensor_config_t {
         layout = layout.with_block({k_var, copies});
     }
 
-    ir::tile_t tile;
+    tile_t tile;
     layout_t layout;
 
     transform_t transform;
@@ -224,16 +226,16 @@ void apply_post_ops(const dnnl::impl::gpu::intel::gpu_post_ops_t &ops,
         const std::vector<idx_t> &dims) {
     for (size_t i = 0; i < ops.len(); i++) {
         if (ops[i].is_eltwise()) {
-            gpu_assert(false) << "Unimplemeted";
+            stub();
         } else if (ops[i].is_sum()) {
-            gpu_assert(false) << "Unimplemeted";
+            stub();
         } else if (ops[i].is_binary()) {
             auto &e = ops[i].as_binary();
             std::string i_s = std::to_string(i);
             std::string stride_prefix = "binary" + i_s + "_stride";
 
             int ndims = (int)dims.size();
-            ir::pvar_map_t<int> dim_to_md;
+            idx_map_t<int> dim_to_md;
             for (int i = 0; i < ndims; i++) {
                 dim_to_md[dims[i]] = i;
             };
@@ -252,11 +254,11 @@ void apply_post_ops(const dnnl::impl::gpu::intel::gpu_post_ops_t &ops,
             }
 
             auto src_g = [&]() -> global_tensor_t {
-                expr_t src_g_offset = simplify(arg("offset_binary" + i_s)
+                expr_t src_g_offset = ir::simplify(arg("offset_binary" + i_s)
                         + e.src1_desc.get_offset(idxs, strides));
 
-                ir::pvar_map_t<expr_t> g_strides;
-                ir::pvar_map_t<expr_t> g_sizes;
+                idx_map_t<expr_t> g_strides;
+                idx_map_t<expr_t> g_sizes;
                 for (int i = 0; i < ndims; i++) {
                     g_strides[dims[i]] = strides[i];
                     g_sizes[dims[i]] = e.src1_desc.is_broadcast(i, ndims)
@@ -287,11 +289,11 @@ void apply_post_ops(const dnnl::impl::gpu::intel::gpu_post_ops_t &ops,
                 case dnnl::impl::alg_kind::binary_add:
                     binary(ir::op_kind_t::_add, C, C, src);
                     break;
-                default: gpu_assert(false) << "Unimplemented";
+                default: stub();
             }
 
         } else {
-            gpu_assert(false) << "Unimplemented";
+            stub();
         }
     }
 }
@@ -394,39 +396,39 @@ struct generator_dsl_t {
     generator_dsl_t(const generator_dsl_desc_t &desc)
         : problem(desc.problem), strategy(desc.strategy) {}
 
-    kernel_t build(ir::kernel::iface_t iface, ir::ir_context_t &ctx) {
+    kernel_t build(kernel::iface_t iface, ir::ir_context_t &ctx) {
         if (strategy.kParallel || strategy.kParallelLocal) {
-            gpu_warning() << "kParallel support is unimplemented";
+            dsl_warning() << "kParallel support is unimplemented";
             return {};
         }
         if (strategy.persistentLoop()) {
-            gpu_warning() << "persistentLoop support is unimplemented";
+            dsl_warning() << "persistentLoop support is unimplemented";
             return {};
         }
         if (strategy.slmA || strategy.slmB) {
-            gpu_warning() << "slm copy support is unimplemented, disabling "
+            dsl_warning() << "slm copy support is unimplemented, disabling "
                              "slm copy";
         }
 
         if (strategy.wgPadFactor > 1) {
-            gpu_warning() << "work group padding is unimplemented";
+            dsl_warning() << "work group padding is unimplemented";
             return {};
         }
 
         if (strategy.cWalkOrder != WalkOrder::HW2D) {
-            gpu_warning() << "Unsupported walk order";
+            dsl_warning() << "Unsupported walk order";
             return {};
         }
 
         if (problem.Ta != problem.Ta_ext || problem.Tb != problem.Tb_ext
                 || problem.Tc != problem.Tc_ext) {
-            gpu_warning() << "Type conversion support is unimplemented";
+            dsl_warning() << "Type conversion support is unimplemented";
             return {};
         }
 
         if (problem.batch != BatchMode::None
                 && problem.batch != BatchMode::Strided) {
-            gpu_warning() << "Batch mode is unimplemented";
+            dsl_warning() << "Batch mode is unimplemented";
             return {};
         }
 
@@ -452,7 +454,7 @@ struct generator_dsl_t {
                 = get_transform(strategy.B_prefetch, B_vars, true);
         auto B_load_transform = get_transform(strategy.B, B_vars);
 
-        ir::tile_t C_dims {{{m_var, m_blk}, {n_var, n_blk}}};
+        tile_t C_dims {{{m_var, m_blk}, {n_var, n_blk}}};
         auto C_store_transform = get_transform(strategy.C, C_vars);
 
         tensor_t C = def("C_blk",
@@ -545,37 +547,39 @@ struct generator_dsl_t {
         tensor_config_t B_load(
                 kloop_it.B_load(), B_load_transform, strategy.B_copies);
 
-        auto prefetchA = strategy.prefetchA ? dnnl::impl::utils::rnd_dn(
-                                 strategy.prefetchA, strategy.ka_prefetch)
-                                            : 0;
+        auto prefetchA = strategy.prefetchA
+                ? round_down(strategy.prefetchA, strategy.ka_prefetch)
+                : 0;
         if (prefetchA != strategy.prefetchA)
-            gpu_warning() << "Unimplemented partial A tile prefetch, modifying "
+            dsl_warning() << "Unimplemented partial A tile prefetch, modifying "
                              "prefetch distance "
                           << strategy.prefetchA << " -> " << prefetchA;
-        auto prefetchB = strategy.prefetchB ? dnnl::impl::utils::rnd_dn(
-                                 strategy.prefetchB, strategy.kb_prefetch)
-                                            : 0;
+        auto prefetchB = strategy.prefetchB
+                ? round_down(strategy.prefetchB, strategy.kb_prefetch)
+                : 0;
         if (prefetchB != strategy.prefetchB)
-            gpu_warning() << "Unimplemented partial B tile prefetch, modifying "
+            dsl_warning() << "Unimplemented partial B tile prefetch, modifying "
                              "prefetch distance "
                           << strategy.prefetchB << " -> " << prefetchB;
 
         k_loop_config_t k_loop_main {k_blk, prefetchA, prefetchB, kloop_it,
-                A_load, B_load, A_prefetch_transform, B_prefetch_transform, C};
+                std::move(A_load), std::move(B_load), A_prefetch_transform,
+                B_prefetch_transform, C};
 
-        gpu_assert(k_loop_main.A_load_warmup() % kloop_it.A_load().tile[k_var]
+        dsl_assert(k_loop_main.A_load_warmup() % kloop_it.A_load().tile[k_var]
                 == 0);
-        gpu_assert(k_loop_main.B_load_warmup() % kloop_it.B_load().tile[k_var]
+        dsl_assert(k_loop_main.B_load_warmup() % kloop_it.B_load().tile[k_var]
                 == 0);
 
         tensor_config_t A_load_short(kloop_it.A_load(), A_load_transform, 1);
         tensor_config_t B_load_short(kloop_it.B_load(), B_load_transform, 1);
 
-        k_loop_config_t k_loop_short {
-                (int)lcm(A_load_short.tile[k_var], B_load_short.tile[k_var]), 0,
-                0, kloop_it, A_load_short, B_load_short, A_prefetch_transform,
-                B_prefetch_transform, C};
-        gpu_assert(k_loop_short.k_warmup() == 0);
+        auto k_blk_short
+                = (int)lcm(A_load_short.tile[k_var], B_load_short.tile[k_var]);
+        k_loop_config_t k_loop_short {k_blk_short, 0, 0, kloop_it,
+                std::move(A_load_short), std::move(B_load_short),
+                A_prefetch_transform, B_prefetch_transform, std::move(C)};
+        dsl_assert(k_loop_short.k_warmup() == 0);
 
         if (problem.A.alignment) {
             assume(arg("lda") % (problem.A.alignment / problem.Ta_ext) == 0);
@@ -588,10 +592,9 @@ struct generator_dsl_t {
         }
 
         _if(kloop_it.is_inbounds(0), [&]() {
-            _if(
-                    k >= k_loop_main.k_warmup(),
-                    [&]() { build_k_loop(k_loop_main); },
-                    [&]() { build_k_loop(k_loop_short); });
+            _if(k >= k_loop_main.k_warmup(), [&]() {
+                build_k_loop(k_loop_main);
+            }, [&]() { build_k_loop(k_loop_short); });
             store_C();
         });
 
@@ -701,7 +704,7 @@ struct generator_dsl_t {
 
             if (do_mma) {
                 if (k_offset % mma_k_blk == 0) {
-                    ir::tile_t tile = C.layout.tile();
+                    tile_t tile = C.layout.tile();
                     tile[k_var] = mma_k_blk;
                     mma(C, A, B, tile, {{k_var, k_offset}}, strategy.systolic);
                 }
@@ -731,7 +734,7 @@ struct generator_dsl_t {
             kloop_it.kloop_inc(k_blk);
         });
 
-        auto tail_end = dnnl::impl::utils::rnd_up(warmup, k_blk);
+        auto tail_end = round_up(warmup, k_blk);
         for (int k_unroll_idx = 0; k_unroll_idx < tail_end;
                 k_unroll_idx += k_unroll_blk) {
             bool A_prefetch = k_unroll_idx + cfg.A_prefetch_warmup < tail_end;
@@ -746,8 +749,8 @@ struct generator_dsl_t {
     const GEMMStrategy &strategy;
 };
 
-kernel_t make_kernel(
-        const generator_dsl_desc_t &desc, ir::constraint_set_t cset) {
+kernel_t make_kernel(const generator_dsl_desc_t &desc) {
+    ir::constraint_set_t cset;
     ir::ir_context_t ctx(desc.options, cset);
 
     ir::trace_start();

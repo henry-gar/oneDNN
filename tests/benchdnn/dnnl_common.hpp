@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2017-2025 Intel Corporation
+* Copyright 2017 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@
 #define DNNL_COMMON_HPP
 
 #include <functional>
+#include <future> // for std::promise and std::future
 #include <stddef.h>
 #include <stdint.h>
 #include <vector>
@@ -78,7 +79,8 @@
 
 #ifndef DNNL_EXPERIMENTAL_PROFILING
 #if DNNL_GPU_RUNTIME == DNNL_RUNTIME_OCL \
-        || DNNL_GPU_RUNTIME == DNNL_RUNTIME_SYCL
+        || DNNL_GPU_RUNTIME == DNNL_RUNTIME_SYCL \
+        || DNNL_GPU_RUNTIME == DNNL_RUNTIME_ZE
 using dnnl_profiling_data_kind_t = int;
 extern "C" dnnl_status_t dnnl_reset_profiling(dnnl_stream_t stream);
 extern "C" dnnl_status_t dnnl_query_profiling_data(dnnl_stream_t stream,
@@ -141,8 +143,10 @@ inline const engine_t &get_cpu_engine() {
 
 bool is_cpu(const dnnl_engine_t &engine = get_test_engine());
 bool is_gpu(const dnnl_engine_t &engine = get_test_engine());
+bool is_async(const dnnl_engine_t &engine = get_test_engine());
 bool is_sycl_engine(const dnnl_engine_t &engine = get_test_engine());
 bool is_opencl_engine(const dnnl_engine_t &engine = get_test_engine());
+bool is_ze_engine(const dnnl_engine_t &engine = get_test_engine());
 bool is_nvidia_gpu(const dnnl_engine_t &engine = get_test_engine());
 bool is_f64_supported(const dnnl_engine_t &engine = get_test_engine());
 bool is_amd_gpu(const dnnl_engine_t &engine = get_test_engine());
@@ -181,6 +185,18 @@ struct args_t {
 
 private:
     std::vector<std::pair<int, const dnn_mem_t *>> args_;
+};
+
+struct stream_staller_t {
+    // Enqueue tasks to stall a primitive execution tasks for asynchronous
+    // threadpool runtime. For rest runtimes does nothing.
+    stream_staller_t(stream_t &stream);
+
+    // A signal the submission has completed and ready for execution.
+    void release();
+
+private:
+    std::promise<void> prom_;
 };
 
 template <typename prb_t>
@@ -601,7 +617,7 @@ int init_prim(const thr_ctx_t &thr_ctx,
 //
 // Note: a dedicated non-templated type for `setup_cmp_func_t` could be used but
 // since it relies on a `prb_t` type which is individual for each driver,
-// it is'nt possible without a template.
+// it isn't possible without a template.
 template <typename setup_cmp_func_t, typename prb_t>
 void check_correctness(const prb_t *prb, const std::vector<data_kind_t> &kinds,
         const args_t &args, const args_t &ref_args,
@@ -664,6 +680,10 @@ int execute_and_wait(perf_function_t &exec_func, const dnnl_engine_t &engine,
         const args_t &args, res_t *res = nullptr);
 int execute_and_wait(
         dnnl_primitive_t prim, const args_t &args, res_t *res = nullptr);
+
+int run_execution(perf_function_t &exec_func, const dnnl_engine_t &engine,
+        const args_t &args, res_t *res = nullptr);
+int run_execution(dnnl_primitive_t prim, const args_t &args, res_t *res);
 
 void reset_gpu_profiling(dnnl_stream_t stream);
 
@@ -916,6 +936,16 @@ void init_memory_args(dnn_mem_map_t &mem_map, const prb_t *prb,
     mem_map.emplace(DNNL_ARG_SCRATCHPAD,
             dnn_mem_t(scratch_md, test_engine, /* prefill = */ true));
 
+#if DNNL_EXPERIMENTAL_GROUPED_MEMORY
+    // Grouped max variable dim hint
+    // Optional host scalar, created when src is a grouped descriptor
+    if (query_md_sparse_encoding(query_md(const_pd, DNNL_ARG_SRC))
+            == dnnl_grouped) {
+        auto hint_md = dnn_mem_t::init_host_scalar_md(dnnl_s32);
+        mem_map.emplace(DNNL_ARG_HINT_MAX_GROUP_SIZE, dnn_mem_t(hint_md));
+    }
+#endif
+
     // Binary post-op.
     // TODO: currently run-time dimensions are not supported in binary post-op.
     for (int idx = 0; idx < dnnl_post_ops_len(const_po); ++idx) {
@@ -964,14 +994,34 @@ void init_memory_args(dnn_mem_map_t &mem_map, const prb_t *prb,
         const auto &dropout_md = query_md(const_pd, DNNL_ARG_ATTR_DROPOUT_MASK);
         mem_map.emplace(DNNL_ARG_ATTR_DROPOUT_MASK,
                 dnn_mem_t(dropout_md, test_engine, /* prefill = */ true));
-        int64_t count = 1;
-        auto prob_md = dnn_mem_t::init_md(1, &count, dnnl_f32, tag::abx);
-        mem_map.emplace(DNNL_ARG_ATTR_DROPOUT_PROBABILITY,
-                dnn_mem_t(prob_md, test_engine, /* prefill = */ true));
 
-        auto seed_md = dnn_mem_t::init_md(1, &count, dnnl_s32, tag::abx);
-        mem_map.emplace(DNNL_ARG_ATTR_DROPOUT_SEED,
-                dnn_mem_t(seed_md, test_engine, /* prefill = */ true));
+        if (prb->attr.dropout.use_host_scalars) {
+            auto prob_md = dnn_mem_t::init_host_scalar_md(dnnl_f32);
+            mem_map.emplace(
+                    DNNL_ARG_ATTR_DROPOUT_PROBABILITY, dnn_mem_t(prob_md));
+            auto seed_md = dnn_mem_t::init_host_scalar_md(dnnl_s64);
+            mem_map.emplace(DNNL_ARG_ATTR_DROPOUT_SEED, dnn_mem_t(seed_md));
+            if (prb->attr.dropout.offset != 0) {
+                auto offset_md = dnn_mem_t::init_host_scalar_md(dnnl_s64);
+                mem_map.emplace(
+                        DNNL_ARG_ATTR_DROPOUT_OFFSET, dnn_mem_t(offset_md));
+            }
+        } else {
+            int64_t count = 1;
+            auto prob_md = dnn_mem_t::init_md(1, &count, dnnl_f32, tag::abx);
+            mem_map.emplace(DNNL_ARG_ATTR_DROPOUT_PROBABILITY,
+                    dnn_mem_t(prob_md, test_engine, /* prefill = */ true));
+            auto seed_md = dnn_mem_t::init_md(1, &count, dnnl_s64, tag::abx);
+            mem_map.emplace(DNNL_ARG_ATTR_DROPOUT_SEED,
+                    dnn_mem_t(seed_md, test_engine, /* prefill = */ true));
+            if (prb->attr.dropout.offset != 0) {
+                auto offset_md
+                        = dnn_mem_t::init_md(1, &count, dnnl_s64, tag::abx);
+                mem_map.emplace(DNNL_ARG_ATTR_DROPOUT_OFFSET,
+                        dnn_mem_t(
+                                offset_md, test_engine, /* prefill = */ true));
+            }
+        }
     }
 
     // Scales.
@@ -1012,8 +1062,7 @@ void init_memory_args(dnn_mem_map_t &mem_map, const prb_t *prb,
 
             if (policy == attr_t::policy_t::HOST_SCALAR) {
                 auto scales_md = dnn_mem_t::init_host_scalar_md(dt);
-                float scale = sc.get(exec_arg).scale;
-                mem_map.emplace(exec_sc_arg, dnn_mem_t(scales_md, &scale));
+                mem_map.emplace(exec_sc_arg, dnn_mem_t(scales_md));
                 return;
             }
 
@@ -1068,8 +1117,7 @@ void init_memory_args(dnn_mem_map_t &mem_map, const prb_t *prb,
 
             if (e.policy == attr_t::policy_t::HOST_SCALAR) {
                 auto zp_md = dnn_mem_t::init_host_scalar_md(e.dt);
-                int32_t zero_point = zp.get(exec_arg).value;
-                mem_map.emplace(exec_zp_arg, dnn_mem_t(zp_md, &zero_point));
+                mem_map.emplace(exec_zp_arg, dnn_mem_t(zp_md));
                 return;
             }
 
@@ -1153,6 +1201,9 @@ void init_memory_args(dnn_mem_map_t &mem_map, const prb_t *prb,
 
 void erase_unused_args(
         dnn_mem_map_t &ref_mem_map, const dnn_mem_map_t &mem_map);
+
+void get_kinds_to_check_shared(
+        std::vector<data_kind_t> &check_kinds, const attr_t &attr);
 
 int update_ref_mem_map_from_prim(dnnl_primitive_t prim_ref,
         const dnn_mem_t &library_mem, dnn_mem_map_t &ref_mem_map, int exec_arg,

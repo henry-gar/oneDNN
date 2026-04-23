@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright 2022-2025 Intel Corporation
+ * Copyright 2022 Intel Corporation
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -94,7 +94,10 @@ DECLARE_LAYOUT_PROPAGATOR(groupnorm);
 DECLARE_LAYOUT_PROPAGATOR(gen_index);
 DECLARE_LAYOUT_PROPAGATOR(mask);
 DECLARE_LAYOUT_PROPAGATOR(sdpa);
+DECLARE_LAYOUT_PROPAGATOR(sdpa_bwd);
 DECLARE_LAYOUT_PROPAGATOR(host_scalar);
+DECLARE_LAYOUT_PROPAGATOR(identity);
+DECLARE_LAYOUT_PROPAGATOR(gated_mlp);
 
 #undef DECLARE_LAYOUT_PROPAGATOR
 

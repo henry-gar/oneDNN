@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -435,7 +435,9 @@ __kernel void xe_pooling_bwd(__global DATA_T *diff_src, __global int *ws,
     S0 /= KD * KH * KW;
     S1 /= KD * KH * KW;
 #if UNROLL_MB_COUNT > 1
-    unroll_for(int i = 0; i < UNROLL_MB_COUNT; i++) { S[i] /= KD * KH * KW; }
+    unroll_for(int i = 0; i < UNROLL_MB_COUNT; i++) {
+        S[i] /= KD * KH * KW;
+    }
 #endif
 #endif
 

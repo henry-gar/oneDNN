@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -186,7 +186,7 @@ struct jit_uni_x8s8s32x_1x1_convolution_fwd_t : public primitive_t {
         bool set_or_check_wei_format() {
             using namespace format_tag;
             using namespace memory_extra_flags;
-            const auto zp = attr()->zero_points_;
+            const auto &zp = attr()->zero_points_;
             const int c_mask = 0x1,
                       g_mask = 0x3; // mask for i/o-channel and ngroups
 
@@ -197,15 +197,15 @@ struct jit_uni_x8s8s32x_1x1_convolution_fwd_t : public primitive_t {
                 case avx2:
                     wei_tag = with_groups()
                             ? utils::pick(ndims() - 3, gOIw2i8o4i, gOIhw2i8o4i,
-                                    gOIdhw2i8o4i)
+                                      gOIdhw2i8o4i)
                             : utils::pick(ndims() - 3, OIw2i8o4i, OIhw2i8o4i,
-                                    OIdhw2i8o4i);
+                                      OIdhw2i8o4i);
                     break;
                 case sse41:
                     wei_tag = with_groups() ? utils::pick(ndims() - 3, gOIw4o4i,
-                                      gOIhw4o4i, gOIdhw4o4i)
+                                                      gOIhw4o4i, gOIdhw4o4i)
                                             : utils::pick(ndims() - 3, OIw4o4i,
-                                                    OIhw4o4i, OIdhw4o4i);
+                                                      OIhw4o4i, OIdhw4o4i);
                     break;
                 default: assert(!"Current ISA is not supported!"); break;
             }
@@ -376,7 +376,7 @@ private:
     status_t execute_forward(const exec_ctx_t &ctx) const;
     void execute_forward_thr(const int ithr, const int nthr, const char *src,
             const char *weights, const char *bias, const char *weights_dw,
-            const char *bias_dw, char *dst, const void *src_oscales,
+            const char *bias_dw, char *dst, const void *src_scales,
             const void *wei_scales, const void *dst_scales,
             const void *dw_wei_scales, const void *dw_dst_scales,
             const int32_t *src_zero_point, const int32_t *dst_zero_point,

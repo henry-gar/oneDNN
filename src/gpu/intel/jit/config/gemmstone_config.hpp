@@ -22,11 +22,8 @@
 #include "common/primitive_attr.hpp"
 #include "common/serialization.hpp"
 #include "common/verbose.hpp"
-#include "gpu/intel/jit/dsl/dsl.hpp"
 #include "gpu/intel/jit/generator.hpp"
 #include "gpu/intel/jit/post_op_injector.hpp"
-#include "gpu/intel/microkernels/entrance_agent.hpp"
-#include "gpu/intel/microkernels/package.hpp"
 #include "gpu/intel/post_ops.hpp"
 #include "ngen_register_allocator.hpp"
 
@@ -36,14 +33,31 @@
 
 #if DNNL_GPU_RUNTIME == DNNL_RUNTIME_SYCL
 #define ZEBIN_OUTPUT
+#define GEMMSTONE_WITH_SYCL_RUNTIME
 #elif DNNL_GPU_RUNTIME == DNNL_RUNTIME_OCL
 #define OPENCL_OUTPUT
+#define GEMMSTONE_WITH_OPENCL_RUNTIME
+#elif DNNL_GPU_RUNTIME == DNNL_RUNTIME_ZE
+#define ZEBIN_OUTPUT
+#define GEMMSTONE_WITH_L0_RUNTIME
+#endif
+
+#if !defined(NDEBUG) || defined(DNNL_DEV_MODE)
+#define GEMMSTONE_ASSERTIONS 1
+#define GEMMSTONE_WITH_ASM_RUNTIME
+
+#if __cplusplus >= 202002L || (defined(_MSVC_LANG) && _MSVC_LANG >= 202002L)
+#if __has_include(<version>)
+#include <version>
+#if defined(__cpp_lib_source_location) && __cpp_lib_source_location >= 201907L
+#define GEMMSTONE_ENABLE_SOURCE_LOCATION true
+#endif
+#endif
+#endif
+
 #endif
 
 namespace gemmstone {
-
-namespace ir = dnnl::impl::gpu::intel::jit;
-namespace dsl = dnnl::impl::gpu::intel::jit::dsl;
 
 #define GENERATOR_SUPER(hw) ngen::ELFCodeGenerator<hw>
 #define GENERATOR_BASE(hw) dnnl::impl::gpu::intel::jit::generator_t<hw>
@@ -68,8 +82,6 @@ template <typename... Args>
 inline void verbosePrintf(const char *fmtStr, Args... args) {
     return dnnl::impl::verbose_printf(fmtStr, args...);
 }
-
-namespace micro = dnnl::impl::gpu::intel::micro;
 
 using SerializationStream = dnnl::impl::serialization_stream_t;
 
@@ -160,6 +172,26 @@ struct PostOpsProblem {
         injector.set_scratch(scratch);
         injector.prepare();
         injector.compute(C_grfs, C_ngrf, seed.getBase(), seed.getOffset(), t);
+    }
+
+    template <ngen::HW hw>
+    void injectMXScale(GENERATOR_BASE(hw) * g, ngen::RegisterAllocator ra,
+            int C_grfs[ngen::GRF::maxRegs()], int C_ngrf,
+            const ngen::Subregister &scaleDst, ngen::DataType t,
+            int unroll) const {
+        namespace jit = dnnl::impl::gpu::intel::jit;
+        using Injector = jit::eltwise_injector_f32_t<
+                typename jit::generator_t<hw>::RootCodeGenerator>;
+        Injector injector {g, dnnl::impl::alg_kind::eltwise_mx_scale, 0.0, 0.0,
+                1.0, ngen::GRFRange(), fwd};
+        auto scratch = ra.try_alloc_range(injector.preferred_scratch_regs());
+        if (scratch.isInvalid())
+            scratch = ra.alloc_range(injector.min_scratch_regs());
+        if (scratch.isInvalid()) gpu_error_not_expected();
+
+        injector.set_scratch(scratch);
+        injector.prepare();
+        injector.compute(C_grfs, C_ngrf, scaleDst.getBase(), unroll, t);
     }
 };
 // NOLINTEND(readability-identifier-naming)

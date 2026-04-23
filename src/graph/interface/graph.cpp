@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -95,20 +95,20 @@ status_t dnnl_graph_graph::get_ordered_partitions(
     // Get the last op in topo order as proxy op for each partition.
     std::for_each(topo_unfused_ops.rbegin(), topo_unfused_ops.rend(),
             [&](op_t *op_ptr) {
-                partition_impl_t *part = op_ptr->get_partition();
-                if (!part) return;
-                if (!visited_parts.count(part)) {
-                    topo_fused_ops.emplace_back(op_ptr);
-                    visited_parts.emplace(part);
-                }
-            });
+        partition_impl_t *part = op_ptr->get_partition();
+        if (!part) return;
+        if (!visited_parts.count(part)) {
+            topo_fused_ops.emplace_back(op_ptr);
+            visited_parts.emplace(part);
+        }
+    });
 
     std::for_each(
             topo_fused_ops.rbegin(), topo_fused_ops.rend(), [&](op_t *op_ptr) {
-                partition_impl_t *part = op_ptr->get_partition();
-                partitions[count]->init(part->shared_from_this());
-                count++;
-            });
+        partition_impl_t *part = op_ptr->get_partition();
+        partitions[count]->init(part->shared_from_this());
+        count++;
+    });
     return ret;
 }
 
@@ -383,9 +383,7 @@ status_t DNNL_API dnnl_graph_graph_filter(
     }
     graph->clean_partitions();
 
-#ifdef DNNL_ENABLE_GRAPH_DUMP
-    if (dnnl::impl::getenv_int_user("GRAPH_DUMP", 0) > 0
-            || utils::check_verbose_string_user("GRAPH_DUMP", "graph")) {
+    if (utils::get_graph_dump_mode(graph_dump_mode_t::graph)) {
         // deep copy for graph serialization. note that this is for
         // visualization purpose
         graph_t agraph(*graph);
@@ -393,7 +391,6 @@ status_t DNNL_API dnnl_graph_graph_filter(
         filename << "graph-" << agraph.id() << ".json";
         agraph.serialize(filename.str());
     }
-#endif
 
     // Get partition_impl by calling each backends
     std::vector<const backend_t *> &backends
@@ -437,9 +434,8 @@ status_t DNNL_API dnnl_graph_graph_get_partitions(
     // initialize partitions
     std::vector<partition_t *> partitions {partition, partition + num};
     graph->get_ordered_partitions(partitions);
-#ifdef DNNL_ENABLE_GRAPH_DUMP
-    if (dnnl::impl::getenv_int_user("GRAPH_DUMP", 0) > 0
-            || utils::check_verbose_string_user("GRAPH_DUMP", "graph")) {
+
+    if (utils::get_graph_dump_mode(graph_dump_mode_t::graph)) {
         // graph serialization after partitioning. note that this is for
         // visualization purpose
         graph_t agraph(*graph);
@@ -447,8 +443,8 @@ status_t DNNL_API dnnl_graph_graph_get_partitions(
             // p_impl is shallow copy
             const auto p_impl = aop->get_partition();
             const auto p_id = p_impl->id();
-            auto *bkd = p_impl->get_assigned_backend();
-            auto bkd_name = bkd->get_name();
+            const auto *bkd = p_impl->get_assigned_backend();
+            const auto &bkd_name = bkd->get_name();
             aop->set_attr<std::string>(
                     op_attr::partition_id, std::to_string(p_id));
             aop->set_attr<std::string>(op_attr::backend, bkd_name);
@@ -458,6 +454,6 @@ status_t DNNL_API dnnl_graph_graph_get_partitions(
         filename << "graph-" << agraph.id() << "-partitioning.json";
         agraph.serialize(filename.str());
     }
-#endif
+
     return status::success;
 }

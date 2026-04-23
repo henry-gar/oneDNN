@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2016-2025 Intel Corporation
+* Copyright 2016 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -112,8 +112,8 @@ protected:
         SKIP_IF_HIP(true, "Concat operator is not supported");
         SKIP_IF(unsupported_data_type(data_type),
                 "Engine does not support this data type.");
-        concat_test_params_t p
-                = ::testing::TestWithParam<decltype(p)>::GetParam();
+        const auto &p
+                = ::testing::TestWithParam<concat_test_params_t>::GetParam();
         for (size_t i = 0; i < p.srcs_cds.size(); i++) {
             SKIP_IF_CUDA(!cuda_supported_format_tag(p.srcs_format[i]),
                     "Unsupported format tag");
@@ -130,7 +130,7 @@ protected:
     }
 
     virtual void Test() {
-        concat_test_params_t p
+        const auto &p
                 = ::testing::TestWithParam<concat_test_params_t>::GetParam();
 
         // concat specific types and values

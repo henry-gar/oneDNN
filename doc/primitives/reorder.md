@@ -30,12 +30,15 @@ quantize the data (and if necessary change the memory format simultaneously).
 When executed, the inputs and outputs should be mapped to an execution
 argument index as specified by the following table.
 
-| Primitive input/output | Execution argument index              |
-|------------------------|---------------------------------------|
-| \src                   | DNNL_ARG_FROM                         |
-| \dst                   | DNNL_ARG_TO                           |
-| \f$src scale\f$        | DNNL_ARG_ATTR_SCALES \| DNNL_ARG_FROM |
-| \f$dst scale\f$        | DNNL_ARG_ATTR_SCALES \| DNNL_ARG_TO   |
+| Argument        | Index                                 | Type   |
+|-----------------|---------------------------------------|--------|
+| \src            | DNNL_ARG_FROM                         | Input  |
+| \dst            | DNNL_ARG_TO                           | Output |
+| \f$src scale\f$ | DNNL_ARG_ATTR_SCALES \| DNNL_ARG_FROM | Input  |
+| \f$dst scale\f$ | DNNL_ARG_ATTR_SCALES \| DNNL_ARG_TO   | Input  |
+| [scratchpad]    | DNNL_ARG_SCRATCHPAD                   | Output |
+
+[scratchpad]: @ref dev_guide_attributes_scratchpad
 
 ## Implementation Details
 
@@ -60,7 +63,7 @@ argument index as specified by the following table.
 
    - Only reference support is available for reorders to or from f8_e4m3.
 
-   - Optimized implementation of reorders to or from f8_e5m2 is available on 
+   - Optimized implementation of reorders to or from f8_e5m2 is available on
      Intel(R) Data Center GPU Max Series Only.
 
 3. To alleviate the problem a user may rely on fact that the reorder from
@@ -165,5 +168,6 @@ N/A
 
 ## Examples
 
-* @ref reorder_example_cpp
+See @ref dev_guide_examples page for a complete list. Reorder examples are listed in the
+[Memory Transformations](@ref examples_reorder) section.
 

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2023 Intel Corporation
+* Copyright 2020 Intel Corporation
 * Copyright 2020 Codeplay Software Limited
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
@@ -79,7 +79,8 @@ struct cudnn_batch_normalization_impl_base_t {
     virtual status_t init(batch_normalization_pd_t *pd) = 0;
 
     virtual void execute(
-            cudnnHandle_t handle, std::shared_ptr<bnorm_args_t> args) const = 0;
+            cudnnHandle_t handle, std::shared_ptr<bnorm_args_t> args) const
+            = 0;
 
     bool is_bwd_d() const { return is_bwd_data_; }
     bool is_training() const { return is_training_; }

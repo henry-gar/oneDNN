@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -79,14 +79,14 @@ status_t DNNL_API dnnl_graph_partition_create_with_op(
     const auto &input_vals = op->get_input_values();
     auto opaque_in_iter = std::find_if(input_vals.begin(), input_vals.end(),
             [](const std::shared_ptr<value_t> &it) {
-                return ltw(it->get_logical_tensor()).is_opaque();
-            });
+        return ltw(it->get_logical_tensor()).is_opaque();
+    });
     // find opaque layout tensors in outputs
     const auto &output_vals = op->get_output_values();
     auto opaque_out_iter = std::find_if(output_vals.begin(), output_vals.end(),
             [](const std::shared_ptr<value_t> &it) {
-                return ltw(it->get_logical_tensor()).is_opaque();
-            });
+        return ltw(it->get_logical_tensor()).is_opaque();
+    });
 
     // Case 1: all input/outputs are not opaque logical tensors. We need go
     // through all registered backends to get partitions
@@ -322,10 +322,19 @@ status_t DNNL_API dnnl_graph_compiled_partition_execute(
 
     if (get_verbose(dnnl::impl::verbose_t::exec_profile,
                 dnnl::impl::component_t::graph)) {
-        stream->wait();
+        bool block_on_wait = true;
+#if DNNL_CPU_RUNTIME == DNNL_RUNTIME_THREADPOOL
+        dnnl::threadpool_interop::threadpool_iface *tp;
+        auto status = stream->get_threadpool(&tp);
+        block_on_wait = status == status::success && tp
+                && !(tp->get_flags()
+                        & dnnl::threadpool_interop::threadpool_iface::
+                                ASYNCHRONOUS);
+#endif
+        if (block_on_wait) stream->wait();
         double start_ms = dnnl::impl::get_msec();
         CHECK(compiled_partition->execute(stream, ins, outs));
-        stream->wait();
+        if (block_on_wait) stream->wait();
         double duration_ms = dnnl::impl::get_msec() - start_ms;
         VPROF(start_ms, graph, exec, VERBOSE_profile,
                 compiled_partition->info(), duration_ms);
@@ -489,8 +498,8 @@ status_t dnnl_graph_partition::infer_shape(
     auto pos = std::find_if(outputs.begin(), outputs.end(),
             [&](const std::vector<logical_tensor_t *>::value_type &out)
                     -> bool {
-                return logical_tensor_wrapper_t(out).is_shape_unknown();
-            });
+        return logical_tensor_wrapper_t(out).is_shape_unknown();
+    });
     if (pos == outputs.end()) { return status::success; }
 
     return pimpl_->infer_shape(inputs, outputs);
@@ -599,9 +608,8 @@ status_t dnnl_graph_partition::compile(compiled_partition_t *cp,
     const_cast<partition_impl_t *>(pimpl_.get())
             ->set_use_blocked_layout(can_use_blocked_layout);
 
-#ifdef DNNL_ENABLE_GRAPH_DUMP
-    if (dnnl::impl::getenv_int_user("GRAPH_DUMP", 0) > 1
-            || utils::check_verbose_string_user("GRAPH_DUMP", "subgraph")) {
+    if (dnnl::impl::graph::utils::get_graph_dump_mode(
+                dnnl::impl::graph::graph_dump_mode_t::subgraph)) {
         if (!is_supported()) return status::unimplemented;
         // deep copy for graph serialization
         auto part = pimpl_->clone();
@@ -622,7 +630,6 @@ status_t dnnl_graph_partition::compile(compiled_partition_t *cp,
         filename << "graph-" << id() << "-" << seed << ".json";
         agraph.serialize(filename.str());
     }
-#endif
 
     // The impl's compile will generate the compiled_partition_impl and
     // modify the given inputs outputs logical tensor
@@ -679,17 +686,10 @@ status_t dnnl_graph_partition::compile(
 
     compiled_partition.first->init(result.value->pimpl_);
     compiled_partition.second = context.cache_status;
-    if (context.cache_status == cache_state_t::compiled_partition_hit
-            && aengine != compiled_partition.first->get_engine()) {
-        compiled_partition_t *cp = compiled_partition.first;
-        cp->reset_engine(aengine);
-    }
 
     return result.status;
 }
-status_t dnnl_graph_compiled_partition::reset_engine(const engine_t *e) {
-    return pimpl_->reset_engine(e);
-}
+
 status_t dnnl_graph_compiled_partition::execute(const stream_t *astream,
         const std::vector<tensor_t> &inputs,
         const std::vector<tensor_t> &outputs) const {

@@ -1,5 +1,6 @@
 /*******************************************************************************
-* Copyright 2018-2025 Intel Corporation
+* Copyright 2018 Intel Corporation
+* Copyright 2025 Institute of Software, Chinese Academy of Sciences
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -14,18 +15,17 @@
 * limitations under the License.
 *******************************************************************************/
 
+#include <cstring>
+
 #include "common/dnnl_thread.hpp"
 #include "common/nstl.hpp"
 #include "common/utils.hpp"
 
 #include "cpu/platform.hpp"
 
+#include "cpu/rv64/gemm/jit_rvv_gemm_kernel.hpp"
 #include "cpu/rv64/gemm/rvv_gemm_f32.hpp"
 #include "cpu/rv64/gemm/rvv_gemm_utils_f32.hpp"
-
-#include "cpu/gemm/f32/ref_gemm_f32.hpp"
-
-#include <riscv_vector.h>
 
 namespace dnnl {
 namespace impl {
@@ -34,95 +34,24 @@ namespace rv64 {
 
 using namespace dnnl::impl::utils;
 using namespace gemm_utils;
+using gemm_f32_traits = gemm_utils::gemm_utils_traits<float>;
 
 namespace {
-void copy_A(
-        bool isTransA, dim_t K, const float *A, const dim_t lda, float *ws) {
-    constexpr dim_t m = unroll_factor<float>::m;
 
+// Scalar copy of A into workspace for cache-friendly access.
+// Copies m rows x K columns of A into a contiguous buffer ws.
+// After copy, ws is laid out as K blocks of m contiguous elements:
+//   ws[k * m + i] = A_logical[i, k]
+void copy_A(
+        bool isTransA, dim_t K, const float *A, dim_t lda, float *ws, dim_t m) {
     for (dim_t k = 0; k < K; k++) {
-        dim_t i = 0;
         if (isTransA) {
-            ptrdiff_t stride = lda * sizeof(float);
-            while (i < m) {
-                size_t vl = __riscv_vsetvl_e32m1(m - i);
-                const float *a_ptr = A + i * lda + k;
-                vfloat32m1_t v_a = __riscv_vlse32_v_f32m1(a_ptr, stride, vl);
-                __riscv_vse32_v_f32m1(ws + i, v_a, vl);
-                i += vl;
-            }
+            for (dim_t i = 0; i < m; i++)
+                ws[i] = A[i * lda + k];
         } else {
-            const float *a_ptr = A + k * lda;
-            while (i < m) {
-                size_t vl = __riscv_vsetvl_e32m1(m - i);
-                vfloat32m1_t v_a = __riscv_vle32_v_f32m1(a_ptr + i, vl);
-                __riscv_vse32_v_f32m1(ws + i, v_a, vl);
-                i += vl;
-            }
+            std::memcpy(ws, A + k * lda, m * sizeof(float));
         }
         ws += m;
-    }
-}
-
-template <bool isTransA, bool isTransB>
-void kernel_mxn(dim_t K, const float *A, const dim_t lda, const float *B,
-        const dim_t ldb, float *C, const dim_t ldc, const float alpha,
-        const float beta, int ithr = -1) {
-    constexpr dim_t m = unroll_factor<float>::m;
-    constexpr dim_t n = unroll_factor<float>::n;
-
-    static_assert(n == 4, "This kernel is specialized for n=4");
-
-    dim_t i = 0;
-    while (i < m) {
-        size_t vl = __riscv_vsetvl_e32m1(m - i);
-
-        vfloat32m1_t v_c0, v_c1, v_c2, v_c3;
-
-        v_c0 = __riscv_vfmv_v_f_f32m1(0.0f, vl);
-        v_c1 = __riscv_vfmv_v_f_f32m1(0.0f, vl);
-        v_c2 = __riscv_vfmv_v_f_f32m1(0.0f, vl);
-        v_c3 = __riscv_vfmv_v_f_f32m1(0.0f, vl);
-
-        for (dim_t k = 0; k < K; ++k) {
-            vfloat32m1_t v_a;
-            if (isTransA) {
-                ptrdiff_t stride_a = lda * sizeof(float);
-                v_a = __riscv_vlse32_v_f32m1(A + i * lda + k, stride_a, vl);
-            } else {
-                v_a = __riscv_vle32_v_f32m1(A + i + k * lda, vl);
-            }
-
-            const float *b_ptr = isTransB ? &B[k * ldb] : &B[k];
-            const dim_t b_stride = isTransB ? 1 : ldb;
-
-            v_c0 = __riscv_vfmacc_vf_f32m1(v_c0, b_ptr[0 * b_stride], v_a, vl);
-            v_c1 = __riscv_vfmacc_vf_f32m1(v_c1, b_ptr[1 * b_stride], v_a, vl);
-            v_c2 = __riscv_vfmacc_vf_f32m1(v_c2, b_ptr[2 * b_stride], v_a, vl);
-            v_c3 = __riscv_vfmacc_vf_f32m1(v_c3, b_ptr[3 * b_stride], v_a, vl);
-        }
-
-#define STORE_C(J, V_C) \
-    do { \
-        float *c_final_ptr = C + (J)*ldc + i; \
-        if (beta == 0.0f) { \
-            vfloat32m1_t v_res = __riscv_vfmul_vf_f32m1(V_C, alpha, vl); \
-            __riscv_vse32_v_f32m1(c_final_ptr, v_res, vl); \
-        } else { \
-            vfloat32m1_t v_c_old = __riscv_vle32_v_f32m1(c_final_ptr, vl); \
-            vfloat32m1_t v_res = __riscv_vfmul_vf_f32m1(v_c_old, beta, vl); \
-            v_res = __riscv_vfmacc_vf_f32m1(v_res, alpha, V_C, vl); \
-            __riscv_vse32_v_f32m1(c_final_ptr, v_res, vl); \
-        } \
-    } while (0)
-
-        STORE_C(0, v_c0);
-        STORE_C(1, v_c1);
-        STORE_C(2, v_c2);
-        STORE_C(3, v_c3);
-
-#undef STORE_C
-        i += vl;
     }
 }
 
@@ -131,45 +60,63 @@ void block_ker(const dim_t M, const dim_t N, const dim_t K, const float *A,
         const dim_t lda, const float *B, const dim_t ldb, float *C,
         const dim_t ldc, const float alpha, const float beta, float *ws,
         bool do_copy, int ithr = -1) {
+    MAYBE_UNUSED(ithr);
 
-    dim_t Nu = rnd_dn(N, unroll_factor<float>::n);
-    dim_t Mu = rnd_dn(M, unroll_factor<float>::m);
-    for (dim_t i = 0; i < Mu; i += unroll_factor<float>::m) {
-        for (dim_t j = 0; j < Nu; j += unroll_factor<float>::n) {
+    const dim_t n_unroll = gemm_f32_traits::get_n_unroll_factor();
+    const dim_t m_unroll = gemm_f32_traits::get_m_unroll_factor();
+
+    const dim_t Nu = rnd_dn(N, n_unroll);
+    const dim_t Mu = rnd_dn(M, m_unroll);
+    const dim_t n_tail = N - Nu;
+    const dim_t m_tail = M - Mu;
+
+    auto invoke_kernel = [&](const float *a_orig, const float *b, float *c,
+                                 dim_t tile_m, dim_t tile_n, dim_t j_col) {
+        const float *a_eff;
+        dim_t lda_eff;
+        bool trans_a_eff;
+
+        if (do_copy && tile_m == m_unroll) {
+            if (j_col == 0) { copy_A(isTransA, K, a_orig, lda, ws, m_unroll); }
+            a_eff = ws;
+            lda_eff = m_unroll;
+            trans_a_eff = false;
+        } else {
+            a_eff = a_orig;
+            lda_eff = lda;
+            trans_a_eff = isTransA;
+        }
+
+        jit_rvv_gemm_kernel(a_eff, b, c, lda_eff, ldb, ldc, K, alpha, beta,
+                tile_m, tile_n, trans_a_eff, isTransB);
+    };
+
+    for (dim_t i = 0; i < Mu; i += m_unroll) {
+        const float *a = isTransA ? &A[i * lda] : &A[i];
+        for (dim_t j = 0; j < Nu; j += n_unroll) {
             const float *b = isTransB ? &B[j] : &B[j * ldb];
-            const float *a = isTransA ? &A[i * lda] : &A[i];
-            if (do_copy) {
-                if (j == 0) { copy_A(isTransA, K, a, lda, ws); }
-                kernel_mxn<false, isTransB>(K, ws, unroll_factor<float>::m, b,
-                        ldb, &C[i + j * ldc], ldc, alpha, beta, ithr);
-            } else {
-                kernel_mxn<isTransA, isTransB>(K, a, lda, b, ldb,
-                        &C[i + j * ldc], ldc, alpha, beta, ithr);
-            }
+            invoke_kernel(a, b, &C[i + j * ldc], m_unroll, n_unroll, j);
+        }
+
+        if (n_tail > 0) {
+            const float *b = isTransB ? &B[Nu] : &B[Nu * ldb];
+            invoke_kernel(a, b, &C[i + Nu * ldc], m_unroll, n_tail, Nu);
         }
     }
 
-    // tail processing
-    for (dim_t i = 0; i < M; i++) {
-        for (dim_t j = Nu; j < N; j++) {
-            float c = beta == 0.f ? 0.f : beta * C[i + j * ldc];
-            for (dim_t p = 0; p < K; p++) {
-                float b = isTransB ? B[j + p * ldb] : B[p + j * ldb];
-                float a = isTransA ? A[p + i * lda] : A[i + p * lda];
-                c += alpha * a * b;
-            }
-            C[i + j * ldc] = c;
+    if (m_tail > 0) {
+        const float *a_tail = isTransA ? &A[Mu * lda] : &A[Mu];
+
+        for (dim_t j = 0; j < Nu; j += n_unroll) {
+            const float *b = isTransB ? &B[j] : &B[j * ldb];
+            jit_rvv_gemm_kernel(a_tail, b, &C[Mu + j * ldc], lda, ldb, ldc, K,
+                    alpha, beta, m_tail, n_unroll, isTransA, isTransB);
         }
-    }
-    for (dim_t i = Mu; i < M; i++) {
-        for (dim_t j = 0; j < Nu; j++) {
-            float c = beta == 0.f ? 0.f : beta * C[i + j * ldc];
-            for (dim_t p = 0; p < K; p++) {
-                float b = isTransB ? B[j + p * ldb] : B[p + j * ldb];
-                float a = isTransA ? A[p + i * lda] : A[i + p * lda];
-                c += alpha * a * b;
-            }
-            C[i + j * ldc] = c;
+
+        if (n_tail > 0) {
+            const float *b = isTransB ? &B[Nu] : &B[Nu * ldb];
+            jit_rvv_gemm_kernel(a_tail, b, &C[Mu + Nu * ldc], lda, ldb, ldc, K,
+                    alpha, beta, m_tail, n_tail, isTransA, isTransB);
         }
     }
 }
@@ -237,11 +184,6 @@ status_t rvv_gemm_f32(const char *transa_, const char *transb_, const dim_t *M_,
     bool isTransA = (*transa_ == 'T' || *transa_ == 't');
     bool isTransB = (*transb_ == 'T' || *transb_ == 't');
 
-    if (isTransA && !isTransB) {
-        return ref_gemm<float>(transa_, transb_, M_, N_, K_, alpha_, A, lda_, B,
-                ldb_, beta_, C, ldc_, bias);
-    }
-
     const dim_t M = *M_, N = *N_, K = *K_;
     const dim_t lda = *lda_, ldb = *ldb_, ldc = *ldc_;
     const float alpha = *alpha_, beta = *beta_;
@@ -269,10 +211,10 @@ status_t rvv_gemm_f32(const char *transa_, const char *transb_, const dim_t *M_,
         }
     }
 
-    bool do_copy = (NB / unroll_factor<float>::n > 3);
+    bool do_copy = (NB / gemm_f32_traits::get_n_unroll_factor() > 3);
     const int nthr_mn = nthr_m * nthr_n;
     const int nthr_to_use = nthr_mn * nthr_k;
-    const size_t ws_elems_per_thr = K * unroll_factor<float>::m;
+    const size_t ws_elems_per_thr = K * gemm_f32_traits::get_m_unroll_factor();
     const size_t ws_size_per_thr
             = rnd_up(ws_elems_per_thr * sizeof(float), PAGE_4K);
     if (do_copy) {
@@ -366,6 +308,7 @@ status_t rvv_gemm_f32(const char *transa_, const char *transb_, const dim_t *M_,
             get_thr_block(m_from, m_to, myM, MB, M, ithr_m);
 
             dim_t offset = 0, block = 0;
+
             gemm_utils::partition_unit_diff(
                     ithr_k, nthr_k, myN, &offset, &block);
             for (int ik = 1; ik < nthr_k; ++ik) {
@@ -387,7 +330,6 @@ status_t rvv_gemm_f32(const char *transa_, const char *transb_, const dim_t *M_,
 
     return status::success;
 }
-
 } // namespace rv64
 } // namespace cpu
 } // namespace impl

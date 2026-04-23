@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2018-2025 Intel Corporation
+* Copyright 2018 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -129,7 +129,7 @@ private:
                 == pd.dst_iter_desc());
         ASSERT_TRUE(pd.query_md(query::exec_arg_md, DNNL_ARG_DST_ITER_C)
                 == queryDstIterC(pd));
-    };
+    }
 
     void test_primitive_param_queries(const typename T::primitive_desc &pd) {
         auto p = ::testing::TestWithParam<test_rnn_params_t>::GetParam();
@@ -182,6 +182,10 @@ protected:
         SKIP_IF_CUDA(
                 is_lstm || is_gru || is_lbr_gru || is_augru || is_lbr_augru,
                 "Unsupported cell type");
+        SKIP_IF(get_test_engine_kind() == engine::kind::cpu
+                        && DNNL_CPU_RUNTIME == DNNL_RUNTIME_THREADPOOL,
+                "Asynchronous Threadpool runtime is not supported");
+
         catch_expected_failures(
                 [&]() { Test(); }, p.expect_to_fail, p.expected_status, false);
     }
@@ -257,11 +261,11 @@ protected:
                 {weights_iter_dims}, prec, p.fmts.weights_iter_fmt);
         auto weights_peephole_md_tgt = is_lstm_peephole
                 ? memory::desc({weights_peephole_dims}, prec,
-                        p.fmts.weights_peephole_fmt)
+                          p.fmts.weights_peephole_fmt)
                 : memory::desc();
         auto weights_projection_md_tgt = is_lstm_projection
                 ? memory::desc({weights_projection_dims}, prec,
-                        p.fmts.weights_projection_fmt)
+                          p.fmts.weights_projection_fmt)
                 : memory::desc();
         auto bias_md_tgt = memory::desc({bias_dims}, prec, p.fmts.bias_fmt);
         auto src_layer_md_tgt

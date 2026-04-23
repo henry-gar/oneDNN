@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -37,7 +37,7 @@ struct prelu_params_t {
 class prelu_t : public ::testing::TestWithParam<prelu_params_t> {
 public:
     void TestPrelu() {
-        const auto params
+        const auto &params
                 = ::testing::TestWithParam<prelu_params_t>::GetParam();
         graph::engine_t *eng = get_engine();
 
@@ -116,7 +116,7 @@ struct prelu_bwd_params_t {
 class prelu_backprop_t : public ::testing::TestWithParam<prelu_bwd_params_t> {
 public:
     void TestPreluBackward() {
-        const auto params
+        const auto &params
                 = ::testing::TestWithParam<prelu_bwd_params_t>::GetParam();
         graph::engine_t *eng = get_engine();
         graph::stream_t *strm = get_stream();

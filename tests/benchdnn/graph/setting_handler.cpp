@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
 * limitations under the License.
 *******************************************************************************/
 
-#include "setting_handler.hpp"
+#include "graph/setting_handler.hpp"
 #include "graph/utils.hpp"
 
 namespace graph {
@@ -41,7 +41,7 @@ void assign_stride_padding_val(bool has_h, bool has_d, int64_t &w, int64_t &h,
         h = default_val;
         w = val_[0];
     }
-};
+}
 
 void assign_dilation_val(bool has_h, bool has_d, int64_t &w, int64_t &h,
         int64_t &d, const std::vector<int64_t> &val_, int64_t default_val) {
@@ -58,7 +58,7 @@ void assign_dilation_val(bool has_h, bool has_d, int64_t &w, int64_t &h,
         h = default_val;
         w = val_[0] - 1;
     }
-};
+}
 
 void assign_shape_val(int64_t &c, int64_t &w, int64_t &h, int64_t &d,
         const std::vector<int64_t> &ncx_shape) {
@@ -71,7 +71,7 @@ void assign_shape_val(int64_t &c, int64_t &w, int64_t &h, int64_t &d,
     w = has_w ? ncx_shape[ndims - 1] : 1;
     h = has_h ? ncx_shape[ndims - 2] : 1;
     d = has_d ? ncx_shape[2] : 1;
-};
+}
 
 bool get_graph_attr(const deserialized_op_t &base_op_ref,
         attr_t::fpmath_mode_t &arg_fpmath_mode) {
@@ -91,8 +91,34 @@ bool get_graph_attr(const deserialized_op_t &base_op_ref,
     return true;
 }
 
+bool get_graph_attr(
+        const deserialized_op_t &base_op_ref, attr_t::dropout_t &arg_dropout) {
+
+    if (base_op_ref.kind_ != "Dropout") return true;
+
+    // Use fixed seed for reproducibility and easier debugging.
+    arg_dropout.seed = 123456;
+
+    // Use fixed offset for reproducibility and easier debugging.
+    arg_dropout.offset = 1;
+
+    // Use fixed probability for reproducibility and easier debugging.
+    // Note: A higher probability value drops more elements and keeps fewer
+    // non-zeros, which may help with better accuracy control during testing.
+    arg_dropout.p = 0.5f;
+
+    if (base_op_ref.out_lts_.size() == 1) {
+        // no output mask
+        arg_dropout.tag = tag::undef;
+    }
+
+    return true;
+}
+
 bool get_driver_tag_by_idx(const deserialized_op_t &base_op_ref,
         std::string &tag, int idx = 0, bool from_output = false) {
+    logical_tensor::dims dims = from_output ? base_op_ref.out_lts_[idx].shape_
+                                            : base_op_ref.in_lts_[idx].shape_;
     logical_tensor::dims strides = from_output
             ? base_op_ref.out_lts_[idx].stride_
             : base_op_ref.in_lts_[idx].stride_;
@@ -100,7 +126,7 @@ bool get_driver_tag_by_idx(const deserialized_op_t &base_op_ref,
         // convert the strides to data_format = NCX
         change_format_to_ncx(strides);
     }
-    tag = strides2memory_tag(strides.size(), strides, true);
+    tag = strides2memory_tag(dims, strides, true);
     return true;
 }
 
@@ -189,7 +215,7 @@ namespace custom {
         const auto &lt = base_op_ref.in_lts_[i];
         auto dim = lt.shape_;
         const auto dt = dnnl_f32;
-        auto tag = strides2memory_tag(lt.stride_.size(), lt.stride_, false);
+        auto tag = strides2memory_tag(lt.shape_, lt.stride_, false);
 
         // 0-dim means scalar input in graph, extend to 1-dim to match behavior.
         if (dim.empty()) {
@@ -204,7 +230,7 @@ namespace custom {
         const auto &lt = base_op_ref.out_lts_[i];
         auto dim = lt.shape_;
         const auto dt = dnnl_f32;
-        auto tag = strides2memory_tag(lt.stride_.size(), lt.stride_, false);
+        auto tag = strides2memory_tag(lt.shape_, lt.stride_, false);
 
         // 0-dim means scalar input in graph, extend to 1-dim to match behavior.
         if (dim.empty()) {
@@ -219,8 +245,8 @@ namespace custom {
 } // namespace custom
 
 namespace binary {
-bool get_binary_prb_vdims(
-        const deserialized_op_t &base_op_ref, prb_vdims_t &prb_vdims) {
+bool get_binary_prb_vdims_and_strides(const deserialized_op_t &base_op_ref,
+        ::binary::settings_t &op_setting) {
     // since base_op_ref is a copy from the original
     // it is safe to modify it
     deserialized_op_t &base_op = const_cast<deserialized_op_t &>(base_op_ref);
@@ -229,13 +255,20 @@ bool get_binary_prb_vdims(
     auto &src1_dims = base_op.in_lts_[1].shape_;
     auto &dst_dims = base_op.out_lts_[0].shape_;
     const auto &ndims = dst_dims.size();
+
+    auto &src0_strides = base_op.in_lts_[0].stride_;
+    auto &src1_strides = base_op.in_lts_[1].stride_;
+    auto &dst_strides = base_op.out_lts_[0].stride_;
+    // TODO: Binary Select currently does not support setting strides
+    // because it involves three inputs, whereas the current stride
+    // configuration only supports two. This will be extended as needed.
     if (base_op_ref.kind_ == "Select") {
         const auto &src2_dims = base_op.in_lts_[2].shape_;
 
         ::graph::extend_dims(base_op.in_lts_[0], ndims);
         ::graph::extend_dims(base_op.in_lts_[1], ndims);
         ::graph::extend_dims(base_op.in_lts_[2], ndims);
-        prb_vdims = prb_vdims_t({src1_dims, src2_dims, src0_dims});
+        op_setting.prb_vdims = prb_vdims_t({src1_dims, src2_dims, src0_dims});
         return true;
     }
     // use Add to implement BiasAdd, need to align channel dims of src1
@@ -247,8 +280,12 @@ bool get_binary_prb_vdims(
         else if (ndims == 2) {
             if (src1_dims[0] == 1 || src1_dims[0] == src0_dims[0]) {
                 src1_dims.insert(src1_dims.end(), 1);
+                // [1,1]/[M, 1] strides: [1,1]
+                src1_strides.insert(src1_strides.end(), 1);
             } else if (src1_dims[0] == src0_dims[1]) {
                 src1_dims.insert(src1_dims.begin(), 1);
+                // [1,N] strides: [N,1]
+                src1_strides.insert(src1_strides.begin(), src1_dims[1]);
             } else {
                 return false;
             }
@@ -256,15 +293,26 @@ bool get_binary_prb_vdims(
         // src0: [N,X,C] / [N,C,X] ---> src1:[1,1..,C] / [1,C,1..]
         else if (ndims > 2) {
             dims_t src1_dims_tmp(ndims, 1);
+            dims_t src1_strides_tmp(ndims, 1);
             // default NCX
-            int64_t channel_idx = 1;
+            size_t channel_idx = 1;
             if (base_op_ref.has_NXC_format()) { channel_idx = ndims - 1; }
             src1_dims_tmp[channel_idx] = src0_dims[channel_idx];
             src1_dims = std::move(src1_dims_tmp);
 
+            // calculate src1 strides
+            for (size_t i = 0; i < ndims; i++) {
+                if (i >= channel_idx)
+                    src1_strides_tmp[i] = 1;
+                else
+                    src1_strides_tmp[i] = src1_dims[channel_idx];
+            }
+            src1_strides = std::move(src1_strides_tmp);
+
             // convert NXC to NCX
             if (base_op_ref.has_NXC_format()) {
                 change_format_to_ncx(src0_dims, src1_dims, dst_dims);
+                change_format_to_ncx(src0_strides, src1_strides, dst_strides);
             }
         }
     } else {
@@ -272,7 +320,9 @@ bool get_binary_prb_vdims(
         ::graph::extend_dims(base_op.in_lts_[1], ndims);
     }
 
-    prb_vdims = prb_vdims_t({src0_dims, src1_dims});
+    op_setting.prb_vdims = prb_vdims_t({src0_dims, src1_dims});
+    op_setting.strides.front()
+            = vdims_t({src0_strides, src1_strides, dst_strides});
     return true;
 }
 
@@ -341,7 +391,7 @@ bool get_binary_alg(
         const deserialized_op_t &base_op_ref, res_t *res) {
     ::binary::settings_t op_setting;
     DNN_GRAPH_CHECK_SETTINGS(
-            binary::get_binary_prb_vdims(base_op_ref, op_setting.prb_vdims),
+            binary::get_binary_prb_vdims_and_strides(base_op_ref, op_setting),
             res);
 
     DNN_GRAPH_CHECK_SETTINGS(
@@ -642,24 +692,27 @@ bool get_conv_wtag(const deserialized_op_t &base_op_ref, std::string &tag) {
     }
 
     if (weights_format == "XIO") {
-        // convert the strides to data_format = OIX
+        // convert from XIO to OIX
         strides.insert(strides.begin(), strides[strides.size() - 1]);
         strides.insert(strides.begin() + 1, strides[strides.size() - 2]);
         strides.erase(strides.end() - 2, strides.end());
+
+        shape.insert(shape.begin(), shape[shape.size() - 1]);
+        shape.insert(shape.begin() + 1, shape[shape.size() - 2]);
+        shape.erase(shape.end() - 2, shape.end());
     }
 
     int64_t groups = 1;
     bool has_group = base_op_ref.get_attr_s64(groups, "groups");
     if (has_group && groups > 1) {
-        // convert the strides from w/o group to strides w/ group
-        dnnl::memory::dim shape_oc = weights_format == "XIO"
-                ? shape[strides.size() - 1]
-                : shape[0];
-        dnnl::memory::dim stride_oc = strides[0];
-        strides.insert(strides.begin(), stride_oc * shape_oc / groups);
+        // convert from w/o group to w/ group
+        dnnl::memory::dim shape_oc = shape[0]; // OIX
+        dnnl::memory::dim stride_oc = strides[0]; // OIX
+        shape.insert(shape.begin(), groups); // OIX -> GOIX
+        shape[1] = shape_oc / groups; // GOIX
+        strides.insert(strides.begin(), stride_oc * shape_oc / groups); // GOIX
     }
-    size_t ndims = strides.size();
-    tag = strides2memory_tag(ndims, strides, true);
+    tag = strides2memory_tag(shape, strides, true);
 
     return true;
 }
@@ -851,26 +904,31 @@ bool get_deconv_wtag(const deserialized_op_t &base_op_ref, std::string &tag) {
     }
 
     if (weights_format == "XOI") {
-        // convert the strides to weights_format = OIX
+        // convert from XOI to OIX
         strides.insert(strides.begin(), strides[strides.size() - 2]);
         strides.insert(strides.begin() + 1, strides[strides.size() - 1]);
         strides.erase(strides.end() - 2, strides.end());
+
+        shape.insert(shape.begin(), shape[shape.size() - 2]);
+        shape.insert(shape.begin() + 1, shape[shape.size() - 1]);
+        shape.erase(shape.end() - 2, shape.end());
     } else if (weights_format == "IOX") {
-        // convert the strides to filter_format = OIX
+        // convert from IOX to OIX
         std::swap(strides[0], strides[1]);
+        std::swap(shape[0], shape[1]);
     }
 
     int64_t groups = 1;
     bool has_group = base_op_ref.get_attr_s64(groups, "groups");
     if (has_group && groups > 1) {
-        // convert the strides from w/o group to strides w/ group
-        dnnl::memory::dim shape_ic
-                = weights_format == "XOI" ? shape[shape.size() - 1] : shape[0];
-        dnnl::memory::dim stride_ic = strides[1];
-        strides.insert(strides.begin(), stride_ic * shape_ic / groups);
+        // convert from w/o group to w/ group
+        dnnl::memory::dim shape_ic = shape[1]; // OIX
+        dnnl::memory::dim stride_ic = strides[1]; // OIX
+        shape.insert(shape.begin(), groups); // GOIX
+        shape[2] = shape_ic / groups; // GOIX
+        strides.insert(strides.begin(), stride_ic * shape_ic / groups); // GOIX
     }
-    const size_t ndims = strides.size();
-    tag = strides2memory_tag(ndims, strides, true);
+    tag = strides2memory_tag(shape, strides, true);
 
     return true;
 }
@@ -939,6 +997,7 @@ get_eltwise_kind_map() {
             {"Square", ::eltwise::alg_t::SQUARE},
             {"Tanh", ::eltwise::alg_t::TANH},
             {"TanhBackward", ::eltwise::alg_t::TANH},
+            {"Dropout", ::eltwise::alg_t::LINEAR},
     };
     return map_;
 }
@@ -1016,6 +1075,8 @@ bool get_eltwise_alpha(const deserialized_op_t &base_op_ref, float &alpha) {
         alpha = 1.f / 6.f;
     } else if (op_kind == "Pow") {
         alpha = 1; // alpha is constant 1 according to graph API Pow definition
+    } else if (op_kind == "Dropout") {
+        alpha = 1;
     }
     return true;
 }
@@ -1031,6 +1092,8 @@ bool get_eltwise_beta(const deserialized_op_t &base_op_ref, float &beta) {
         base_op_ref.get_attr_f32(beta, "beta");
     } else if (op_kind == "HardSwish" || op_kind == "HardSwishBackward") {
         beta = 1.f / 2.f;
+    } else if (op_kind == "Dropout") {
+        beta = 0.f;
     }
     return true;
 }
@@ -1062,6 +1125,9 @@ bool get_eltwise_beta(const deserialized_op_t &base_op_ref, float &beta) {
             res);
     DNN_GRAPH_CHECK_SETTINGS(
             get_graph_attr(base_op_ref, op_setting.fpmath_mode.front()), res);
+
+    DNN_GRAPH_CHECK_SETTINGS(
+            get_graph_attr(base_op_ref, op_setting.dropout.front()), res);
 
     return op_setting;
 }
@@ -1210,6 +1276,14 @@ bool get_lnorm_dir(const deserialized_op_t &base_op_ref, dir_t &dir) {
         } else {
             return false;
         }
+    } else if (op_kind == "RMSNorm") {
+        // RMSNorm OP in oneDNN Graph API only have 1 output
+        const size_t out_size = base_op_ref.out_lts_.size();
+        if (out_size == 1) {
+            dir = dir_t::FWD_I;
+        } else {
+            return false;
+        }
     } else if (op_kind == "LayerNormBackward") {
         dir = dir_t::BWD_DW;
     } else {
@@ -1224,8 +1298,14 @@ bool get_lnorm_dt(const deserialized_op_t &base_op_ref, dnnl_data_type_t &dt) {
     return true;
 }
 
+bool get_lnorm_eps(const deserialized_op_t &base_op_ref, float &eps) {
+    auto ret = base_op_ref.get_attr_f32(eps, "epsilon");
+    if (!ret) { eps = 1e-5f; }
+    return true;
+}
+
 bool get_lnorm_flags(
-        const deserialized_op_t &base_op_ref, ::bnorm::flags_t &flags) {
+        const deserialized_op_t &base_op_ref, ::lnorm::flags_t &flags) {
     bool use_affine = false;
     base_op_ref.get_attr_bool(use_affine, "use_affine");
     const auto &op_kind = base_op_ref.kind_;
@@ -1244,6 +1324,19 @@ bool get_lnorm_flags(
             } else {
                 return false;
             }
+        }
+    } else if (op_kind == "RMSNorm") {
+        flags = ::lnorm::USE_RMS_NORM;
+        // RMSNorm input: src, gamma(opt)
+        // no beta/shift parameter for RMSNorm
+        if (in_size == 2) {
+            // has gamma (scale only)
+            flags |= ::lnorm::USE_SCALE;
+        } else if (in_size == 1) {
+            // no gamma
+            flags |= ::lnorm::NONE;
+        } else {
+            return false;
         }
     } else if (op_kind == "LayerNormBackward") {
         // input: src, diff_dst, mean, var, gamma(opt), beta(opt)
@@ -1279,9 +1372,13 @@ bool get_lnorm_flags(
     DNN_GRAPH_CHECK_SETTINGS(
             get_driver_tag(base_op_ref, op_setting.tag[0].front()), res);
     DNN_GRAPH_CHECK_SETTINGS(
+            get_driver_tag(base_op_ref, op_setting.tag[0].back(), true), res);
+    DNN_GRAPH_CHECK_SETTINGS(
             lnorm::get_lnorm_flags(base_op_ref, op_setting.flags.front()), res);
     DNN_GRAPH_CHECK_SETTINGS(
             get_graph_attr(base_op_ref, op_setting.fpmath_mode.front()), res);
+    DNN_GRAPH_CHECK_SETTINGS(
+            lnorm::get_lnorm_eps(base_op_ref, op_setting.eps.front()), res);
 
     return op_setting;
 }
@@ -1289,6 +1386,130 @@ bool get_lnorm_flags(
 } // namespace lnorm
 
 namespace matmul {
+
+// tensor type for dimension extension in matmul
+enum class matmul_tensor_kind_t {
+    SRC, // first input
+    WEI, // second input
+    BIAS, // bias tensor (optional)
+    DST // output tensor
+};
+
+// extend dims for matmul to adapt numpy matmul rules to primitive matmul requirement
+// NumPy matmul behavior:
+// - 1D x 1D: [K] @ [K] -> scalar (but we treat as [1])
+// - 1D x nD: [K] @ [..., K, N] -> [..., N] (1D prepended as [1,K], then result removes leading 1)
+// - nD x 1D: [..., M, K] @ [K] -> [..., M] (1D appended as [K,1], then result removes trailing 1)
+// - nD x nD: [..., M, K] @ [..., K, N] -> [..., M, N] (standard matmul with batch broadcast)
+//
+// For primitive matmul requirement (all tensors must have same ndims >= 2):
+// - SRC:  1D: [K] -> [1, K] -> [1, ..., 1, 1, K]  (prepend 1, then prepend to ndims)
+//         2D+: [..., M, K] -> [1, ..., 1, M, K] (prepend to ndims)
+// - WEI:  1D: [K] -> [K, 1] -> [1, ..., 1, K, 1] (append 1, then prepend to ndims)
+//         2D+: [..., K, N] -> [1, ..., 1, K, N] (prepend to ndims)
+// - DST:  Shape depends on original SRC and WEI dimensions:
+//         1D x 1D: [ ] -> [1, 1] (prepend and append 1 to match ndims)
+//         1D x nD: [..., N] -> [..., 1, N] (prepend 1 before last dim, no further prepending)
+//         nD x 1D: [..., M] -> [..., M, 1] (append 1, no prepending)
+//         nD x nD: [..., M, N] stays as is (no modification)
+// - BIAS: Shape depends on original SRC and WEI dimensions:
+//         1D x 1D: [ ] -> [1, 1] (prepend and append 1 to match ndims)
+//         1D x nD: [..., N] -> [..., 1, N] -> [1, ..., 1, 1, N] (prepend 1 before last dim, then prepend to ndims)
+//         nD x 1D: [..., M] -> [..., M, 1] -> [1, ..., 1, M, 1] (append 1, then prepend to ndims)
+//         nD x nD: [..., M, N] -> [1, ..., 1, M, N] (prepend to ndims)
+void extend_dims_for_matmul(::graph::deserialized_lt_t &lt, size_t ndims,
+        matmul_tensor_kind_t kind, size_t src_orig_ndims = 0,
+        size_t wei_orig_ndims = 0) {
+    const size_t orig_ndims = lt.shape_.size();
+    if (orig_ndims >= ndims) return; // No need to extend
+
+    // Calculate total elements using STL accumulate
+    int64_t total_elements = std::accumulate(lt.shape_.begin(), lt.shape_.end(),
+            int64_t(1), std::multiplies<int64_t>());
+
+    if (kind == matmul_tensor_kind_t::SRC) {
+        // SRC: 1D [K] -> [1, K], then prepended
+        if (orig_ndims == 1) {
+            // First prepend 1: [K] -> [1, K]
+            lt.shape_.insert(lt.shape_.begin(), 1);
+            lt.stride_.insert(lt.stride_.begin(), total_elements);
+        }
+        // Prepend to ndims
+        while (lt.shape_.size() < ndims) {
+            lt.shape_.insert(lt.shape_.begin(), 1);
+            lt.stride_.insert(lt.stride_.begin(), total_elements);
+        }
+    } else if (kind == matmul_tensor_kind_t::WEI) {
+        // WEI: 1D [K] -> [K, 1], then prepended
+        if (orig_ndims == 1) {
+            // First append 1: [K] -> [K, 1]
+            lt.shape_.push_back(1);
+            lt.stride_.push_back(1);
+        }
+        // Prepend to ndims
+        while (lt.shape_.size() < ndims) {
+            lt.shape_.insert(lt.shape_.begin(), 1);
+            lt.stride_.insert(lt.stride_.begin(), total_elements);
+        }
+    } else if (kind == matmul_tensor_kind_t::DST) {
+        // DST: Prepend or append 1 at specific position based on input dimensions
+        // 1D x 1D: [] -> [1, 1] (scalar result treated as [1, 1])
+        // 1D x nD: [..., M, N] -> [..., M, 1, N] (prepend 1 before last dim)
+        // nD x 1D: [..., M, N] -> [..., M, N, 1] (append 1)
+        // nD x nD: [..., M, N] -> [..., M, N] (no modification needed)
+
+        if (src_orig_ndims == 1 && wei_orig_ndims == 1) {
+            // 1D x 1D: [] -> [1, 1] (scalar result treated as [1, 1])
+            lt.shape_ = {1, 1};
+            lt.stride_ = {1, 1};
+        } else if (src_orig_ndims == 1 && wei_orig_ndims >= 2) {
+            // 1D x nD: prepend 1 before the last dimension
+            // [..., N] -> [..., 1, N]
+            if (!lt.shape_.empty()) {
+                size_t insert_pos = lt.shape_.size() - 1;
+                lt.shape_.insert(lt.shape_.begin() + insert_pos, 1);
+                // eg. for 2D tag ab, make new tag as abc
+                int64_t insert_stride
+                        = lt.stride_[insert_pos] * lt.shape_.back();
+                lt.stride_.insert(
+                        lt.stride_.begin() + insert_pos, insert_stride);
+            }
+        } else if (src_orig_ndims >= 2 && wei_orig_ndims == 1) {
+            // nD x 1D: append 1 at the end
+            // [..., M] -> [..., M, 1]
+            lt.shape_.push_back(1);
+            lt.stride_.push_back(1);
+        }
+        // nD x nD: no modification needed, shape should already match
+    } else {
+        // BIAS: handle based on input dimensions, then prepended to ndims
+        if (src_orig_ndims == 1 && wei_orig_ndims == 1) {
+            // 1D x 1D: [] -> [1, 1] (scalar result treated as [1, 1])
+            lt.shape_ = {1, 1};
+            lt.stride_ = {1, 1};
+        } else if (src_orig_ndims == 1 && wei_orig_ndims >= 2) {
+            // 1D x nD: prepend 1 before the last dimension, then prepend to ndims
+            if (!lt.shape_.empty()) {
+                size_t insert_pos = lt.shape_.size() - 1;
+                lt.shape_.insert(lt.shape_.begin() + insert_pos, 1);
+                // eg. for 2D tag ab, make new tag as abc
+                int64_t insert_stride
+                        = lt.stride_[insert_pos] * lt.shape_.back();
+                lt.stride_.insert(
+                        lt.stride_.begin() + insert_pos, insert_stride);
+            }
+        } else if (src_orig_ndims >= 2 && wei_orig_ndims == 1) {
+            // nD x 1D: append 1, then prepend to ndims
+            lt.shape_.push_back(1);
+            lt.stride_.push_back(1);
+        }
+        // nD x nD or any case: prepend to ndims
+        while (lt.shape_.size() < ndims) {
+            lt.shape_.insert(lt.shape_.begin(), 1);
+            lt.stride_.insert(lt.stride_.begin(), total_elements);
+        }
+    }
+}
 
 bool get_matmul_prb_vdims(
         const deserialized_op_t &base_op_ref, prb_vdims_t &prb_vdims) {
@@ -1298,30 +1519,47 @@ bool get_matmul_prb_vdims(
     auto &src_dims = base_op.in_lts_[0].shape_;
     auto &wei_dims = base_op.in_lts_[1].shape_;
     auto &dst_dims = base_op.out_lts_[0].shape_;
-    const auto ndims = dst_dims.size();
+    auto src_origin_ndims = src_dims.size();
+    auto wei_origin_ndims = wei_dims.size();
 
-    ::graph::extend_dims(base_op.in_lts_[0], ndims);
-    ::graph::extend_dims(base_op.in_lts_[1], ndims);
+    // step 1: find the max ndims among all inputs
+    size_t max_ndims
+            = std::max({src_dims.size(), wei_dims.size(), dst_dims.size()});
+    // at least 2 for matmul primitive
+    max_ndims = std::max(max_ndims, size_t(2));
+
+    // step 2: extend all dimensions to max_ndims for broadcast calculation
+    // primitive requirement: all tensors must have the same ndims
+    extend_dims_for_matmul(base_op.in_lts_[0], max_ndims,
+            matmul_tensor_kind_t::SRC, src_origin_ndims, wei_origin_ndims);
+    extend_dims_for_matmul(base_op.in_lts_[1], max_ndims,
+            matmul_tensor_kind_t::WEI, src_origin_ndims, wei_origin_ndims);
+    extend_dims_for_matmul(base_op.out_lts_[0], max_ndims,
+            matmul_tensor_kind_t::DST, src_origin_ndims, wei_origin_ndims);
     if (base_op.in_lts_.size() > 2) {
-        ::graph::extend_dims(base_op.in_lts_[2], ndims);
+        extend_dims_for_matmul(base_op.in_lts_[2], max_ndims,
+                matmul_tensor_kind_t::BIAS, src_origin_ndims, wei_origin_ndims);
     }
+
+    // step 3: apply transpose and validate inner dimensions
 
     // transpose
     bool transpose_a = false, transpose_b = false;
     base_op_ref.get_attr_bool(transpose_a, "transpose_a");
     base_op_ref.get_attr_bool(transpose_b, "transpose_b");
-    if (ndims >= 2) {
-        if (transpose_a) std::swap(src_dims[ndims - 1], src_dims[ndims - 2]);
-        if (transpose_b) std::swap(wei_dims[ndims - 1], wei_dims[ndims - 2]);
-        if (src_dims[ndims - 1] != wei_dims[ndims - 2]) return false;
-    } else {
-        if (src_dims[0] != wei_dims[0]) return false;
-    }
 
+    // check inner dimensions match (max_ndims is guaranteed >= 2)
+    // only transpose if original ndims > 1
+    if (transpose_a && src_origin_ndims > 1)
+        std::swap(src_dims[max_ndims - 1], src_dims[max_ndims - 2]);
+    if (transpose_b && wei_origin_ndims > 1)
+        std::swap(wei_dims[max_ndims - 1], wei_dims[max_ndims - 2]);
+    if (src_dims[max_ndims - 1] != wei_dims[max_ndims - 2]) return false;
+
+    // step 4: construct prb_vdims
     prb_vdims = prb_vdims_t({src_dims, wei_dims, dst_dims});
-    prb_vdims.dst_dims[ndims - 2] = src_dims[ndims - 2];
-    prb_vdims.dst_dims[ndims - 1] = wei_dims[ndims - 1];
-
+    prb_vdims.dst_dims[max_ndims - 2] = src_dims[max_ndims - 2];
+    prb_vdims.dst_dims[max_ndims - 1] = wei_dims[max_ndims - 1];
     return true;
 }
 
@@ -1351,9 +1589,10 @@ bool get_matmul_tags_or_strides(const deserialized_op_t &base_op_ref,
         if (transpose_b)
             std::swap(wei_strides[ndims - 1], wei_strides[ndims - 2]);
     }
-    stag = strides2memory_tag(ndims, src_strides, true);
-    wtag = strides2memory_tag(ndims, wei_strides, true);
-    dtag = strides2memory_tag(ndims, dst_strides, true);
+    stag = strides2memory_tag(base_op_ref.in_lts_[0].shape_, src_strides, true);
+    wtag = strides2memory_tag(base_op_ref.in_lts_[1].shape_, wei_strides, true);
+    dtag = strides2memory_tag(
+            base_op_ref.out_lts_[0].shape_, dst_strides, true);
 
     if (!is_contiguous_memory(src_strides, base_op_ref.in_lts_[0].shape_, stag)
             || !is_contiguous_memory(
@@ -1970,7 +2209,7 @@ bool get_softmax_dir(const deserialized_op_t &base_op_ref, dir_t &dir) {
         return false;
     }
     return true;
-};
+}
 
 bool get_softmax_sdt_and_ddt(const deserialized_op_t &base_op_ref,
         ::softmax::settings_t &op_setting) {
@@ -2016,7 +2255,7 @@ bool get_softmax_alg(
         return false;
     }
     return true;
-};
+}
 
 ::softmax::settings_t get_setting(
         const deserialized_op_t &base_op_ref, res_t *res) {

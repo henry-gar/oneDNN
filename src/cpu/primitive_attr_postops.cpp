@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -181,7 +181,7 @@ ref_eltwise_scalar_fwd_t::ref_eltwise_scalar_fwd_t(
 ref_eltwise_scalar_fwd_t::ref_eltwise_scalar_fwd_t(
         const post_ops_t::entry_t::eltwise_t &eltwise)
     : ref_eltwise_scalar_fwd_t(
-            eltwise.alg, eltwise.alpha, eltwise.beta, eltwise.scale) {}
+              eltwise.alg, eltwise.alpha, eltwise.beta, eltwise.scale) {}
 
 float ref_eltwise_scalar_fwd_t::compute_scalar(float s) const {
     return compute_eltwise_scalar_fwd(alg_, s, alpha_, beta_) * scale_;
@@ -293,16 +293,19 @@ status_t ref_post_ops_t::init(const memory_desc_t *dst_md) {
     return status::success;
 }
 
-float ref_dropout(
-        float src, uint8_t *mask, dim_t offset, float p, int64_t seed) {
+float ref_dropout(float src, uint8_t *mask, dim_t idx, float p, int64_t seed,
+        int64_t offset) {
     // Note: as this is a reference implementation, it's not intended to be
-    // efficient. For optimized versions, `1/(1-p)` should be passed as a
-    // single value computed once to avoid division for every element.
+    // efficient. For optimized versions, `1.f / (1.f - p)` should be passed as
+    // a single value computed once to avoid division for every element.
+    //
+    // Note: for `offset = 0` keep the legacy logic without the `offset`.
     float inv_q = (p != 1.f) ? 1.f / (1.f - p) : 0.f;
-    uint32_t r = philox4x32(offset, seed);
+    uint32_t r = offset ? philox4x32(idx, seed, offset)
+                        : philox4x32(uint32_t(idx), uint32_t(seed));
     p = std::max(std::min(p, 1.f), 0.f);
     uint8_t m = (r > double(std::numeric_limits<uint32_t>::max()) * p);
-    mask[offset] = m;
+    if (mask) mask[idx] = m;
     return (m) ? src * inv_q : 0;
 }
 

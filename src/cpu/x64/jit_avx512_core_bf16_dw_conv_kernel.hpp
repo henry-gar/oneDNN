@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -46,7 +46,7 @@ private:
     const Xbyak::AddressFrame &vmmword = zword;
 
     const int acc_idx_start = 2;
-    inline int get_max_regs() const { return isa_has_bf16(jcp.isa) ? 30 : 25; };
+    inline int get_max_regs() const { return isa_has_bf16(jcp.isa) ? 30 : 25; }
 
     // dw convolution
     reg64_t reg_input = r8;
@@ -88,16 +88,16 @@ private:
     Xbyak::Zmm get_acc_reg(int idx);
 
     int get_ow_start(int ki, int pad_l) const {
-        return nstl::max(0,
-                utils::div_up(pad_l - ki * (jcp.dilate_w + 1), jcp.stride_w));
+        return utils::div_up(
+                nstl::max(0, pad_l - ki * (jcp.dilate_w + 1)), jcp.stride_w);
     }
 
     int get_ow_end(int ur_w, int ki, int pad_r) const {
         return ur_w
-                - nstl::max(0,
-                        utils::div_up(
-                                pad_r - (jcp.kw - 1 - ki) * (jcp.dilate_w + 1),
-                                jcp.stride_w));
+                - utils::div_up(
+                        nstl::max(0,
+                                pad_r - (jcp.kw - 1 - ki) * (jcp.dilate_w + 1)),
+                        jcp.stride_w);
     }
 
     inline bool is_src_layout_nxc() const {
@@ -147,7 +147,7 @@ private:
     using reg64_t = const Xbyak::Reg64;
 
     const int acc_idx_start = 2;
-    inline int get_max_regs() const { return isa_has_bf16(jcp.isa) ? 30 : 25; };
+    inline int get_max_regs() const { return isa_has_bf16(jcp.isa) ? 30 : 25; }
 
     Xbyak::Zmm zmm_ker_reg = Xbyak::Zmm(0);
     Xbyak::Zmm zmm_dst_reg = Xbyak::Zmm(1);
@@ -230,7 +230,7 @@ private:
     const int block_size_ = 15;
 
     const int idx_start = 2;
-    inline int get_max_regs() const { return isa_has_bf16(jcp.isa) ? 30 : 25; };
+    inline int get_max_regs() const { return isa_has_bf16(jcp.isa) ? 30 : 25; }
 
     /* Offset between input and accummulators is 3, therefore, assume 'kw'
      * is no larger than 3*/

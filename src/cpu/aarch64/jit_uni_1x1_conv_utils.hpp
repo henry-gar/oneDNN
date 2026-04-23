@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2023 Intel Corporation
+* Copyright 2021 Intel Corporation
 * Copyright 2021-2024 FUJITSU LIMITED
 * Copyright 2025 Arm Ltd. and affiliates
 *
@@ -66,10 +66,11 @@ inline void rtus_prepare(conv_pd_t *self, const convolution_desc_t *&conv_d,
     if (!rtus_applicable) return;
 
     const auto dat_tag = ndims == 3
-            ? memory_desc_wrapper(src_d).matches_one_of_tag(
-                    format_tag::nCw8c, format_tag::nCw16c, format_tag::nwc)
-            : memory_desc_wrapper(src_d).matches_one_of_tag(
-                    format_tag::nChw8c, format_tag::nChw16c, format_tag::nhwc);
+            ? memory_desc_wrapper(src_d).matches_one_of_tag(format_tag::nCw4c,
+                      format_tag::nCw8c, format_tag::nCw16c, format_tag::nwc)
+            : memory_desc_wrapper(src_d).matches_one_of_tag(format_tag::nChw4c,
+                      format_tag::nChw8c, format_tag::nChw16c,
+                      format_tag::nhwc);
     if (dat_tag == format_tag::undef) return;
 
     const bool is_nspc
@@ -183,7 +184,8 @@ struct rtus_driver_t : public jit_generator_t {
             if (is_nspc_) {
                 switch (isa) {
                     case sve_512:
-                    case sve_256: res = ZReg(idx); break;
+                    case sve_256:
+                    case sve_128: res = ZReg(idx); break;
                     default: assert(!"Not supported isa"); res = ZReg(idx);
                 }
                 return res;
@@ -191,6 +193,7 @@ struct rtus_driver_t : public jit_generator_t {
             switch (isa) {
                 case sve_512:
                 case sve_256:
+                case sve_128:
                     switch (typesize) {
                         case 4: res = ZReg(idx); break;
                         default:
@@ -286,7 +289,7 @@ struct rtus_driver_t : public jit_generator_t {
         mov(reg_cur_src, reg_src);
         mov(reg_cur_iw, reg_iw_start);
 
-        if (isa == sve_256 || isa == sve_512) {
+        if (is_superset(isa, sve_128)) {
             and_(reg_icb_remainder, reg_icb, (vlen_ / typesize_) - 1);
             mov_imm(X_TMP_0, 0);
             whilelt(tail_mask.s, X_TMP_0, reg_icb_remainder);
@@ -357,9 +360,8 @@ struct rtus_driver_t : public jit_generator_t {
 
         const size_t w_step_factor = ic_ * typesize_;
         const size_t max_load_store_bytes = typesize_ == 4 ? 32 : 16;
-        const size_t load_store_size = (isa == sve_256 || isa == sve_512)
-                ? vlen_
-                : max_load_store_bytes;
+        const size_t load_store_size
+                = (is_superset(isa, sve_128)) ? vlen_ : max_load_store_bytes;
 
         Label is_loop, ic_loop, ic_loop_tail, ic_loop_finish;
         L(is_loop);
@@ -469,7 +471,7 @@ struct rtus_driver_t : public jit_generator_t {
 
     void generate() override {
         using namespace Xbyak_aarch64;
-        assert(isa == sve_256 || isa == sve_512);
+        assert(is_superset(isa, sve_128));
 
         preamble();
 #define READ_PARAM(what) \

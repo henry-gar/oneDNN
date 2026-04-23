@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -46,8 +46,8 @@ namespace {
 // A proper approach would be an implementation-specific unpoisoning.
 void unpoison_outputs(const exec_args_t &args) {
     for (const auto &arg : args) {
-        if (arg.second.is_const) continue;
-        auto *mem = arg.second.mem;
+        if (arg.second.is_const()) continue;
+        auto *mem = arg.second.mem();
         void *p;
         mem->get_data_handle(&p);
         size_t s = memory_desc_wrapper(*mem->md()).size();
@@ -64,6 +64,14 @@ status_t primitive_create(primitive_iface_t **primitive_iface,
         const cache_blob_t &cache_blob = cache_blob_t()) {
 
     std::pair<primitive_iface_t *, cache_state_t> p_iface;
+
+#if defined(DNNL_ENABLE_ITT_TASKS)
+    const bool enable_itt = itt::get_itt(itt::__itt_task_level_low);
+    if (enable_itt) {
+        itt::primitive_task_start(
+                primitive_desc_iface->impl()->kind(), VERBOSE_create);
+    }
+#endif
 
     if (get_verbose(verbose_t::create_profile,
                 prim_kind2_comp_kind(primitive_desc_iface->impl()->kind()))) {
@@ -84,6 +92,28 @@ status_t primitive_create(primitive_iface_t **primitive_iface,
         CHECK(primitive_desc_iface->create_primitive_iface(
                 p_iface, cache_blob));
     }
+
+#if defined(DNNL_ENABLE_ITT_TASKS)
+    if (enable_itt) {
+        // Before metadata is added to the ITT task, the `info()` string is
+        // checked for initialization.
+        // An empty info_ string for cache states other than `cache_state_t::miss`
+        // implies kernel or nested primitive operations.
+        // In that case, the metadata addition is skipped to avoid additional
+        // overheads.
+        const char *pd_info = p_iface.first->pd()->impl()->info(
+                primitive_desc_iface->engine(), false);
+        if ((p_iface.second == cache_state_t::miss) || (pd_info && *pd_info)) {
+            auto task_id
+                    = itt::make_itt_id(p_iface.first->pd()->info(), get_msec());
+            itt::primitive_add_metadata_and_id(
+                    p_iface.first->pd()->info(), VERBOSE_create, task_id);
+        }
+
+        itt::primitive_task_end(VERBOSE_create);
+    }
+#endif
+
     return safe_ptr_assign((*primitive_iface), p_iface.first);
 }
 
@@ -91,51 +121,74 @@ status_t primitive_execute(
         const primitive_iface_t *primitive_iface, exec_ctx_t &ctx) {
     auto stream = ctx.stream();
     status_t status = success;
+    auto pd = primitive_iface->pd();
 
 #if defined(DNNL_ENABLE_ITT_TASKS)
     const bool enable_itt = itt::get_itt(itt::__itt_task_level_low);
-    if (enable_itt)
-        itt::primitive_task_start(primitive_iface->pd()->impl()->kind());
+    if (enable_itt) {
+        itt::primitive_task_start(pd->impl()->kind(), VERBOSE_exec);
+
+        // Before metadata is added to the ITT task, the `info()` string is
+        // checked for initialization.
+        // An empty info_ string implies kernel or nested primitive operations,
+        // in which case the metadata addition is skipped to avoid additional
+        // overheads.
+        const auto *pd_info
+                = pd->impl()->info(primitive_iface->engine(), false);
+        if (pd_info && *pd_info) {
+            // ITT task IDs are uniquely assigned using pd->info() and
+            // timestamps - the timestamps helps distinguish between different
+            // instances of the same configuration
+            auto task_id = itt::make_itt_id(pd_info, get_msec());
+            itt::primitive_add_metadata_and_id(pd_info, VERBOSE_exec, task_id);
+        }
+    }
 #endif
 
     if (get_verbose(verbose_t::exec_profile,
-                prim_kind2_comp_kind(primitive_iface->pd()->impl()->kind()))) {
-        stream->wait();
+                prim_kind2_comp_kind(pd->impl()->kind()))) {
+        bool block_on_wait = true;
+#if DNNL_CPU_RUNTIME == DNNL_RUNTIME_THREADPOOL
+        dnnl::threadpool_interop::threadpool_iface *tp;
+        auto st = stream->get_threadpool(&tp);
+        block_on_wait = st == status::success && tp
+                && !(tp->get_flags()
+                        & dnnl::threadpool_interop::threadpool_iface::
+                                ASYNCHRONOUS);
+#endif
+        if (block_on_wait) stream->wait();
         double start_ms = get_msec();
         status = stream->enqueue_primitive(primitive_iface, ctx);
-        stream->wait();
+        if (block_on_wait) stream->wait();
+
         double duration_ms = get_msec() - start_ms;
-        if (primitive_iface->pd()->impl()->has_runtime_dims_or_strides()) {
+        if (pd->impl()->has_runtime_dims_or_strides()) {
             // Take out mds from `ctx` here to avoid primitive_desc dependency
             // on `exec_ctx_t` type.
             // TODO: invariant arg names for training?
-            const auto pd_src_md
-                    = primitive_iface->pd()->impl()->invariant_src_md();
+            const auto pd_src_md = pd->impl()->invariant_src_md();
             const auto src_md = ctx.memory_mdw(DNNL_ARG_SRC, pd_src_md).md_;
-            const auto pd_wei_md
-                    = primitive_iface->pd()->impl()->invariant_wei_md();
+            const auto pd_wei_md = pd->impl()->invariant_wei_md();
             const auto wei_md = ctx.memory_mdw(DNNL_ARG_WEIGHTS, pd_wei_md).md_;
-            const auto pd_bia_md
-                    = primitive_iface->pd()->impl()->invariant_bia_md();
+            const auto pd_bia_md = pd->impl()->invariant_bia_md();
             const auto bia_md = ctx.memory_mdw(DNNL_ARG_BIAS, pd_bia_md).md_;
-            const auto pd_dst_md
-                    = primitive_iface->pd()->impl()->invariant_dst_md();
+            const auto pd_dst_md = pd->impl()->invariant_dst_md();
             const auto dst_md = ctx.memory_mdw(DNNL_ARG_DST, pd_dst_md).md_;
 
-            std::string info = primitive_iface->pd()->info_with_runtime_dims(
+            std::string info = pd->info_with_runtime_dims(
                     src_md, wei_md, bia_md, dst_md);
             VPROF(start_ms, primitive, exec, VERBOSE_profile, info.c_str(),
                     duration_ms);
         } else {
-            VPROF(start_ms, primitive, exec, VERBOSE_profile,
-                    primitive_iface->pd()->info(), duration_ms);
+            VPROF(start_ms, primitive, exec, VERBOSE_profile, pd->info(),
+                    duration_ms);
         }
     } else {
         status = stream->enqueue_primitive(primitive_iface, ctx);
     }
 
 #if defined(DNNL_ENABLE_ITT_TASKS)
-    if (enable_itt) itt::primitive_task_end();
+    if (enable_itt) itt::primitive_task_end(VERBOSE_exec);
 #endif
 
     if (msan_enabled) unpoison_outputs(ctx.args());
@@ -174,11 +227,7 @@ status_t dnnl_primitive_create_from_cache_blob(
             || size == 0) {
         return invalid_arguments;
     }
-    const auto ekind = primitive_desc_iface->engine()->kind();
-    const auto runtime_kind = primitive_desc_iface->engine()->runtime_kind();
-    if (ekind != engine_kind::gpu
-            || (ekind == engine_kind::gpu
-                    && runtime_kind != runtime_kind::ocl)) {
+    if (!primitive_desc_iface->engine()->is_cache_blob_supported()) {
         return status::unimplemented;
     }
 
@@ -233,11 +282,7 @@ status_t dnnl_primitive_get_cache_blob(const primitive_iface_t *primitive_iface,
         return status::invalid_arguments;
     }
 
-    const auto ekind = primitive_iface->engine()->kind();
-    const auto runtime_kind = primitive_iface->engine()->runtime_kind();
-    if (ekind != engine_kind::gpu
-            || (ekind == engine_kind::gpu
-                    && runtime_kind != runtime_kind::ocl)) {
+    if (!primitive_iface->engine()->is_cache_blob_supported()) {
         return status::unimplemented;
     }
 
@@ -337,13 +382,13 @@ status_t dnnl_primitive::execute(exec_ctx_t &ctx) const {
     const void *mapped_mem_storage_ptr
             = ctx.host_ptr(mem_storage, /* require_host_ptr = */ true);
 
-    auto scratchpad_grantor = primitive_->pd()->scratchpad_registry().grantor(
-            mem_storage, mapped_mem_storage_ptr);
-    ctx.set_scratchpad_grantor(&scratchpad_grantor);
+    auto *scratchpad_grantor
+            = primitive_->pd()->scratchpad_registry().create_grantor(
+                    mem_storage, mapped_mem_storage_ptr);
+    ctx.set_scratchpad_grantor(scratchpad_grantor);
     ctx.set_resource_mapper(&resource_mapper_);
 
     auto status = primitive_->execute(ctx);
-    ctx.set_scratchpad_grantor(nullptr);
     return status;
 }
 

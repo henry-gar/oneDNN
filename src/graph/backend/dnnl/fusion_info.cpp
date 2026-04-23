@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright 2022-2025 Intel Corporation
+ * Copyright 2022 Intel Corporation
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -30,8 +30,6 @@
 #include "graph/utils/utils.hpp"
 
 #include "graph/backend/dnnl/fusion_info.hpp"
-#include "graph/backend/dnnl/internal_attrs.hpp"
-#include "graph/backend/dnnl/internal_ops.hpp"
 #include "graph/backend/dnnl/utils.hpp"
 
 #include "oneapi/dnnl/dnnl.hpp"
@@ -101,13 +99,12 @@ dnnl::primitive_attr make_dnnl_primitive_attr(
                             ? in_scales_op->get_attr<int64_t>(op_attr::axis)
                             : 1;
                     if (impl::utils::one_of(op->get_kind(),
-                                op_kind::dnnl_convolution,
-                                op_kind::dnnl_convtranspose)
+                                op_kind::_convolution, op_kind::_convtranspose)
                             && in_scales_indices == 1) {
                         bool with_groups = false;
                         if (op->get_input_value(1)->has_producer()
                                 && op->get_input_op(1)->get_kind()
-                                        == op_kind::dnnl_to_group) {
+                                        == op_kind::_to_group) {
                             const auto &to_group = op->get_input_op(1);
                             if (to_group->get_attr<int64_t>(op_attr::groups)
                                     > 1) {
@@ -126,7 +123,7 @@ dnnl::primitive_attr make_dnnl_primitive_attr(
                 } else { // per-group quantization
                     // oneDNN only supports weights-decompressed matmul
                     if (in_scales_indices != 1
-                            || op->get_kind() != op_kind::dnnl_matmul)
+                            || op->get_kind() != op_kind::_matmul)
                         continue;
                     const auto &group_shape
                             = in_scales_op->get_attr<std::vector<int64_t>>(
@@ -136,8 +133,7 @@ dnnl::primitive_attr make_dnnl_primitive_attr(
                     // last two dimensions.
                     std::vector<int64_t> groups(
                             group_shape.end() - 2, group_shape.end());
-                    int mask = (1 << group_shape.size()) - 1;
-
+                    mask = (1 << group_shape.size()) - 1;
                     attr.set_scales(DNNL_ARG_WEIGHTS, mask, groups,
                             static_cast<dnnl::memory::data_type>(
                                     scales_data_type));
@@ -168,7 +164,7 @@ dnnl::primitive_attr make_dnnl_primitive_attr(
                 if (qtype == "per_group") {
                     // oneDNN only supports weights-decompressed matmul
                     if (in_zps_indices != 1
-                            || op->get_kind() != op_kind::dnnl_matmul)
+                            || op->get_kind() != op_kind::_matmul)
                         break;
                     const auto &group_shape
                             = in_zps_op->get_attr<std::vector<int64_t>>(
@@ -212,12 +208,19 @@ dnnl::primitive_attr make_dnnl_primitive_attr(
                 static_cast<dnnl::memory::data_type>(zps_data_type));
     }
 
+    if (fusion_info.dropout_) {
+        // TODO: output mask and non-host-scalar seed/offset/probability are not enabled yet
+        memory::desc mask_desc;
+        attr.set_dropout(mask_desc, /*seed_dt*/ memory::data_type::s64,
+                /*use_offset*/ true, /*use_host_scalars*/ true);
+    }
+
     // convert post ops
     dnnl::post_ops dnnl_pops;
     for (auto &pop : fusion_info.get_post_ops()) {
         const op_t *fused_op = pop->get_op();
         const auto fused_op_kind = fused_op->get_kind();
-        if (fused_op_kind == op_kind::dnnl_eltwise) {
+        if (fused_op_kind == op_kind::_eltwise) {
             float alpha = 0.f;
             float beta = 0.f;
             if (fused_op->has_attr(op_attr::alpha)) {
@@ -229,7 +232,7 @@ dnnl::primitive_attr make_dnnl_primitive_attr(
             const auto alg = static_cast<dnnl::algorithm>(
                     fused_op->get_attr<int64_t>(op_attr::alg_kind));
             dnnl_pops.append_eltwise(alg, alpha, beta);
-        } else if (fused_op_kind == op_kind::dnnl_binary) {
+        } else if (fused_op_kind == op_kind::_binary) {
             const auto alg = static_cast<dnnl::algorithm>(
                     fused_op->get_attr<int64_t>(op_attr::alg_kind));
             const auto &extra_inputs = pop->get_unfused_input_indices();
@@ -237,15 +240,15 @@ dnnl::primitive_attr make_dnnl_primitive_attr(
             int32_t zp = pop->get_zp();
             const auto psrc_val = op->get_input_value(extra_inputs[0]);
             const auto psrc = psrc_val->get_logical_tensor();
-            const auto dst = op->get_output_value(0)->get_logical_tensor();
+            const auto dst = op->get_output_logical_tensor(0);
             // check if can use post-sum, otherwise use binary post ops
             // algorithm should be binary_add
             bool is_post_sum = alg == dnnl::algorithm::binary_add;
             // base_op should not be eltwise, pool, or softmax.
             is_post_sum = is_post_sum
-                    && !impl::utils::one_of(op->get_kind(),
-                            op_kind::dnnl_eltwise, op_kind::dnnl_pool,
-                            op_kind::dnnl_softmax, op_kind::dnnl_logsoftmax);
+                    && !impl::utils::one_of(op->get_kind(), op_kind::_eltwise,
+                            op_kind::_pool, op_kind::_softmax,
+                            op_kind::_logsoftmax);
             // only support one post-sum
             is_post_sum = is_post_sum
                     && !(op->has_attr(op_attr::with_sum)
@@ -265,21 +268,21 @@ dnnl::primitive_attr make_dnnl_primitive_attr(
             // is to disable the inplace option for src = main_op(src) + src
             const auto get_external_id
                     = [](const std::shared_ptr<value_t> &val) {
-                          auto tmp_val = val;
-                          while (tmp_val->has_producer()) {
-                              size_t lt_id = tmp_val->get_logical_tensor().id;
-                              // check if lt_id is already a external id
-                              if (lt_id != std::numeric_limits<size_t>::max())
-                                  return lt_id;
+                auto tmp_val = val;
+                while (tmp_val->has_producer()) {
+                    size_t lt_id = tmp_val->get_logical_tensor().id;
+                    // check if lt_id is already a external id
+                    if (lt_id != std::numeric_limits<size_t>::max())
+                        return lt_id;
 
-                              const op_t &prod_op = tmp_val->get_producer();
-                              // ops like Dnnl_constant_scales doesn't have external input
-                              // return a internal id
-                              if (prod_op.num_inputs() == 0) return lt_id;
-                              tmp_val = prod_op.get_input_value(0);
-                          }
-                          return tmp_val->get_logical_tensor().id;
-                      };
+                    const op_t &prod_op = tmp_val->get_producer();
+                    // ops like Dnnl_constant_scales doesn't have external input
+                    // return a internal id
+                    if (prod_op.num_inputs() == 0) return lt_id;
+                    tmp_val = prod_op.get_input_value(0);
+                }
+                return tmp_val->get_logical_tensor().id;
+            };
             size_t alias_ins = 0;
             size_t psrc_lt_id = get_external_id(psrc_val);
             for (size_t op_in_idx = 0; op_in_idx < op->num_inputs();
@@ -321,11 +324,11 @@ dnnl::primitive_attr make_dnnl_primitive_attr(
                         "input scale and zp",
                         op->get_name().c_str());
                 auto md = make_dnnl_memory_desc(psrc);
-                if (op->get_kind() == op_kind::dnnl_convolution)
+                if (op->get_kind() == op_kind::_convolution)
                     md = to_format_any(md);
                 dnnl_pops.append_binary(alg, md);
             }
-        } else if (fused_op_kind == op_kind::dnnl_convolution) {
+        } else if (fused_op_kind == op_kind::_convolution) {
             const auto &extra_input_indices = pop->get_unfused_input_indices();
 
             auto get_dnn_dt = [](const std::shared_ptr<value_t> &val) {
@@ -338,7 +341,7 @@ dnnl::primitive_attr make_dnnl_primitive_attr(
             auto wei_value = op->get_input_value(wei_idx);
             const auto wei_dt = get_dnn_dt(wei_value);
             const auto dst_dt = get_dnn_dt(op->get_output_value(0));
-            const auto bia_dt = dnnl::memory::data_type::undef;
+            auto bia_dt = dnnl::memory::data_type::undef;
             const int64_t ks = wei_value->get_logical_tensor().dims[3];
             const int64_t stride = fused_op->get_attr<std::vector<int64_t>>(
                     op_attr::strides)[0];
@@ -347,7 +350,7 @@ dnnl::primitive_attr make_dnnl_primitive_attr(
             if (extra_input_indices.size() > 1) {
                 const size_t bias_idx = extra_input_indices[1];
                 auto bias_value = op->get_input_value(bias_idx);
-                const auto bia_dt = get_dnn_dt(bias_value);
+                bia_dt = get_dnn_dt(bias_value);
                 dnnl_pops.append_dw(wei_dt, bia_dt, dst_dt, ks, stride, pad_l);
             } else {
                 dnnl_pops.append_dw(wei_dt, bia_dt, dst_dt, ks, stride, pad_l);
@@ -431,8 +434,7 @@ dnnl::primitive_attr make_dnnl_sdpa_primitive_attr(
                     // last two dimensions.
                     std::vector<int64_t> groups(
                             group_shape.end() - 2, group_shape.end());
-                    int mask = (1 << group_shape.size()) - 1;
-
+                    mask = (1 << group_shape.size()) - 1;
                     attr.set_scales(DNNL_ARG_WEIGHTS, mask, groups,
                             static_cast<dnnl::memory::data_type>(
                                     scales_data_type));

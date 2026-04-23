@@ -1,18 +1,18 @@
 /*******************************************************************************
- * Copyright 2024-2025 Intel Corporation
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- *******************************************************************************/
+* Copyright 2024 Intel Corporation
+*
+* Licensed under the Apache License, Version 2.0 (the "License");
+* you may not use this file except in compliance with the License.
+* You may obtain a copy of the License at
+*
+*     http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing, software
+* distributed under the License is distributed on an "AS IS" BASIS,
+* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+* See the License for the specific language governing permissions and
+* limitations under the License.
+*******************************************************************************/
 
 #ifndef GPU_INTEL_INCLUDE_GENERIC_VECTOR_OPS_H
 #define GPU_INTEL_INCLUDE_GENERIC_VECTOR_OPS_H
@@ -71,6 +71,23 @@ float8 __attribute__((overloadable)) native_vexp2(float8 x) {
 }
 float16 __attribute__((overloadable)) native_vexp2(float16 x) {
     return native_exp2(x);
+}
+
+float1 __attribute__((overloadable)) native_vlog2(float1 x) {
+    x[0] = native_log2(x[0]);
+    return x;
+}
+float2 __attribute__((overloadable)) native_vlog2(float2 x) {
+    return native_log2(x);
+}
+float4 __attribute__((overloadable)) native_vlog2(float4 x) {
+    return native_log2(x);
+}
+float8 __attribute__((overloadable)) native_vlog2(float8 x) {
+    return native_log2(x);
+}
+float16 __attribute__((overloadable)) native_vlog2(float16 x) {
+    return native_log2(x);
 }
 
 float1 __attribute__((overloadable)) vselect(float1 x, float1 y, int1 c) {

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -79,7 +79,7 @@ struct base_settings_t {
     base_settings_t(const char *perf_template = perf_template_def)
         : perf_template(perf_template) {
         dnnl_get_default_fpmath_mode(&(this->fpmath_mode[0].mode));
-    };
+    }
 
     // Parsed members
     std::vector<int64_t> mb {0};

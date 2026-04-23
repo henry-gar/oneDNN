@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2016-2025 Intel Corporation
+* Copyright 2016 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -31,15 +31,18 @@ struct test_inner_product_descr_t {
 template <typename data_t>
 void compute_ref_inner_product_bwd_bias(const test_inner_product_descr_t &ipd,
         const memory &diff_dst, const memory &diff_bias) {
-    auto diff_bias_data = map_memory<data_t>(diff_bias);
-    auto diff_dst_data = map_memory<data_t>(diff_dst);
+    auto diff_bias_mapped = map_memory<data_t>(diff_bias);
+    data_t *diff_bias_data = diff_bias_mapped;
+    auto diff_dst_mapped = map_memory<data_t>(diff_dst);
+    data_t *diff_dst_data = diff_dst_mapped;
 
     const memory::desc diff_bias_d = diff_bias.get_desc();
     const memory::desc diff_dst_d = diff_dst.get_desc();
-    const dnnl::impl::memory_desc_wrapper diff_bias_mdw(diff_bias_d.get());
-    const dnnl::impl::memory_desc_wrapper diff_dst_mdw(diff_dst_d.get());
 
-    dnnl::impl::parallel_nd(ipd.oc, [&](memory::dim oc) {
+    dnnl::impl::parallel_nd(ipd.oc, [=](memory::dim oc) {
+        const dnnl::impl::memory_desc_wrapper diff_bias_mdw(diff_bias_d.get());
+        const dnnl::impl::memory_desc_wrapper diff_dst_mdw(diff_dst_d.get());
+
         data_t *db = &diff_bias_data[diff_bias_mdw.off_l(oc, true)];
         *db = data_t(0);
         for (memory::dim n = 0; n < ipd.mb; ++n) {
@@ -52,59 +55,60 @@ template <typename data_t>
 void compute_ref_inner_product_bwd_weights(int ndims,
         const test_inner_product_descr_t &ipd, const memory &src,
         const memory &diff_dst, const memory &diff_weights) {
-    auto src_data = map_memory<data_t>(src);
-    auto diff_weights_data = map_memory<data_t>(diff_weights);
-    auto diff_dst_data = map_memory<data_t>(diff_dst);
+    auto src_mapped = map_memory<data_t>(src);
+    data_t *src_data = src_mapped;
+    auto diff_weights_mapped = map_memory<data_t>(diff_weights);
+    data_t *diff_weights_data = diff_weights_mapped;
+    auto diff_dst_mapped = map_memory<data_t>(diff_dst);
+    data_t *diff_dst_data = diff_dst_mapped;
 
     const memory::desc src_d = src.get_desc();
     const memory::desc diff_weights_d = diff_weights.get_desc();
     const memory::desc diff_dst_d = diff_dst.get_desc();
-    const dnnl::impl::memory_desc_wrapper src_mdw(src_d.get());
-    const dnnl::impl::memory_desc_wrapper diff_weights_mdw(
-            diff_weights_d.get());
-    const dnnl::impl::memory_desc_wrapper diff_dst_mdw(diff_dst_d.get());
 
     auto padded_ic = src_d.get_padded_dims()[1];
 
     bool has_spatial = ipd.kh > 1 || ipd.kw > 1;
     if (ndims == 5) has_spatial = has_spatial || ipd.kd > 1;
     dnnl::impl::parallel_nd(
-            ipd.oc, ipd.ic, [&](memory::dim oc, memory::dim ic) {
-                if (has_spatial) {
-                    for_(memory::dim kd = 0; kd < ipd.kd; ++kd)
-                    for_(memory::dim kh = 0; kh < ipd.kh; ++kh)
-                    for (memory::dim kw = 0; kw < ipd.kw; ++kw) {
-                        memory::dim dwidx
-                                = oc * padded_ic * ipd.kd * ipd.kh * ipd.kw
-                                + ic * ipd.kd * ipd.kh * ipd.kw
-                                + kd * ipd.kh * ipd.kw + kh * ipd.kw + kw;
-                        data_t *dw = &diff_weights_data[diff_weights_mdw.off_l(
-                                dwidx, true)];
-                        *dw = data_t(0);
-                        for (memory::dim n = 0; n < ipd.mb; ++n) {
-                            memory::dim ddidx = n * ipd.oc + oc;
-                            memory::dim sidx
-                                    = n * padded_ic * ipd.kd * ipd.kh * ipd.kw
-                                    + ic * ipd.kd * ipd.kh * ipd.kw
-                                    + kd * ipd.kh * ipd.kw + kh * ipd.kw + kw;
-                            *dw += diff_dst_data[diff_dst_mdw.off_l(
-                                           ddidx, true)]
-                                    * src_data[src_mdw.off_l(sidx, true)];
-                        }
-                    }
-                } else {
-                    memory::dim dwidx = oc * ipd.ic + ic;
-                    data_t *dw = &diff_weights_data[diff_weights_mdw.off_l(
-                            dwidx, true)];
-                    *dw = data_t(0);
-                    for (memory::dim n = 0; n < ipd.mb; ++n) {
-                        memory::dim ddidx = n * ipd.oc + oc;
-                        memory::dim sidx = n * ipd.ic + ic;
-                        *dw += diff_dst_data[diff_dst_mdw.off_l(ddidx, true)]
-                                * src_data[src_mdw.off_l(sidx, true)];
-                    }
+            ipd.oc, ipd.ic, [=](memory::dim oc, memory::dim ic) {
+        const dnnl::impl::memory_desc_wrapper src_mdw(src_d.get());
+        const dnnl::impl::memory_desc_wrapper diff_weights_mdw(
+                diff_weights_d.get());
+        const dnnl::impl::memory_desc_wrapper diff_dst_mdw(diff_dst_d.get());
+
+        if (has_spatial) {
+            for_(memory::dim kd = 0; kd < ipd.kd; ++kd)
+            for_(memory::dim kh = 0; kh < ipd.kh; ++kh)
+            for (memory::dim kw = 0; kw < ipd.kw; ++kw) {
+                memory::dim dwidx = oc * padded_ic * ipd.kd * ipd.kh * ipd.kw
+                        + ic * ipd.kd * ipd.kh * ipd.kw + kd * ipd.kh * ipd.kw
+                        + kh * ipd.kw + kw;
+                data_t *dw = &diff_weights_data[diff_weights_mdw.off_l(
+                        dwidx, true)];
+                *dw = data_t(0);
+                for (memory::dim n = 0; n < ipd.mb; ++n) {
+                    memory::dim ddidx = n * ipd.oc + oc;
+                    memory::dim sidx = n * padded_ic * ipd.kd * ipd.kh * ipd.kw
+                            + ic * ipd.kd * ipd.kh * ipd.kw
+                            + kd * ipd.kh * ipd.kw + kh * ipd.kw + kw;
+                    *dw += diff_dst_data[diff_dst_mdw.off_l(ddidx, true)]
+                            * src_data[src_mdw.off_l(sidx, true)];
                 }
-            });
+            }
+        } else {
+            memory::dim dwidx = oc * ipd.ic + ic;
+            data_t *dw
+                    = &diff_weights_data[diff_weights_mdw.off_l(dwidx, true)];
+            *dw = data_t(0);
+            for (memory::dim n = 0; n < ipd.mb; ++n) {
+                memory::dim ddidx = n * ipd.oc + oc;
+                memory::dim sidx = n * ipd.ic + ic;
+                *dw += diff_dst_data[diff_dst_mdw.off_l(ddidx, true)]
+                        * src_data[src_mdw.off_l(sidx, true)];
+            }
+        }
+    });
 }
 
 struct inprod_test_params_t {
@@ -222,11 +226,11 @@ protected:
         // Create inner product backward
         auto ip_primitive_desc = with_bias
                 ? inner_product_backward_weights::primitive_desc(eng,
-                        ip_src_desc, ip_diff_weights_desc, ip_diff_bias_desc,
-                        ip_diff_dst_desc, ip_fwd_pdesc)
+                          ip_src_desc, ip_diff_weights_desc, ip_diff_bias_desc,
+                          ip_diff_dst_desc, ip_fwd_pdesc)
                 : inner_product_backward_weights::primitive_desc(eng,
-                        ip_src_desc, ip_diff_weights_desc, ip_diff_dst_desc,
-                        ip_fwd_pdesc);
+                          ip_src_desc, ip_diff_weights_desc, ip_diff_dst_desc,
+                          ip_fwd_pdesc);
 
         allows_attr_t aa {}; // doesn't support anything
         test_bwd_pd_constructors<pd_t, hint_pd_t>(ip_primitive_desc,
@@ -269,12 +273,11 @@ protected:
                 ip_primitive_desc.get_prop_kind(), prop_kind::backward_weights);
 
         EXPECT_ANY_THROW(inner_product_backward_weights(ip_primitive_desc, {}));
-        inner_product_backward_weights(ip_primitive_desc)
-                .execute(strm,
-                        {{DNNL_ARG_DIFF_DST, ip_diff_dst},
-                                {DNNL_ARG_SRC, ip_src},
-                                {DNNL_ARG_DIFF_WEIGHTS, ip_diff_weights},
-                                {DNNL_ARG_DIFF_BIAS, ip_diff_bias}});
+        inner_product_backward_weights prim(ip_primitive_desc);
+        prim.execute(strm,
+                {{DNNL_ARG_DIFF_DST, ip_diff_dst}, {DNNL_ARG_SRC, ip_src},
+                        {DNNL_ARG_DIFF_WEIGHTS, ip_diff_weights},
+                        {DNNL_ARG_DIFF_BIAS, ip_diff_bias}});
         strm.wait();
 
         compute_ref_inner_product_bwd_weights<data_t>(
@@ -297,11 +300,17 @@ using inner_product_test_float = inner_product_test_bwd_weights_t<float>;
 using inprod_test_params_float = inprod_test_params_t;
 
 #define EXPAND_SIZES_3D(...) \
-    5, { __VA_ARGS__ }
+    5, { \
+        __VA_ARGS__ \
+    }
 #define EXPAND_SIZES_2D(mb, ic, oc, kh, kw) \
-    4, { mb, ic, oc, 1, kh, kw }
+    4, { \
+        mb, ic, oc, 1, kh, kw \
+    }
 #define EXPAND_SIZES_1D(mb, ic, oc, kw) \
-    3, { mb, ic, oc, 1, 1, kw }
+    3, { \
+        mb, ic, oc, 1, 1, kw \
+    }
 
 TEST_P(inner_product_test_float, TestsInnerProduct) {}
 

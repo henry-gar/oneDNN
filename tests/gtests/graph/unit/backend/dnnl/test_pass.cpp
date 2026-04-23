@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -4770,7 +4770,7 @@ class test_single_op_pass_t
     : public ::testing::TestWithParam<single_op_params_t> {
 public:
     void Test_Single_Op_Pass() {
-        const auto params
+        const auto &params
                 = ::testing::TestWithParam<single_op_params_t>::GetParam();
 
         const auto engine_kind = get_test_engine_kind();
@@ -5124,9 +5124,7 @@ TEST(test_pass, InputJsonIsInvalidWithIncompleteHash) {
             + std::to_string(dnnl_version()->patch);
     invalid_stream << "{\n"
                    << "\"version\": \"" << version << "\",\n"
-                   << "\"hash\": \""
-                   << "aninvalidcommitid"
-                   << "\",\n"
+                   << "\"hash\": \"" << "aninvalidcommitid" << "\",\n"
                    << "\"passes\": [\n"
                    << "  {\n"
                    << "  \"pass_name\": \"conv_pass\",\n"
@@ -11640,12 +11638,12 @@ TEST(test_pass_system, FuseSoftmaxTypecast) {
     op_t softmax {0, SoftMax, "softmax"};
     op_t typecast {1, TypeCast, "typecast"};
 
-    logical_tensor_t src = logical_tensor_init(0, data_type::bf16);
-    logical_tensor_t softmax_dst = logical_tensor_init(1, data_type::bf16);
+    logical_tensor_t src = logical_tensor_init(0, data_type::f32);
+    logical_tensor_t softmax_dst = logical_tensor_init(1, data_type::f32);
     softmax.add_input(src);
     softmax.add_output(softmax_dst);
 
-    logical_tensor_t dst = logical_tensor_init(2, data_type::f32);
+    logical_tensor_t dst = logical_tensor_init(2, data_type::bf16);
     typecast.add_input(softmax_dst);
     typecast.add_output(dst);
 
@@ -11718,7 +11716,7 @@ TEST(test_pass_system, FuseLayernormTypecast_CPU) {
     ASSERT_EQ(agraph.get_partitions()[0]->get_outputs()[0].id, 4U);
 }
 
-TEST(test_pass_system, FuseSoftmaxTypecastQuantize) {
+TEST(test_pass_system, NotFuseSoftmaxTypecastQuantize) {
     /*
              | (bf16)
            softmax
@@ -11763,13 +11761,8 @@ TEST(test_pass_system, FuseSoftmaxTypecastQuantize) {
     auto pm = pass::pass_manager_t(backend_ptr.get_pass_registry());
     pm.run_passes(agraph, "no_config");
 
-    ASSERT_EQ(agraph.get_num_partitions(), 1U);
-
-    ASSERT_EQ(agraph.get_partitions()[0]->get_inputs().size(), 1U);
-    ASSERT_EQ(agraph.get_partitions()[0]->get_inputs()[0].id, 0U);
-
-    ASSERT_EQ(agraph.get_partitions()[0]->get_outputs().size(), 1U);
-    ASSERT_EQ(agraph.get_partitions()[0]->get_outputs()[0].id, 3U);
+    // 1. softmax; 2. typecast + quant.
+    ASSERT_EQ(agraph.get_num_partitions(), 2U);
 }
 
 TEST(test_pass_system, FuseLayernormTypecastQuantize_CPU) {
@@ -12928,9 +12921,7 @@ TEST(test_pass, F32MhaFusion) {
     agraph.finalize();
     ASSERT_EQ(agraph.get_ops().size(), 7U);
 
-    graph::pass::pass_base_ptr apass = get_pass(
-            engine_kind == graph::engine_kind::cpu ? "float_sdp_fusion_cpu"
-                                                   : "float_sdp_fusion_gpu");
+    graph::pass::pass_base_ptr apass = get_pass("float_sdp_fusion");
     apass->run(agraph);
     ASSERT_EQ(agraph.get_num_partitions(), 1U);
 }

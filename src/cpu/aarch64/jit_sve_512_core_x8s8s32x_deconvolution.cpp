@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2018-2022 Intel Corporation
+* Copyright 2018 Intel Corporation
 * Copyright 2022-2025 FUJITSU LIMITED
 * Copyright 2025 Arm Ltd. and affiliates
 *
@@ -70,7 +70,7 @@ status_t jit_sve_512_core_x8s8s32x_deconv_fwd_kernel_wrapper_t::init_conf(
                         data_type::s8, data_type::u8)))
         return status::unimplemented;
 
-    jcp = zero<decltype(jcp)>();
+    jcp = utils::zero<decltype(jcp)>();
     jcp.nthr = nthreads;
 
     const bool with_groups = weights_d.ndims() == src_d.ndims() + 1;
@@ -419,9 +419,9 @@ void jit_sve_512_core_x8s8s32x_deconv_fwd_kernel_t<
         }
     };
 
-    const auto load_zp_src_pad_comp = [&](const ZReg &zp_pad_comp_vmm,
-                                              const XReg &base_addr,
-                                              const int off, const int ocb) {
+    const auto load_zp_src_pad_comp
+            = [&](const ZReg &zp_pad_comp_vmm, const XReg &base_addr,
+                      const int off, const int ocb) {
         const bool is_last_ocb = last_oc_block && ocb == jcp.nb_oc_blocking - 1;
         const bool is_tail = is_last_ocb && get_tail_size() > 0;
 
@@ -517,9 +517,11 @@ void jit_sve_512_core_x8s8s32x_deconv_fwd_kernel_t<isa>::compute_ker(int ur_w,
                                          : jcp.ic_without_padding % 4;
         int n_ic_blocks = jcp.is_depthwise
                 ? 1
-                : (last_ic_block_flag & ~no_last_block ? div_up(
-                           jcp.ic_without_padding % jcp.ic_block, 4)
-                                                       : jcp.ic_block / 4);
+                : (last_ic_block_flag & ~no_last_block
+                                  ? div_up(jcp.ic_without_padding
+                                                    % jcp.ic_block,
+                                            4)
+                                  : jcp.ic_block / 4);
 
         for (int icb1 = 0; icb1 < n_ic_blocks; icb1++) {
             if (h_padded == true) {
@@ -1386,7 +1388,7 @@ status_t jit_sve_512_core_x8s8s32x_deconvolution_fwd_t::execute_forward_1d(
     const size_t dst_dt_size = types::data_type_size(dst_d.data_type());
     const auto &jcp = pd()->jcp_;
 
-    auto scratchpad = ctx.get_scratchpad_grantor();
+    const auto &scratchpad = ctx.get_scratchpad_grantor();
     int32_t *zp_src_comp_scratch = scratchpad.get<int32_t>(key_deconv_zp);
 
     if (zp::should_calculate_deconv_zp_src_pad_str_comp(jcp))
@@ -1404,8 +1406,8 @@ status_t jit_sve_512_core_x8s8s32x_deconvolution_fwd_t::execute_forward_1d(
             ? reinterpret_cast<int32_t *>(&w[offset])
             : nullptr;
     const int32_t *zp_compensation = jcp.src_zero_point
-            ? get_src_zp_comp_from_wei(
-                    weights, weights_d, !jcp.signed_input, jcp.ngroups, jcp.oc)
+            ? get_src_zp_comp_from_wei(weights, weights_d, !jcp.signed_input,
+                      jcp.ngroups, jcp.oc)
             : nullptr;
 
     parallel(jcp.nthr, [&](const int ithr, const int nthr) {
@@ -1482,7 +1484,7 @@ status_t jit_sve_512_core_x8s8s32x_deconvolution_fwd_t::execute_forward_2d(
     const memory_desc_wrapper bias_d(pd()->weights_md(1));
     const size_t dst_dt_size = types::data_type_size(dst_d.data_type());
 
-    auto scratchpad = ctx.get_scratchpad_grantor();
+    const auto &scratchpad = ctx.get_scratchpad_grantor();
     int32_t *zp_src_comp_scratch = scratchpad.get<int32_t>(key_deconv_zp);
 
     if (zp::should_calculate_deconv_zp_src_pad_str_comp(jcp))
@@ -1505,8 +1507,8 @@ status_t jit_sve_512_core_x8s8s32x_deconvolution_fwd_t::execute_forward_2d(
             ? reinterpret_cast<int32_t *>(&w[offset])
             : nullptr;
     const int32_t *zp_compensation = jcp.src_zero_point
-            ? get_src_zp_comp_from_wei(
-                    weights, weights_d, !jcp.signed_input, jcp.ngroups, jcp.oc)
+            ? get_src_zp_comp_from_wei(weights, weights_d, !jcp.signed_input,
+                      jcp.ngroups, jcp.oc)
             : nullptr;
 
     parallel(jcp.nthr, [&](const int ithr, const int nthr) {
@@ -1589,11 +1591,11 @@ status_t jit_sve_512_core_x8s8s32x_deconvolution_fwd_t::execute_forward_2d(
                 p.t_overflow = jcp.dilate_h > 0
                         ? jcp.kh - kh_len - kh_lo
                         : max(0,
-                                jcp.kh
-                                        - (kh_lo
-                                                + max(0, kh_len - 1)
-                                                        * jcp.stride_h
-                                                + 1));
+                                  jcp.kh
+                                          - (kh_lo
+                                                  + max(0, kh_len - 1)
+                                                          * jcp.stride_h
+                                                  + 1));
                 p.b_overflow = kh_lo;
                 p.kh_padding = kh_len;
                 p.scales = scales;
@@ -1643,7 +1645,7 @@ status_t jit_sve_512_core_x8s8s32x_deconvolution_fwd_t::execute_forward_3d(
 
     const size_t dst_dt_size = types::data_type_size(dst_d.data_type());
 
-    auto scratchpad = ctx.get_scratchpad_grantor();
+    const auto &scratchpad = ctx.get_scratchpad_grantor();
     int32_t *zp_src_comp_scratch = scratchpad.get<int32_t>(key_deconv_zp);
 
     if (zp::should_calculate_deconv_zp_src_pad_str_comp(jcp))
@@ -1669,8 +1671,8 @@ status_t jit_sve_512_core_x8s8s32x_deconvolution_fwd_t::execute_forward_3d(
             ? reinterpret_cast<int32_t *>(&w[offset])
             : nullptr;
     const int32_t *zp_compensation = jcp.src_zero_point
-            ? get_src_zp_comp_from_wei(
-                    weights, weights_d, !jcp.signed_input, jcp.ngroups, jcp.oc)
+            ? get_src_zp_comp_from_wei(weights, weights_d, !jcp.signed_input,
+                      jcp.ngroups, jcp.oc)
             : nullptr;
 
     parallel(jcp.nthr, [&](const int ithr, const int nthr) {
@@ -1795,20 +1797,20 @@ status_t jit_sve_512_core_x8s8s32x_deconvolution_fwd_t::execute_forward_3d(
                 p.t_overflow = jcp.dilate_h > 0
                         ? jcp.kh - kh_len - kh_lo
                         : max(0,
-                                jcp.kh
-                                        - (kh_lo
-                                                + max(0, kh_len - 1)
-                                                        * jcp.stride_h
-                                                + 1));
+                                  jcp.kh
+                                          - (kh_lo
+                                                  + max(0, kh_len - 1)
+                                                          * jcp.stride_h
+                                                  + 1));
                 p.b_overflow = kh_lo;
                 p.f_overflow = jcp.dilate_d > 0
                         ? jcp.kd - kd_len - kd_lo
                         : max(0,
-                                jcp.kd
-                                        - (kd_lo
-                                                + max(0, kd_len - 1)
-                                                        * jcp.stride_d
-                                                + 1));
+                                  jcp.kd
+                                          - (kd_lo
+                                                  + max(0, kd_len - 1)
+                                                          * jcp.stride_d
+                                                  + 1));
                 p.back_overflow = kd_lo;
                 p.kh_padding = kh_len;
                 p.kd_padding = kd_len;

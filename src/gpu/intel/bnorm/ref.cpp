@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -80,6 +80,7 @@ static void init_conf_common(conf_t &conf, compute::dispatch_t &dispatch,
 
     conf = utils::zero<decltype(conf)>();
     conf.data_type = data_mdw.data_type();
+    conf.require_stateless_addressing = pd->has_large_buffers();
 
     conf.ndims = ndims;
     conf.mb = data_mdw.dims()[0];
@@ -119,6 +120,7 @@ static void init_conf_common(conf_t &conf, compute::dispatch_t &dispatch,
 static void init_kernel_ctx_common(compute::kernel_ctx_t &kernel_ctx,
         const conf_t &conf, const compute::dispatch_t &dispatch,
         const offsets_t &off) {
+    kernel_ctx.require_stateless_addressing(conf.require_stateless_addressing);
     kernel_ctx.set_data_type(conf.data_type, false);
 
     kernel_ctx.define_int("NDIMS", conf.ndims);
@@ -163,6 +165,7 @@ void ref_fwd_t::pd_t::init_conf(impl::engine_t *engine) {
 }
 
 void ref_fwd_t::pd_t::init_kernel_ctx(compute::kernel_ctx_t &kernel_ctx) const {
+    kernel_ctx.register_buffer_size(*src_md());
     kernel_ctx.define_int("IS_FWD", 1);
 
     if (conf.calculate_stats) {
@@ -290,6 +293,7 @@ void ref_bwd_t::pd_t::init_conf(impl::engine_t *engine) {
 }
 
 void ref_bwd_t::pd_t::init_kernel_ctx(compute::kernel_ctx_t &kernel_ctx) const {
+    kernel_ctx.register_buffer_size(*diff_src_md());
 
     def_dispatch(kernel_ctx, dispatch_calc_stat);
     def_dispatch(kernel_ctx, dispatch_reduce_stat);

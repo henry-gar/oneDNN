@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -397,7 +397,7 @@ struct scratch_t : public data_helper_t {
         return conf_.n_iter_scratch_gates != 1
                 ? iter * conf_.mb * conf_.scratch_gates_ld * conf_.ws_gates_elsz
                 : 0;
-    };
+    }
 
     const mst *gates() const {
         assert(gates_);
@@ -415,7 +415,7 @@ struct scratch_t : public data_helper_t {
         return conf_.n_iter_scratch_gates != 1
                 ? iter * conf_.mb * conf_.scratch_diff_gates_ld
                 : 0;
-    };
+    }
 
     const mst *diff_gates() const { return (diff_gates_.get()); }
 

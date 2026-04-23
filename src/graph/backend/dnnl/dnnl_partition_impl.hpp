@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2025 Intel Corporation
+* Copyright 2021 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -27,7 +27,6 @@
 #include "graph/interface/partition.hpp"
 
 #include "graph/backend/dnnl/dnnl_backend.hpp"
-#include "graph/backend/dnnl/internal_ops.hpp"
 
 #include "graph/backend/dnnl/kernels/kernel_base.hpp"
 
@@ -45,19 +44,8 @@ public:
             const std::vector<logical_tensor_t> &inputs,
             const std::vector<logical_tensor_t> &outputs, kernel_ptr &kernel)
         : compiled_partition_impl_t(
-                engine, inputs, outputs, kernel->get_inplace_pairs())
+                  engine, inputs, outputs, kernel->get_inplace_pairs())
         , kernel_(kernel) {}
-
-    // Current implementation uses const_cast to reset `engine_` to point to a
-    // new engine object. The input engine remains const-qualified, and library
-    // currently does not modify the engine object itself. If future changes
-    // require modifying the engine object directly, this logic must be revised.
-    // Modifying a const-qualified engine internally would result in undefined
-    // behavior (UB).
-    status_t reset_engine(const engine_t *engine) override {
-        engine_ = const_cast<engine_t *>(engine);
-        return kernel_->reset_engine(engine);
-    }
 
     status_t execute(const stream_t *g_stream,
             const std::vector<tensor_t> &inputs,

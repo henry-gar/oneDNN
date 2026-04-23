@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -667,6 +667,8 @@ void Generator<hw>::initState(const CommonProblem &problem, const CommonStrategy
     interface.requireGRF(strategy.GRFs);
     state.ra.setRegisterCount(strategy.GRFs);
     state.tokenAllocator = TokenAllocator(hw, strategy.GRFs);
+
+    setEfficient64Bit(interface.getEfficient64Bit());
 
     if (problem.gtpinSupport)
         interface.requireScratch(128);

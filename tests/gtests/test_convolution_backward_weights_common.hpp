@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2016-2025 Intel Corporation
+* Copyright 2016 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -28,92 +28,87 @@ template <typename data_t_src, typename data_t_diff_dst,
         typename data_t_diff_bias>
 void compute_ref_conv_bwd_bias(const test_convolution_sizes_t &c,
         const memory &diff_dst, const memory &diff_bias) {
-    auto diff_bias_data = map_memory<data_t_diff_bias>(diff_bias);
-    auto diff_dst_data = map_memory<data_t_diff_dst>(diff_dst);
+    auto diff_bias_mapped = map_memory<data_t_diff_bias>(diff_bias);
+    data_t_diff_bias *diff_bias_data = diff_bias_mapped;
+    auto diff_dst_mapped = map_memory<data_t_diff_dst>(diff_dst);
+    data_t_diff_dst *diff_dst_data = diff_dst_mapped;
 
     const memory::desc bias_d = diff_bias.get_desc();
     const memory::desc dst_d = diff_dst.get_desc();
-    const dnnl::impl::memory_desc_wrapper diff_bias_mdw(bias_d.get());
-    const dnnl::impl::memory_desc_wrapper diff_dst_mdw(dst_d.get());
 
     auto padded_oc = dst_d.get_padded_dims()[1];
 
     dnnl::impl::parallel_nd(
-            c.ng, c.oc / c.ng, [&](memory::dim g, memory::dim oc) {
-                memory::dim bidx = g * padded_oc / c.ng + oc;
-                diff_bias_data[diff_bias_mdw.off_l(bidx, true)] = 0.0;
-                for (memory::dim mb = 0; mb < c.mb; ++mb) {
-                    for (memory::dim oh = 0; oh < c.oh; ++oh) {
-                        for (memory::dim ow = 0; ow < c.ow; ++ow) {
-                            memory::dim oidx = mb * padded_oc * c.oh * c.ow
-                                    + g * padded_oc / c.ng * c.oh * c.ow
-                                    + oc * c.oh * c.ow + oh * c.ow + ow;
-                            diff_bias_data[diff_bias_mdw.off_l(bidx, true)]
-                                    += diff_dst_data[diff_dst_mdw.off_l(
-                                            oidx, true)];
-                        }
-                    }
-                }
-            });
+            c.ng, c.oc / c.ng, [=](memory::dim g, memory::dim oc) {
+        const dnnl::impl::memory_desc_wrapper diff_bias_mdw(bias_d.get());
+        const dnnl::impl::memory_desc_wrapper diff_dst_mdw(dst_d.get());
+
+        memory::dim bidx = g * padded_oc / c.ng + oc;
+        diff_bias_data[diff_bias_mdw.off_l(bidx, true)] = 0.0;
+        for_(memory::dim mb = 0; mb < c.mb; ++mb)
+        for_(memory::dim oh = 0; oh < c.oh; ++oh)
+        for (memory::dim ow = 0; ow < c.ow; ++ow) {
+            memory::dim oidx = mb * padded_oc * c.oh * c.ow
+                    + g * padded_oc / c.ng * c.oh * c.ow + oc * c.oh * c.ow
+                    + oh * c.ow + ow;
+            diff_bias_data[diff_bias_mdw.off_l(bidx, true)]
+                    += diff_dst_data[diff_dst_mdw.off_l(oidx, true)];
+        }
+    });
 }
 
 template <typename data_t_src, typename data_t_diff_dst,
         typename data_t_diff_weights>
 void compute_ref_conv_bwd_weights(const test_convolution_sizes_t &c,
         const memory &src, const memory &diff_dst, const memory &diff_weights) {
-    auto src_data = map_memory<data_t_src>(src);
-    auto diff_weights_data = map_memory<data_t_diff_weights>(diff_weights);
-    auto diff_dst_data = map_memory<data_t_diff_dst>(diff_dst);
+    auto src_mapped = map_memory<data_t_src>(src);
+    data_t_src *src_data = src_mapped;
+    auto diff_weights_mapped = map_memory<data_t_diff_weights>(diff_weights);
+    data_t_diff_weights *diff_weights_data = diff_weights_mapped;
+    auto diff_dst_mapped = map_memory<data_t_diff_dst>(diff_dst);
+    data_t_diff_dst *diff_dst_data = diff_dst_mapped;
 
     const memory::desc src_d = src.get_desc();
     const memory::desc weights_d = diff_weights.get_desc();
     const memory::desc dst_d = diff_dst.get_desc();
-    const dnnl::impl::memory_desc_wrapper src_mdw(src_d.get());
-    const dnnl::impl::memory_desc_wrapper diff_weights_mdw(weights_d.get());
-    const dnnl::impl::memory_desc_wrapper diff_dst_mdw(dst_d.get());
 
     auto padded_ic = src_d.get_padded_dims()[1];
     auto padded_oc = dst_d.get_padded_dims()[1];
 
     dnnl::impl::parallel_nd(c.ng, c.oc / c.ng, c.ic / c.ng, c.kh, c.kw,
-            [&](memory::dim g, memory::dim oc, memory::dim ic, memory::dim kh,
+            [=](memory::dim g, memory::dim oc, memory::dim ic, memory::dim kh,
                     memory::dim kw) {
-                memory::dim widx
-                        = g * padded_oc / c.ng * padded_ic / c.ng * c.kh * c.kw
-                        + oc * padded_ic / c.ng * c.kh * c.kw + ic * c.kh * c.kw
-                        + kh * c.kw + kw;
-                diff_weights_data[diff_weights_mdw.off_l(widx, true)] = 0.0;
-                for (memory::dim mb = 0; mb < c.mb; ++mb) {
-                    for (memory::dim oh = 0; oh < c.oh; ++oh) {
-                        for (memory::dim ow = 0; ow < c.ow; ++ow) {
-                            if (ow * c.strw + kw * (1 + c.dilw) < c.padw
-                                    || oh * c.strh + kh * (1 + c.dilh) < c.padh
-                                    || ow * c.strw + kw * (1 + c.dilw)
-                                            >= c.iw + c.padw
-                                    || oh * c.strh + kh * (1 + c.dilh)
-                                            >= c.ih + c.padh)
-                                continue;
+        const dnnl::impl::memory_desc_wrapper src_mdw(src_d.get());
+        const dnnl::impl::memory_desc_wrapper diff_weights_mdw(weights_d.get());
+        const dnnl::impl::memory_desc_wrapper diff_dst_mdw(dst_d.get());
 
-                            memory::dim ih
-                                    = oh * c.strh - c.padh + kh * (1 + c.dilh);
-                            memory::dim iw
-                                    = ow * c.strw - c.padw + kw * (1 + c.dilw);
-                            memory::dim sidx = mb * padded_ic * c.ih * c.iw
-                                    + g * padded_ic / c.ng * c.ih * c.iw
-                                    + ic * c.ih * c.iw + ih * c.iw + iw;
-                            memory::dim didx = mb * padded_oc * c.oh * c.ow
-                                    + g * padded_oc / c.ng * c.oh * c.ow
-                                    + oc * c.oh * c.ow + oh * c.ow + ow;
+        memory::dim widx = g * padded_oc / c.ng * padded_ic / c.ng * c.kh * c.kw
+                + oc * padded_ic / c.ng * c.kh * c.kw + ic * c.kh * c.kw
+                + kh * c.kw + kw;
+        diff_weights_data[diff_weights_mdw.off_l(widx, true)] = 0.0;
+        for_(memory::dim mb = 0; mb < c.mb; ++mb)
+        for_(memory::dim oh = 0; oh < c.oh; ++oh)
+        for (memory::dim ow = 0; ow < c.ow; ++ow) {
+            if (ow * c.strw + kw * (1 + c.dilw) < c.padw
+                    || oh * c.strh + kh * (1 + c.dilh) < c.padh
+                    || ow * c.strw + kw * (1 + c.dilw) >= c.iw + c.padw
+                    || oh * c.strh + kh * (1 + c.dilh) >= c.ih + c.padh)
+                continue;
 
-                            diff_weights_data[diff_weights_mdw.off_l(
-                                    widx, true)]
-                                    += src_data[src_mdw.off_l(sidx, true)]
-                                    * diff_dst_data[diff_dst_mdw.off_l(
-                                            didx, true)];
-                        }
-                    }
-                }
-            });
+            memory::dim ih = oh * c.strh - c.padh + kh * (1 + c.dilh);
+            memory::dim iw = ow * c.strw - c.padw + kw * (1 + c.dilw);
+            memory::dim sidx = mb * padded_ic * c.ih * c.iw
+                    + g * padded_ic / c.ng * c.ih * c.iw + ic * c.ih * c.iw
+                    + ih * c.iw + iw;
+            memory::dim didx = mb * padded_oc * c.oh * c.ow
+                    + g * padded_oc / c.ng * c.oh * c.ow + oc * c.oh * c.ow
+                    + oh * c.ow + ow;
+
+            diff_weights_data[diff_weights_mdw.off_l(widx, true)]
+                    += src_data[src_mdw.off_l(sidx, true)]
+                    * diff_dst_data[diff_dst_mdw.off_l(didx, true)];
+        }
+    });
 }
 
 template <typename data_t_src, typename data_t_diff_dst,
@@ -275,18 +270,18 @@ protected:
                 p.formats.src_format);
         auto c_diff_weights_desc = cd.ng > 1
                 ? create_md({cd.ng, cd.oc / cd.ng, cd.ic / cd.ng, cd.kh, cd.kw},
-                        data_type_diff_weights, p.formats.weights_format)
+                          data_type_diff_weights, p.formats.weights_format)
                 : create_md({cd.oc, cd.ic, cd.kh, cd.kw},
-                        data_type_diff_weights, p.formats.weights_format);
+                          data_type_diff_weights, p.formats.weights_format);
         auto c_diff_bias_desc = create_md(
                 {cd.oc}, data_type_diff_bias, p.formats.bias_format);
         auto c_diff_dst_desc = create_md({cd.mb, cd.oc, cd.oh, cd.ow},
                 data_type_diff_dst, p.formats.dst_format);
         auto c_weights_desc_f = cd.ng > 1
                 ? create_md({cd.ng, cd.oc / cd.ng, cd.ic / cd.ng, cd.kh, cd.kw},
-                        data_type_diff_dst, p.formats.weights_format)
+                          data_type_diff_dst, p.formats.weights_format)
                 : create_md({cd.oc, cd.ic, cd.kh, cd.kw}, data_type_diff_dst,
-                        p.formats.weights_format);
+                          p.formats.weights_format);
         auto c_dst_desc_f = create_md({cd.mb, cd.oc, cd.oh, cd.ow},
                 data_type_diff_weights, p.formats.dst_format);
         auto c_src = test_memory(c_src_desc, eng);
@@ -345,12 +340,12 @@ protected:
 
         EXPECT_ANY_THROW(convolution_backward_weights(
                 conv_bwd_weights_primitive_desc, {}));
-        convolution_backward_weights(conv_bwd_weights_primitive_desc)
-                .execute(strm,
-                        {{DNNL_ARG_DIFF_DST, c_diff_dst.get()},
-                                {DNNL_ARG_SRC, c_src.get()},
-                                {DNNL_ARG_DIFF_WEIGHTS, c_diff_weights.get()},
-                                {DNNL_ARG_DIFF_BIAS, c_diff_bias.get()}});
+        convolution_backward_weights prim(conv_bwd_weights_primitive_desc);
+        prim.execute(strm,
+                {{DNNL_ARG_DIFF_DST, c_diff_dst.get()},
+                        {DNNL_ARG_SRC, c_src.get()},
+                        {DNNL_ARG_DIFF_WEIGHTS, c_diff_weights.get()},
+                        {DNNL_ARG_DIFF_BIAS, c_diff_bias.get()}});
         strm.wait();
 
         auto ref_diff_weights = test::make_memory(c_diff_weights_desc, eng);

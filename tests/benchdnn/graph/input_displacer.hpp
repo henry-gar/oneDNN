@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -50,9 +50,10 @@ public:
 
     deserialized_op_t main_op_;
     size_t main_op_offset_;
-    //the tensor as a displace starting point
+    // The tensor as a displace starting point
     deserialized_lt_t tensor_;
     filling_type_t filling_type_;
+    // Mandatory config for a `filling_type_t::fixed_setting`.
     fill_cfg_t fill_cfg_;
 };
 

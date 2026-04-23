@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -80,7 +80,9 @@ struct nhwc_reusable_compile_params_t {
     bool with_leaky_relu;
     bool calculate_stats;
     bool use_stats_one_pass;
-    uint8_t padding[3] = {0};
+    bool require_stateless_addressing;
+    bool use_int32_offset;
+    uint8_t padding[1] = {0};
 };
 
 struct nhwc_reusable_runtime_params_t {

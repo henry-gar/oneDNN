@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -21,7 +21,6 @@
 #include "gpu/intel/conv/jit/v2/plan.hpp"
 #include "gpu/intel/conv/jit/v2/problem.hpp"
 #include "gpu/intel/conv/jit/v2/tensor_utils.hpp"
-#include "gpu/intel/jit/ir/core.hpp"
 #include "gpu/intel/jit/ir/tensor.hpp"
 #include "gpu/intel/jit/ir/tensor_config.hpp"
 #include "gpu/intel/jit/ir/v2/tensor.hpp"

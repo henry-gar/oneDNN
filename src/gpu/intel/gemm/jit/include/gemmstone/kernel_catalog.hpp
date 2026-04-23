@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -14,8 +14,8 @@
 * limitations under the License.
 *******************************************************************************/
 
-#ifndef GEMMSTONE_GUARD_KERNEL_CATALOG_HPP
-#define GEMMSTONE_GUARD_KERNEL_CATALOG_HPP
+#ifndef GEMMSTONE_INCLUDE_GEMMSTONE_KERNEL_CATALOG_HPP
+#define GEMMSTONE_INCLUDE_GEMMSTONE_KERNEL_CATALOG_HPP
 
 #include <string>
 #include <tuple>
@@ -77,6 +77,7 @@ enum HWTags : char {
     HWTagXeHPC = 'F',
     HWTagXe2 = 'G',
     HWTagXe3 = 'H',
+    HWTagXe3p = 'I',
 };
 
 struct Selector {

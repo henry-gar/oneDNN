@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -333,7 +333,8 @@ protected:
         }
 
         EXPECT_ANY_THROW(layer_normalization_forward(lnorm_fwd_pd, {}));
-        layer_normalization_forward(lnorm_fwd_pd).execute(strm, args);
+        layer_normalization_forward prim(lnorm_fwd_pd);
+        prim.execute(strm, args);
         strm.wait();
     }
 
@@ -361,7 +362,8 @@ protected:
         }
 
         EXPECT_ANY_THROW(layer_normalization_backward(lnorm_bwd_pd, {}));
-        layer_normalization_backward(lnorm_bwd_pd).execute(strm, args);
+        layer_normalization_backward prim(lnorm_bwd_pd);
+        prim.execute(strm, args);
         strm.wait();
     }
 
@@ -460,7 +462,9 @@ private:
 #define TAGS_cLDSNC EXPAND_FORMATS(abcde, acdb, abcde)
 
 #define LNORM_TEST_CASE(...) \
-    test_lnorm_params_t { __VA_ARGS__, false, dnnl_success }
+    test_lnorm_params_t { \
+        __VA_ARGS__, false, dnnl_success \
+    }
 
 static auto expected_failure_cases = []() {
     // clang-format off
@@ -475,9 +479,9 @@ static auto expected_failure_cases = []() {
     // clang-format on
 };
 
-static auto zero_dim_cases = [](memory::data_type src_dt,
-                                     memory::data_type dst_dt,
-                                     memory::data_type diff_src_dt) {
+static auto zero_dim_cases
+        = [](memory::data_type src_dt, memory::data_type dst_dt,
+                  memory::data_type diff_src_dt) {
     // clang-format off
     return ::testing::Values(
         LNORM_TEST_CASE(TAGS_NC, src_dt, dst_dt, diff_src_dt, {0, 100}),
@@ -488,9 +492,9 @@ static auto zero_dim_cases = [](memory::data_type src_dt,
     // clang-format on
 };
 
-static auto simple_cases = [](memory::data_type src_dt,
-                                   memory::data_type dst_dt,
-                                   memory::data_type diff_src_dt) {
+static auto simple_cases
+        = [](memory::data_type src_dt, memory::data_type dst_dt,
+                  memory::data_type diff_src_dt) {
     // clang-format off
     return ::testing::Values(
         LNORM_TEST_CASE(TAGS_NC, src_dt, dst_dt, diff_src_dt, {1, 100}),

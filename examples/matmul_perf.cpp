@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -17,9 +17,12 @@
 /// @example matmul_perf.cpp
 /// > Annotated version: @ref matmul_perf_cpp
 
-/// @page matmul_perf_cpp Matrix Multiplication Performance Example
-/// This C++ example runs a simple matrix multiplication (matmul) performance
+/// @page matmul_perf_cpp_brief
+/// @brief This C++ example runs a simple matrix multiplication (matmul) performance
 /// test using oneDNN.
+
+/// @page matmul_perf_cpp Matrix Multiplication Performance Example
+/// \copybrief matmul_perf_cpp_brief
 ///
 /// The workflow includes following steps:
 ///   - Set up and execute a matmul operation with the specified engine kind

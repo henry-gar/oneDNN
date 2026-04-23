@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -46,6 +46,8 @@ static status_t init_reusable_confs_basic(
     cmpl_conf = utils::zero<decltype(cmpl_conf)>();
 
     cmpl_conf.data_type = data_mdw.data_type();
+    cmpl_conf.require_stateless_addressing = pd->has_large_buffers();
+    cmpl_conf.use_int32_offset = data_mdw.nelems(true) <= INT32_MAX;
 
     cmpl_conf.use_scale = pd->use_scale();
     cmpl_conf.use_shift = pd->use_shift();
@@ -210,6 +212,9 @@ static status_t init_conf_common(nhwc_params_t &bn_conf,
 static void init_kernel_ctx_common(compute::kernel_ctx_t &kernel_ctx,
         const nhwc_reusable_compile_params_t &cmpl_conf) {
     kernel_ctx.set_data_type(cmpl_conf.data_type);
+    kernel_ctx.require_stateless_addressing(
+            cmpl_conf.require_stateless_addressing);
+    kernel_ctx.use_int32_offset(cmpl_conf.use_int32_offset);
 
     kernel_ctx.define_int("WITH_RELU", cmpl_conf.with_relu);
     if (cmpl_conf.with_leaky_relu) kernel_ctx.define_int("WITH_LEAKY_RELU", 1);
@@ -263,9 +268,10 @@ static dim_t get_calc_slm_size(const nhwc_reusable_compile_params_t &cmpl_conf,
         const nhwc_reusable_runtime_params_t &rt_conf) {
     return rt_conf.use_fused_atomics_reduction
             ? (rt_conf.use_buffers_calc ? sizeof(float) * rt_conf.ic_block
-                                    * rt_conf.calc_adj_lws[1]
+                                      * rt_conf.calc_adj_lws[1]
                                         : sizeof(float) * cmpl_conf.vect_size
-                                    * rt_conf.sg_size * rt_conf.calc_adj_lws[1])
+                                      * rt_conf.sg_size
+                                      * rt_conf.calc_adj_lws[1])
             : 0;
 }
 
@@ -341,7 +347,7 @@ status_t nhwc_reusable_fwd_t::execute_forward(const exec_ctx_t &ctx) const {
         calc_mean_arg_list.append(*tmp_reduce);
         calc_mean_arg_list.append(mean);
         calc_mean_arg_list.append(rt_conf.ic_size);
-        calc_mean_arg_list.append(rt_conf.ic_block);
+        calc_mean_arg_list.append(into<int>(rt_conf.ic_block));
         calc_mean_arg_list.append(rt_conf.sp_size);
         calc_mean_arg_list.append(rt_conf.stat_sp_block);
         calc_mean_arg_list.append(rt_conf.reduce_stat_nblocks);
@@ -394,7 +400,7 @@ status_t nhwc_reusable_fwd_t::execute_forward(const exec_ctx_t &ctx) const {
         calc_var_arg_list.append(*tmp_reduce);
         calc_var_arg_list.append(variance);
         calc_var_arg_list.append(rt_conf.ic_size);
-        calc_var_arg_list.append(rt_conf.ic_block);
+        calc_var_arg_list.append(into<int>(rt_conf.ic_block));
         calc_var_arg_list.append(rt_conf.sp_size);
         calc_var_arg_list.append(rt_conf.stat_sp_block);
         calc_var_arg_list.append(rt_conf.reduce_stat_nblocks);
@@ -450,7 +456,7 @@ status_t nhwc_reusable_fwd_t::execute_forward(const exec_ctx_t &ctx) const {
         arg_list.append(mean);
         arg_list.append(variance);
         arg_list.append(rt_conf.ic_size);
-        arg_list.append(rt_conf.ic_block);
+        arg_list.append(into<int>(rt_conf.ic_block));
         arg_list.append(rt_conf.sp_size);
         arg_list.append(rt_conf.stat_sp_block);
         arg_list.append(rt_conf.reduce_stat_nblocks);
@@ -512,7 +518,7 @@ status_t nhwc_reusable_fwd_t::execute_forward(const exec_ctx_t &ctx) const {
     arg_list.append(src_add);
     arg_list.append(rt_conf.relu_negative_slope);
     arg_list.append(rt_conf.ic_size);
-    arg_list.append(rt_conf.ic_block);
+    arg_list.append(into<int>(rt_conf.ic_block));
     arg_list.append(rt_conf.sp_size);
     arg_list.append(rt_conf.update_sp_block);
 
@@ -592,7 +598,7 @@ status_t nhwc_reusable_bwd_t::execute_backward(const exec_ctx_t &ctx) const {
     calc_stats_arg_list.append(diff_scale);
     calc_stats_arg_list.append(diff_shift);
     calc_stats_arg_list.append(rt_conf.ic_size);
-    calc_stats_arg_list.append(rt_conf.ic_block);
+    calc_stats_arg_list.append(into<int>(rt_conf.ic_block));
     calc_stats_arg_list.append(rt_conf.sp_size);
     calc_stats_arg_list.append(rt_conf.stat_sp_block);
     calc_stats_arg_list.append(rt_conf.reduce_stat_nblocks);
@@ -654,7 +660,7 @@ status_t nhwc_reusable_bwd_t::execute_backward(const exec_ctx_t &ctx) const {
     arg_list.append(rt_conf.eps);
     arg_list.append(diff_src_add);
     arg_list.append(rt_conf.ic_size);
-    arg_list.append(rt_conf.ic_block);
+    arg_list.append(into<int>(rt_conf.ic_block));
     arg_list.append(rt_conf.sp_size);
     arg_list.append(rt_conf.update_sp_block);
 

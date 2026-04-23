@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -22,11 +22,10 @@
 #include <vector>
 
 #include "common/utils.hpp"
+#include "gemmstone/../../dsl/ir/pass/simplify.hpp"
 #include "gpu/intel/jit/ir/block_2d_utils.hpp"
-#include "gpu/intel/jit/ir/hw.hpp"
-#include "gpu/intel/jit/ir/message.hpp"
-#include "gpu/intel/jit/ir/reorder.hpp"
-#include "gpu/intel/jit/pass/simplify.hpp"
+#include "gpu/intel/jit/ir/legacy.hpp"
+#include "gpu/intel/jit/ir/send_builder.hpp"
 #include "gpu/intel/logging.hpp"
 
 namespace dnnl {
@@ -47,7 +46,8 @@ public:
     virtual void set_split(int factor) = 0;
     virtual int split_factor() const = 0;
     virtual int estimate_regs(
-            bool with_buffer, bool with_headers, bool reuse_headers) const = 0;
+            bool with_buffer, bool with_headers, bool reuse_headers) const
+            = 0;
     virtual std::string str(const std::string &tag) const = 0;
 
     int estimate_regs(bool with_buffer, bool with_headers) const {
@@ -104,7 +104,8 @@ protected:
 private:
     virtual const layout_t &message_layout() const { return reg_layout(); }
     virtual stmt_t do_create_stmt(const expr_t &mem_buf, const expr_t &reg_buf,
-            int subtile_idx, const expr_t &pattern) const = 0;
+            int subtile_idx, const expr_t &pattern) const
+            = 0;
 };
 
 send_op_t to_2d(send_op_t op) {
@@ -176,7 +177,7 @@ public:
         return oss.str();
     }
 
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
 private:
     std::vector<int64_t> vec_;
@@ -237,7 +238,7 @@ public:
         return oss.str();
     }
 
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
 private:
     std::vector<vec_off_t> vec_;
@@ -361,7 +362,7 @@ public:
         return oss.str();
     }
 
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
 private:
     static int to_lg2(int64_t v) {
@@ -465,7 +466,7 @@ public:
         return oss.str();
     }
 
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
 private:
     static modulus_t to_base(const tdim_t &tdim,
@@ -579,24 +580,19 @@ public:
     std::string str(const std::string &indent = {}) const {
         ostringstream_t oss;
         oss << indent << "mask#" << tidx() << std::endl;
-        oss << indent << "  "
-            << "base = " << base_ << std::endl;
-        oss << indent << "  "
-            << "block = " << tdim_.block() << std::endl;
+        oss << indent << "  " << "base = " << base_ << std::endl;
+        oss << indent << "  " << "block = " << tdim_.block() << std::endl;
         switch (kind_) {
             case mask_kind_t::ab:
                 oss << indent << "  " << a_ << " <= x < " << b_;
                 break;
-            case mask_kind_t::b:
-                oss << indent << "  "
-                    << "x < " << b_;
-                break;
+            case mask_kind_t::b: oss << indent << "  " << "x < " << b_; break;
             default: gpu_error_not_expected();
         }
         return oss.str();
     }
 
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
 private:
     // Mask in the general form:
@@ -664,22 +660,25 @@ struct send_2d_params_t {
 
     bool is_store() const { return send_op == send_op_t::store; }
 
-    int max_count() const {
-        return block_2d_max_count(is_store(), transpose, w, type.size());
+    bool is_prefetch() const { return send_op == send_op_t::prefetch; }
+
+    int max_count(const dsl::hw_t &hw) const {
+        return block_2d_max_count(hw.ngen_hw(), is_prefetch(), is_store(),
+                transpose, w, type.size());
     }
 
     // Reduce the number of messages by increasing count per
     // message.
-    void try_promote_count() {
+    void try_promote_count(const dsl::hw_t &hw) {
         if (vnni_factor != 1) return;
-        while (c * 2 <= max_count()) {
+        while (c * 2 <= max_count(hw)) {
             if (w_rcount % 2 != 0) break;
             c *= 2;
             w_rcount /= 2;
         }
     }
 
-    bool apply_vnni_factor(int factor) {
+    bool apply_vnni_factor(int factor, const dsl::hw_t &hw) {
         if (factor == 0) return true;
         if (use_xy)
             return fail_2d(
@@ -694,9 +693,9 @@ struct send_2d_params_t {
         if (H % factor != 0)
             return fail_2d("Can't apply VNNI factor: invalid surface height.");
         if (c != 1) return fail_2d("Can't apply VNNI factor: invalid count.");
-        if (factor > max_count())
+        if (factor > max_count(hw))
             return fail_2d(
-                    "Can't apply VNNI factor: factor exceeds max_count().");
+                    "Can't apply VNNI factor: factor exceeds max_count(hw).");
         W *= factor;
         H /= factor;
         P *= factor;
@@ -706,7 +705,7 @@ struct send_2d_params_t {
         return true;
     }
 
-    bool is_supported(const hw_t &hw) const {
+    bool is_supported(const dsl::hw_t &hw) const {
         if (!block_2d_width_ok(W, type.size()))
             return fail_2d("Width is not supported.");
         if (!block_2d_height_ok(H)) return fail_2d("Height is not supported.");
@@ -784,7 +783,7 @@ struct send_2d_params_t {
     }
 
     layout_t reg_layout(
-            int grf_size, size_t ndims, const type_t &mem_type) const {
+            int grf_size, size_t ndims, const dsl::type_t &mem_type) const {
         layout_t l(type, std::vector<dim_t>(ndims, 1));
         dim_t cur_stride = 1;
         enum class pad_kind_t {
@@ -851,11 +850,11 @@ struct send_2d_params_t {
         return oss.str();
     }
 
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
     bool is_valid = false;
     send_op_t send_op = send_op_t::undef;
-    type_t type;
+    dsl::type_t type;
     bool use_xy = true;
     bool transpose = false;
     bool vnni = false;
@@ -884,7 +883,7 @@ struct send_block_t {
         return oss.str();
     }
 
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
     int64_t addr_inc = 0;
     int64_t x_inc = 0;
@@ -909,13 +908,13 @@ int rounded_slots(int slots, int max_slots) {
     return ret;
 }
 
-int get_max_slots(const hw_t &hw, const send_params_t &send_params) {
+int get_max_slots(const dsl::hw_t &hw, const send_params_t &send_params) {
     if (hw >= ngen::HW::XeHPC) return 32;
     if (send_params.send_op == send_op_t::atomic_fadd) return 8;
     return 16;
 }
 
-int get_max_block_size(const hw_t &hw, const send_params_t &params) {
+int get_max_block_size(const dsl::hw_t &hw, const send_params_t &params) {
     if (hw >= ngen::HW::XeHPC) return 512;
     return params.send_address == send_address_t::slm && hw <= ngen::HW::XeLP
             ? 128
@@ -925,7 +924,7 @@ int get_max_block_size(const hw_t &hw, const send_params_t &params) {
 class split_bounds_t {
 public:
     split_bounds_t(const layout_t &layout, int factor) {
-        gpu_assert(is_zero(layout.offset())) << layout;
+        gpu_assert(layout.offset().is(0)) << layout;
         auto tile_coord = split_exact(layout, factor);
         if (tile_coord.is_invalid()) return;
 
@@ -1061,7 +1060,7 @@ struct send_group_t {
                 cur_size = std::min(cur_size, type_size - i);
                 cur_size = utils::rnd_down_pow2(cur_size);
                 gpu_assert(cur_size >= 16);
-                auto type = type_t::oword(cur_size / 16);
+                auto type = dsl::type_t::oword(cur_size / 16);
                 type = fixup_type(type, send_params);
                 auto f = send_t::make(hw, send_params.send_op,
                         send_params.send_address, type, 1,
@@ -1071,7 +1070,7 @@ struct send_group_t {
             }
         } else if (is_scattered()) {
             int cur_slots = max_slots;
-            auto type = type_t::u(type_size * 8);
+            auto type = dsl::type_t::u(type_size * 8);
             for (int i = 0; i < slots; i += cur_slots) {
                 cur_slots = std::min(cur_slots, slots - i);
                 uint32_t slot_mask = send_t::default_slot_mask;
@@ -1129,25 +1128,26 @@ struct send_group_t {
         return oss.str();
     }
 
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
-    type_t fixup_type(
-            const type_t &type, const send_params_t &send_params) const {
+    dsl::type_t fixup_type(
+            const dsl::type_t &type, const send_params_t &send_params) const {
         if (hw >= ngen::HW::XeHPC) return type;
 
         bool is_slm = (send_params.send_address == send_address_t::slm);
         bool is_atomic = (send_params.send_op == send_op_t::atomic_fadd);
-        if (!is_slm && type == type_t::oword(16)) return type_t::hword(8);
-        if (is_atomic && type.size() == 4) return type_t::dword();
-        if (type.size() <= 4) return type_t::byte(type.size());
-        if (type.size() == 8) return type_t::qword();
+        if (!is_slm && type == dsl::type_t::oword(16))
+            return dsl::type_t::hword(8);
+        if (is_atomic && type.size() == 4) return dsl::type_t::dword();
+        if (type.size() <= 4) return dsl::type_t::byte(type.size());
+        if (type.size() == 8) return dsl::type_t::qword();
 
         return type;
     }
 
     send_group_t split(
             const split_bounds_t &bounds, int subtile_idx, bool is_g1b1) const {
-        if (!is_block()) return send_group_t();
+        if (!is_block() || bounds.is_empty()) return send_group_t();
 
         int factor = bounds.factor();
         if (is_g1b1) {
@@ -1176,7 +1176,7 @@ struct send_group_t {
         return ret;
     }
 
-    hw_t hw;
+    dsl::hw_t hw;
     int max_slots = 1;
     int type_size = 0;
     int slots = 0;
@@ -1281,7 +1281,7 @@ struct layout_2d_wrapper_t {
 
 class view_info_t {
 public:
-    view_info_t(const hw_t &hw, const view_t &view,
+    view_info_t(const dsl::hw_t &hw, const view_t &view,
             const send_params_t &send_params)
         : hw_(hw), view_(view), send_params_(send_params) {
         vlayout_ = view.create_pseudo_vlayout(/*init_offset=*/true);
@@ -1293,7 +1293,7 @@ public:
         init_base();
     }
 
-    const hw_t &hw() const { return hw_; }
+    const dsl::hw_t &hw() const { return hw_; }
     const view_t &view() const { return view_; }
     const send_params_t &send_params() const { return send_params_; }
     const layout_t &vlayout() const { return vlayout_; }
@@ -1364,7 +1364,6 @@ public:
 
 private:
     dim_t get_block_alignment_bytes(size_t inner_idx) const {
-        if (inner_idx < 0) return 1;
         // Get base address.
         const auto &tlayout = view().tlayout();
         const auto &type = vlayout().type();
@@ -1414,8 +1413,8 @@ private:
         mod_info_ = mod_info_t(view_, tdims_);
         std::vector<modulus_t> vmods(view_.nvdims());
         for (dim_idx_t i = 0; i < view_.nvdims(); i++)
-            vmods[i] = modulus_t(
-                    is_zero(view_.vstart()[i]) ? 0 : view_.vdims()[i]);
+            vmods[i]
+                    = modulus_t(view_.vstart()[i].is(0) ? 0 : view_.vdims()[i]);
         mod_info_.set_vmods(vmods);
     }
 
@@ -1455,7 +1454,7 @@ private:
             return;
         }
         vlayout_ = split_layout_inner(vlayout_, inner_idx_);
-        const type_t &type = vlayout_.type();
+        const dsl::type_t &type = vlayout_.type();
         int inner_elems = 1;
         int total_elems = into<int>(vlayout_.elems());
         auto &blocks = vlayout_.blocks();
@@ -1523,7 +1522,7 @@ private:
         }
         gpu_assert(send_kind_ == send_kind_t::scattered);
 
-        const type_t &type = layout.type();
+        const dsl::type_t &type = layout.type();
         int inner_elems = 1;
         int total_elems = into<int>(vlayout_.elems());
 
@@ -1644,7 +1643,7 @@ private:
         return e;
     }
 
-    hw_t hw_;
+    dsl::hw_t hw_;
     view_t view_;
     send_params_t send_params_;
     std::vector<tdim_info_t> tdims_;
@@ -1760,14 +1759,15 @@ public:
         params_.h_tidx = h_tidx;
         params_.h_vstride = into<int>(h_vstride);
 
-        if (!params_.apply_vnni_factor(hint.vnni_permute_factor)) return false;
+        if (!params_.apply_vnni_factor(hint.vnni_permute_factor, info_.hw()))
+            return false;
         if (!params_.is_supported(info_.hw())) return false;
         if (!base_alignment_ok(vlayout, mod_info, h_tdim, h_vstride))
             return false;
         if (!x_alignment_ok(w_tdim, mod_info)) return false;
         if (!masks_ok()) return false;
 
-        params_.try_promote_count();
+        params_.try_promote_count(info_.hw());
         params_.is_valid = true;
         return true;
     }
@@ -2051,11 +2051,12 @@ public:
             << ")" << std::endl;
         if (split_factor_ != 1)
             oss << " split_factor = " << split_factor_ << std::endl;
+        const std::string indent = "  ";
         for (auto &md : mask_descs_)
-            oss << md.str("  ") << std::endl;
+            oss << md.str(indent) << std::endl;
         int ndescs = (int)send_groups_.size();
         for (int i = 0; i < ndescs; i++) {
-            oss << send_groups_[i].str("  ");
+            oss << send_groups_[i].str(indent);
             if (i != ndescs - 1) oss << std::endl;
         }
         return oss.str();
@@ -2142,7 +2143,7 @@ public:
         return expr_t();
     }
 
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
 private:
     const layout_t &message_layout() const override { return message_layout_; }
@@ -2156,7 +2157,7 @@ private:
             auto g = (split_factor_ == 1)
                     ? _g
                     : _g.split(split_bounds_t(message_layout_, split_factor_),
-                            subtile_idx, is_g1b1);
+                              subtile_idx, is_g1b1);
             gpu_assert(!g.is_empty());
             bool try_legacy = send_params().try_legacy
                     && (g.hw < ngen::HW::XeHPC) && g.is_block();
@@ -2327,12 +2328,14 @@ private:
 
 class ir_send_plan_t final : public send_plan_impl_t {
 public:
-    ir_send_plan_t(const kernel::options_t &options, const view_t &view,
+    ir_send_plan_t(const dsl::kernel::options_t &options, const view_t &view,
             send_params_t &send_params)
         : send_params_(send_params)
         , ir_ctx_(options, cset_)
-        , dummy_mem_buf_(var_t::make(type_t::byte(type::attr_t::ptr), "mem"))
-        , dummy_reg_buf_(var_t::make(type_t::byte(type::attr_t::ptr), "reg"))
+        , dummy_mem_buf_(
+                  var_t::make(dsl::type_t::byte(dsl::type::attr_t::ptr), "mem"))
+        , dummy_reg_buf_(
+                  var_t::make(dsl::type_t::byte(dsl::type::attr_t::ptr), "reg"))
         , access_(make_access_builder(
                   ir_ctx_, view, dummy_mem_buf_, dummy_reg_buf_, send_params))
         , reg_layout_(access_.reg_layout()) {
@@ -2729,7 +2732,7 @@ bool can_use_send_plan(const view_t &view) {
     return true;
 }
 
-send_plan_t create_ir_send_plan(const kernel::options_t &options,
+send_plan_t create_ir_send_plan(const dsl::kernel::options_t &options,
         const view_t &view, const send_params_t &_send_params) {
     auto send_params = _send_params;
     auto send_plan
@@ -2737,7 +2740,7 @@ send_plan_t create_ir_send_plan(const kernel::options_t &options,
     return send_plan_t(std::move(send_plan));
 }
 
-send_plan_t create_send_plan(const kernel::options_t &options,
+send_plan_t create_send_plan(const dsl::kernel::options_t &options,
         const view_t &view, const send_params_t &send_params, bool fill_buf) {
     if (!send_params.use_send_plan)
         return create_ir_send_plan(options, view, send_params);
@@ -2769,7 +2772,7 @@ send_plan_t create_send_plan(const kernel::options_t &options,
         auto &last = reg_layout.blocks().back();
         stride = (dim_t)last.stride * last.size;
     }
-    const type_t &type = reg_layout.type();
+    const dsl::type_t &type = reg_layout.type();
     stride = utils::rnd_up(
             stride, base_group.pad_bytes * type.packing() / type.size());
     for (size_t i = outer_idx; i < blocks.size(); i++) {

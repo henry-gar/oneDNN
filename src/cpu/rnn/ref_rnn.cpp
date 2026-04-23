@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2018-2025 Intel Corporation
+* Copyright 2018 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -186,9 +186,9 @@ status_t dnnl::impl::cpu::ref_rnn_common_t<aprop, src_type, weights_type,
     set_workspace_sizes<class_name>(rnn_, *this->desc());
 
     // INIT MATMULS
-    auto init_matmul_pd = [&](std::shared_ptr<primitive_desc_t> &mpd, dim_t M,
-                                  dim_t N, dim_t K, dim_t LDA, dim_t LDB,
-                                  dim_t LDC, bool sum_po) {
+    auto init_matmul_pd
+            = [&](std::shared_ptr<primitive_desc_t> &mpd, dim_t M, dim_t N,
+                      dim_t K, dim_t LDA, dim_t LDB, dim_t LDC, bool sum_po) {
         memory_desc_t src_desc;
         const dims_t src_dims = {M, K};
         const dims_t src_strides = {LDA, 1};
@@ -605,22 +605,14 @@ void ref_rnn_common_t<aprop, src_type, weights_type,
     // them run simulataneously. So, we can re-use the same scratchpad across
     // all primitives. Iterate through them to find the largest scratchpad
     // required.
-    const auto nested_pds
-            = { matmul_layer_1_pd_,
-                  matmul_layer_2_pd_,
-                  matmul_layer_3_pd_,
-                  matmul_iter_1_pd_,
-                  matmul_iter_2_pd_,
-                  matmul_iter_3_pd_,
-                  matmul_part2_1_pd_,
-                  matmul_part2_2_pd_,
-                  matmul_part2_3_pd_,
-                  matmul_part2_4_pd_,
+    const auto nested_pds = {matmul_layer_1_pd_, matmul_layer_2_pd_,
+            matmul_layer_3_pd_, matmul_iter_1_pd_, matmul_iter_2_pd_,
+            matmul_iter_3_pd_, matmul_part2_1_pd_, matmul_part2_2_pd_,
+            matmul_part2_3_pd_, matmul_part2_4_pd_,
 #if DNNL_X64
-                  bf32_wei_layer_reorder_pd_,
-                  bf32_wei_iter_reorder_pd_
+            bf32_wei_layer_reorder_pd_, bf32_wei_iter_reorder_pd_
 #endif
-              };
+    };
 
     size_t max_nested_scratchpad_size = 0;
     for (const auto &n_pd : nested_pds) {
@@ -664,6 +656,9 @@ status_t dnnl::impl::cpu::ref_rnn_common_t<aprop, src_type, weights_type,
         set_gemm_funcs(pd()->rnn_.use_projection_packed_gemm,
                 gemm_projection_func, weights_projection_assign_func,
                 pd()->rnn_.is_brgemm);
+    } else {
+        gemm_projection_func = nullptr;
+        weights_projection_assign_func = nullptr;
     }
 
     rnn_postgemm_ = new postgemm_t(pd()->rnn_, pd());
@@ -853,8 +848,9 @@ rnn_matmul_sig((ref_rnn_common_t<aprop, src_type, weights_type,
     matmul_args[DNNL_ARG_DST] = {dst_mem.get(), false};
 
     exec_ctx_t matmul_ctx(ctx, std::move(matmul_args));
-    nested_scratchpad_t ns(ctx, key_nested_multiple, matmul_prim);
-    matmul_ctx.set_scratchpad_grantor(ns.grantor());
+    auto *nested_grantor = create_nested_grantor(ctx.get_scratchpad_grantor(),
+            key_nested_multiple, matmul_prim->pd()->scratchpad_registry());
+    matmul_ctx.set_scratchpad_grantor(nested_grantor);
 
     return matmul_prim->execute(matmul_ctx);
 }
@@ -1018,33 +1014,30 @@ rnn_grid_execution_sig((ref_rnn_common_t<aprop, src_type, weights_type,
 #define SAFE_PTR(FN, ...) CONCAT2(FN, _) ? &(FN(__VA_ARGS__)) : nullptr
     const auto compute_merged_layer_part_if_applicable
             = [&](prop_kind_t target_prop, int dir, int lay) {
-                  if (IMPLICATION(rnn.merge_gemm_layer, aprop != target_prop))
-                      return dnnl_success;
+        if (IMPLICATION(rnn.merge_gemm_layer, aprop != target_prop))
+            return dnnl_success;
 
-                  cell_position_t cell_position = middle_cell;
-                  if (lay == 0) cell_position |= first_layer;
-                  cell_position |= merged_layer;
+        cell_position_t cell_position = middle_cell;
+        if (lay == 0) cell_position |= first_layer;
+        cell_position |= merged_layer;
 
-                  const src_layer_t *src_layer
-                          = lay == 0 && rnn.skip_src_layer_copy()
-                          ? src_layer_
-                          : SAFE_PTR(ws_states_layer, lay, dir, 1, 0);
+        const src_layer_t *src_layer = lay == 0 && rnn.skip_src_layer_copy()
+                ? src_layer_
+                : SAFE_PTR(ws_states_layer, lay, dir, 1, 0);
 #if DNNL_X64
-                  CHECK((this->*merged_layer_func)(ctx, rnn, cell_position,
-                          SAFE_PTR(weights_layer, lay, dir, 0), src_layer,
-                          scratch_gates_,
-                          SAFE_PTR(ws_diff_states_layer, lay, dir, 0, 0),
-                          SAFE_PTR(diff_weights_layer, lay, dir, 0),
-                          amx_scratchpad, addr_batch_global));
+        CHECK((this->*merged_layer_func)(ctx, rnn, cell_position,
+                SAFE_PTR(weights_layer, lay, dir, 0), src_layer, scratch_gates_,
+                SAFE_PTR(ws_diff_states_layer, lay, dir, 0, 0),
+                SAFE_PTR(diff_weights_layer, lay, dir, 0), amx_scratchpad,
+                addr_batch_global));
 #else
-                  CHECK((this->*merged_layer_func)(rnn, cell_position,
-                          SAFE_PTR(weights_layer, lay, dir, 0), src_layer,
-                          scratch_gates_,
-                          SAFE_PTR(ws_diff_states_layer, lay, dir, 0, 0),
-                          SAFE_PTR(diff_weights_layer, lay, dir, 0)));
+        CHECK((this->*merged_layer_func)(rnn, cell_position,
+                SAFE_PTR(weights_layer, lay, dir, 0), src_layer, scratch_gates_,
+                SAFE_PTR(ws_diff_states_layer, lay, dir, 0, 0),
+                SAFE_PTR(diff_weights_layer, lay, dir, 0)));
 #endif
-                  return dnnl_success;
-              };
+        return dnnl_success;
+    };
 
     // We run the grid of computation
     for_(int dir = 0; dir < rnn.n_dir; dir++)
@@ -1436,22 +1429,21 @@ void copy_init_iter_fwd_template(const rnn_conf_t &rnn, const rnn_pd_t *pd,
     if (src_iter_) {
         parallel_nd(rnn.n_layer, rnn.n_dir, rnn.mb,
                 [&](dim_t lay, dim_t dir, dim_t b) {
-                    const auto *ss
-                            = &src_iter_[src_iter_d.blk_off(lay, dir, b, 0)];
-                    auto *dd = &ws_states_iter(lay + 1, dir, 0, b, 0);
-                    PRAGMA_OMP_SIMD()
-                    for (int s = 0; s < rnn.sic; s++)
-                        dd[s] = maybe_q(ss[s]);
-                });
+            const auto *ss = &src_iter_[src_iter_d.blk_off(lay, dir, b, 0)];
+            auto *dd = &ws_states_iter(lay + 1, dir, 0, b, 0);
+            PRAGMA_OMP_SIMD()
+            for (int s = 0; s < rnn.sic; s++)
+                dd[s] = maybe_q(ss[s]);
+        });
     } else {
         parallel_nd(rnn.n_layer, rnn.n_dir, rnn.mb,
                 [&](dim_t lay, dim_t dir, dim_t b) {
-                    for (int j = 0; j < rnn.sic; j++)
-                        ws_states_iter(lay + 1, dir, 0, b, j) = zero;
-                    if (pd->cell_kind() == alg_kind::vanilla_lstm)
-                        for (int j = 0; j < rnn.dhc; j++)
-                            zero_ws_iter_c(lay + 1, dir, b, j);
-                });
+            for (int j = 0; j < rnn.sic; j++)
+                ws_states_iter(lay + 1, dir, 0, b, j) = zero;
+            if (pd->cell_kind() == alg_kind::vanilla_lstm)
+                for (int j = 0; j < rnn.dhc; j++)
+                    zero_ws_iter_c(lay + 1, dir, b, j);
+        });
     }
 }
 
@@ -1471,29 +1463,24 @@ void copy_init_iter_bwd_template(const rnn_conf_t &rnn, const rnn_pd_t *pd,
     if (diff_dst_iter_) {
         parallel_nd(rnn.n_layer, rnn.n_dir, rnn.mb,
                 [&](dim_t lay, dim_t dir, dim_t b) {
-                    array_copy(
-                            &(ws_diff_states_iter(lay, dir, rnn.n_iter, b, 0)),
-                            diff_dst_iter_
-                                    + diff_dst_iter_d.blk_off(lay, dir, b),
-                            rnn.dic);
-                    if (pd->cell_kind() == alg_kind::vanilla_lstm)
-                        array_copy(&(ws_diff_states_iter_c(
-                                           lay, dir, rnn.n_iter, b, 0)),
-                                diff_dst_iter_c_
-                                        + diff_dst_iter_c_d.blk_off(
-                                                lay, dir, b),
-                                rnn.dhc);
-                });
+            array_copy(&(ws_diff_states_iter(lay, dir, rnn.n_iter, b, 0)),
+                    diff_dst_iter_ + diff_dst_iter_d.blk_off(lay, dir, b),
+                    rnn.dic);
+            if (pd->cell_kind() == alg_kind::vanilla_lstm)
+                array_copy(&(ws_diff_states_iter_c(lay, dir, rnn.n_iter, b, 0)),
+                        diff_dst_iter_c_
+                                + diff_dst_iter_c_d.blk_off(lay, dir, b),
+                        rnn.dhc);
+        });
     } else {
         parallel_nd(rnn.n_layer, rnn.n_dir, rnn.mb,
                 [&](dim_t lay, dim_t dir, dim_t i) {
-                    for (int j = 0; j < rnn.dic; j++)
-                        ws_diff_states_iter(lay, dir, rnn.n_iter, i, j) = 0.0f;
-                    if (pd->cell_kind() == alg_kind::vanilla_lstm)
-                        for (int j = 0; j < rnn.dhc; j++)
-                            ws_diff_states_iter_c(lay, dir, rnn.n_iter, i, j)
-                                    = 0.0f;
-                });
+            for (int j = 0; j < rnn.dic; j++)
+                ws_diff_states_iter(lay, dir, rnn.n_iter, i, j) = 0.0f;
+            if (pd->cell_kind() == alg_kind::vanilla_lstm)
+                for (int j = 0; j < rnn.dhc; j++)
+                    ws_diff_states_iter_c(lay, dir, rnn.n_iter, i, j) = 0.0f;
+        });
     }
 }
 
@@ -1603,28 +1590,26 @@ void copy_res_layer_fwd_template(const rnn_conf_t &rnn, const rnn_pd_t *pd,
     // in dst_iter, not in workspace
     parallel_nd(rnn.n_iter - (rnn.skip_dst_iter_copy() ? 1 : 0), rnn.mb,
             [&](dim_t it, dim_t b) {
-                int dir = 0;
-                if (rnn.exec_dir != r2l) {
-                    const auto *ss
-                            = &ws_states_layer(rnn.n_layer, dir, it + 1, b, 0);
-                    auto *dd = &dst_layer_[dst_layer_d.blk_off(
-                            it, b, dir * rnn.dlc)];
-                    copy_vec(dd, ss);
-                    dir = 1;
-                }
-                if (rnn.exec_dir != l2r) {
-                    const auto *ss = &ws_states_layer(
-                            rnn.n_layer, dir, rnn.n_iter - it, b, 0);
-                    if (rnn.exec_dir == bi_sum) {
-                        auto *dd = &dst_layer_[dst_layer_d.blk_off(it, b, 0)];
-                        acc_vec(dd, ss);
-                    } else {
-                        auto *dd = &dst_layer_[dst_layer_d.blk_off(
-                                it, b, dir * rnn.dlc)];
-                        copy_vec(dd, ss);
-                    }
-                }
-            });
+        int dir = 0;
+        if (rnn.exec_dir != r2l) {
+            const auto *ss = &ws_states_layer(rnn.n_layer, dir, it + 1, b, 0);
+            auto *dd = &dst_layer_[dst_layer_d.blk_off(it, b, dir * rnn.dlc)];
+            copy_vec(dd, ss);
+            dir = 1;
+        }
+        if (rnn.exec_dir != l2r) {
+            const auto *ss
+                    = &ws_states_layer(rnn.n_layer, dir, rnn.n_iter - it, b, 0);
+            if (rnn.exec_dir == bi_sum) {
+                auto *dd = &dst_layer_[dst_layer_d.blk_off(it, b, 0)];
+                acc_vec(dd, ss);
+            } else {
+                auto *dd = &dst_layer_[dst_layer_d.blk_off(
+                        it, b, dir * rnn.dlc)];
+                copy_vec(dd, ss);
+            }
+        }
+    });
     if (rnn.skip_dst_iter_copy()) {
         parallel_nd(rnn.mb, [&](dim_t b) {
             const int it = rnn.n_iter - 1;
@@ -1746,11 +1731,10 @@ void copy_res_iter_fwd_template(const rnn_conf_t &rnn, const rnn_pd_t *pd,
 
     parallel_nd(n_layer_in_ws, rnn.n_dir, rnn.mb,
             [&](dim_t lay, dim_t dir, dim_t b) {
-                const auto *ss
-                        = &ws_states_iter(lay + 1, dir, rnn.n_iter, b, 0);
-                auto *dd = dst_iter_ + dst_iter_d.blk_off(lay, dir, b, 0);
-                copy_vec(dd, ss);
-            });
+        const auto *ss = &ws_states_iter(lay + 1, dir, rnn.n_iter, b, 0);
+        auto *dd = dst_iter_ + dst_iter_d.blk_off(lay, dir, b, 0);
+        copy_vec(dd, ss);
+    });
 
     if (rnn.skip_dst_layer_copy()) {
         parallel_nd(rnn.n_dir, rnn.mb, [&](dim_t dir, dim_t b) {
@@ -1778,17 +1762,16 @@ void copy_res_iter_bwd_template(const rnn_conf_t &rnn, const rnn_pd_t *pd,
     if (diff_src_iter_) {
         parallel_nd(rnn.n_layer, rnn.n_dir, rnn.mb,
                 [&](dim_t lay, dim_t dir, dim_t b) {
-                    for (int s = 0; s < rnn.sic; s++) {
-                        diff_src_iter_[diff_src_iter_d.blk_off(lay, dir, b, s)]
-                                = ws_diff_states_iter(lay, dir, 0, b, s);
-                    }
-                    if (pd->cell_kind() == alg_kind::vanilla_lstm)
-                        for (int s = 0; s < rnn.dhc; s++) {
-                            diff_src_iter_c_[diff_src_iter_c_d.blk_off(
-                                    lay, dir, b, s)]
-                                    = ws_diff_states_iter_c(lay, dir, 0, b, s);
-                        }
-                });
+            for (int s = 0; s < rnn.sic; s++) {
+                diff_src_iter_[diff_src_iter_d.blk_off(lay, dir, b, s)]
+                        = ws_diff_states_iter(lay, dir, 0, b, s);
+            }
+            if (pd->cell_kind() == alg_kind::vanilla_lstm)
+                for (int s = 0; s < rnn.dhc; s++) {
+                    diff_src_iter_c_[diff_src_iter_c_d.blk_off(lay, dir, b, s)]
+                            = ws_diff_states_iter_c(lay, dir, 0, b, s);
+                }
+        });
     }
 }
 
@@ -1989,6 +1972,32 @@ template <prop_kind_t aprop, data_type_t src_type, data_type_t weights_type,
         data_type_t acc_type>
 status_t ref_rnn_common_t<aprop, src_type, weights_type, acc_type>::execute(
         const exec_ctx_t &ctx) const {
+
+    // Note: this is unconventional early exit in execute() for the library.
+    // This RNN implementation is particularly hard for enabling asynchronous
+    // threadpool runtime due to:
+    // * Excessive unverified calls to Autogen GeMM which is disabled for
+    //   async runtime.
+    // * Using stack objects to submit parallel tasks from itself which doesn't
+    //   make tasks to capture the internals of this object leading to
+    //   stack-use-after-free errors.
+    //   (e.g. src/cpu/x64/rnn/brgemm_cell_common_fwd.cpp::
+    //         brgemm_dst_layer_iter_t::execute() (L110-120).
+    //
+    // The alternative approach is to introduce an API to register a threadpool
+    // object before any primitive creation but this is considered as a high
+    // obligation put on users to workaorund the implementation complexity.
+#if DNNL_CPU_RUNTIME == DNNL_RUNTIME_THREADPOOL
+    dnnl::threadpool_interop::threadpool_iface *tp;
+    auto status = ctx.stream()->get_threadpool(&tp);
+    bool ok = status == status::success && tp
+            && !(tp->get_flags()
+                    & dnnl::threadpool_interop::threadpool_iface::ASYNCHRONOUS);
+    VCONDCHECK(primitive, create, dispatch, rnn, ok, status::unimplemented,
+            "%s," VERBOSE_UNSUPPORTED_THREADPOOL_RUNTIME,
+            pd()->info(ctx.stream()->engine()));
+#endif
+
     const rnn_conf_t &rnn = this->pd()->rnn_;
     auto src_layer = CTX_IN_MEM(const src_layer_t *, DNNL_ARG_SRC_LAYER);
     auto augru_attention
@@ -2027,7 +2036,7 @@ status_t ref_rnn_common_t<aprop, src_type, weights_type, acc_type>::execute(
             iter_weights_n_comp + rnn.weights_iter_comp_offset);
     auto w_projection_comp = reinterpret_cast<const float *>(
             projection_weights_n_comp + rnn.weights_projection_comp_offset);
-    auto scratchpad = ctx.get_scratchpad_grantor();
+    const auto &scratchpad = ctx.get_scratchpad_grantor();
 
     auto ptr_wei_layer
             = scratchpad.template get<weights_t *>(key_rnn_ptrs_wei_layer);
@@ -2062,7 +2071,7 @@ status_t ref_rnn_common_t<aprop, src_type, weights_type, acc_type>::execute(
     if (rnn.use_workspace)
         ws_ptr = rnn.is_fwd ? CTX_OUT_MEM(char *, DNNL_ARG_WORKSPACE)
                             : const_cast<char *>(CTX_IN_MEM(
-                                    const char *, DNNL_ARG_WORKSPACE));
+                                      const char *, DNNL_ARG_WORKSPACE));
 
     char *base_ptr = rnn.use_workspace ? ws_ptr : scratch_ptr;
     // ws_gates is only used to pass data from FWD to BWD.
@@ -2156,9 +2165,10 @@ status_t ref_rnn_common_t<aprop, src_type, weights_type, acc_type>::execute(
             reorder_args[DNNL_ARG_SRC] = ctx.args().at(DNNL_ARG_WEIGHTS_LAYER);
             reorder_args[DNNL_ARG_DST] = {reorder_dst.get(), false};
             exec_ctx_t reorder_ctx(ctx, std::move(reorder_args));
-            nested_scratchpad_t ns(
-                    ctx, key_nested_multiple, bf32_wei_layer_reorder_);
-            reorder_ctx.set_scratchpad_grantor(ns.grantor());
+            auto *nested_grantor = create_nested_grantor(
+                    ctx.get_scratchpad_grantor(), key_nested_multiple,
+                    bf32_wei_layer_reorder_->pd()->scratchpad_registry());
+            reorder_ctx.set_scratchpad_grantor(nested_grantor);
             CHECK(bf32_wei_layer_reorder_->execute(reorder_ctx));
             w_layer = scratchpad.template get<weights_t>(
                     key_rnn_bf32_wei_layer_trans);
@@ -2174,9 +2184,10 @@ status_t ref_rnn_common_t<aprop, src_type, weights_type, acc_type>::execute(
             reorder_args[DNNL_ARG_SRC] = ctx.args().at(DNNL_ARG_WEIGHTS_ITER);
             reorder_args[DNNL_ARG_DST] = {reorder_dst.get(), false};
             exec_ctx_t reorder_ctx(ctx, std::move(reorder_args));
-            nested_scratchpad_t ns(
-                    ctx, key_nested_multiple, bf32_wei_iter_reorder_);
-            reorder_ctx.set_scratchpad_grantor(ns.grantor());
+            auto *nested_grantor = create_nested_grantor(
+                    ctx.get_scratchpad_grantor(), key_nested_multiple,
+                    bf32_wei_iter_reorder_->pd()->scratchpad_registry());
+            reorder_ctx.set_scratchpad_grantor(nested_grantor);
             CHECK(bf32_wei_iter_reorder_->execute(reorder_ctx));
             w_iter = scratchpad.template get<weights_t>(
                     key_rnn_bf32_wei_iter_trans);
@@ -2275,7 +2286,7 @@ status_t ref_rnn_common_t<aprop, src_type, weights_type, acc_type>::execute(
     }
 
     return status::success;
-};
+}
 /* Fix for MSVS warning C4661 */
 template <>
 rnn_cell_execution_sig(ref_rnn_fwd_f32_t::cell_execution_ref);

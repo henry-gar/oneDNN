@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -30,6 +30,11 @@
 
 #include "graph/backend/dnnl/common.hpp"
 #include "graph/backend/dnnl/dnnl_backend.hpp"
+#include "graph/backend/dnnl/scratchpad.hpp"
+
+#include "common/primitive_desc_iface.hpp"
+#include "common/primitive_iface.hpp"
+#include "common/stream.hpp"
 
 #if DNNL_CPU_RUNTIME != DNNL_RUNTIME_SYCL
 const size_t DNNL_CPU_MEMALIGNMENT = 64;
@@ -46,6 +51,7 @@ const size_t DNNL_OCL_MEMALIGNMENT = 0;
 #endif
 
 #if DNNL_CPU_RUNTIME == DNNL_RUNTIME_THREADPOOL
+#include "cpu/cpu_stream.hpp"
 #include "oneapi/dnnl/dnnl_threadpool.hpp"
 #endif
 
@@ -466,9 +472,9 @@ dims get_dense_strides(const dims &shape) {
     for (auto it = shape.begin(); it < shape.end(); ++it) {
         const auto val = std::accumulate(
                 std::next(it), shape.end(), 1, [](dim_t x, dim_t y) {
-                    // replace 0 in shape to 1 when computing the strides
-                    return std::max<dim_t>(x, 1) * std::max<dim_t>(y, 1);
-                });
+            // replace 0 in shape to 1 when computing the strides
+            return std::max<dim_t>(x, 1) * std::max<dim_t>(y, 1);
+        });
         const auto dist = std::distance(shape.begin(), it);
         strides[static_cast<size_t>(dist)] = val;
     }
@@ -603,56 +609,8 @@ std::shared_ptr<value_t> insert_empty_workspace(std::shared_ptr<op_t> &op) {
     return workspace_val;
 }
 
-// This function refers to the md2fmt_tag_str in src/common/verbose.cpp, which
-// is used to recover a format tag string from a memory descriptor
-std::string get_format_tag_str(const dnnl::memory::desc &md) {
-    assertm(md.get_format_kind() == format_kind::blocked,
-            "can get format tag only for blocked format kind");
-
-    int ndims = md.get_ndims();
-    const auto &inner_blks = md.get_inner_blks();
-    const auto &inner_idxs = md.get_inner_idxs();
-    const int inner_nblks = md.get_inner_nblks();
-
-    dnnl_dims_t blocks = {0};
-    std::fill(blocks, blocks + ndims, 1);
-    for (int iblk = 0; iblk < inner_nblks; ++iblk)
-        blocks[inner_idxs[iblk]] *= inner_blks[iblk];
-
-    char dim_chars[DNNL_MAX_NDIMS + 1] = {'\0'};
-
-    dims_t ou_blocks = {0};
-    const auto &padded_dims = md.get_padded_dims();
-    std::copy(padded_dims.begin(), padded_dims.end(), ou_blocks);
-
-    bool plain = true;
-    for (int d = 0; d < ndims; ++d) {
-        dim_chars[d] = static_cast<char>((blocks[d] == 1 ? 'a' : 'A') + d);
-        if (blocks[d] != 1) plain = false;
-        ou_blocks[d] /= blocks[d];
-    }
-
-    dnnl_dims_t strides = {0};
-    const auto &strs = md.get_strides();
-    std::copy(strs.begin(), strs.end(), strides);
-
-    impl::utils::simultaneous_sort(strides, ou_blocks, dim_chars, ndims,
-            [](dim_t a, dim_t b) { return b - a; });
-
-    std::string blk_tag = std::string(dim_chars);
-
-    if (!plain) {
-        for (int iblk = 0; iblk < inner_nblks; ++iblk) {
-            blk_tag += std::to_string(inner_blks[iblk])
-                    + static_cast<char>('a' + inner_idxs[iblk]);
-        }
-    }
-
-    return blk_tag;
-}
-
 dnnl::memory::format_tag get_format_tag(const dnnl::memory::desc &md) {
-    std::string blk_tag = get_format_tag_str(md);
+    std::string blk_tag = md2fmt_tag_str(md.get());
 
     dnnl::memory::format_tag format_tag = dnnl::memory::format_tag::undef;
     for (size_t tag = 0; tag < dnnl_format_tag_last; ++tag) {
@@ -693,6 +651,49 @@ dnnl::accumulation_mode str2accumulation_mode(
         assert(!"unknown accumulation mode");
         return dnnl::accumulation_mode::strict;
     }
+}
+
+void prolong_temporary_scratchpad_lifetime(const stream_t *g_stream,
+        const std::shared_ptr<temporary_scratchpad_t> &scratchpad) {
+#if DNNL_CPU_RUNTIME == DNNL_RUNTIME_THREADPOOL
+    auto *tp_stream
+            = dnnl::impl::utils::downcast<dnnl::impl::cpu::cpu_stream_t *>(
+                    const_cast<stream_t *>(g_stream));
+    tp_stream->before_exec_hook();
+
+    parallel(1, [=](int, int) { UNUSED(scratchpad); });
+
+    tp_stream->after_exec_hook();
+#endif
+}
+
+status_t dnnl_primitive_execute_without_tp_hook(const primitive &prim,
+        const stream &astream,
+        const std::unordered_map<int, memory> &exec_args) {
+    std::vector<dnnl_exec_arg_t> vec_args;
+    vec_args.reserve(exec_args.size());
+    for (const auto &a : exec_args)
+        vec_args.push_back({a.first, a.second.get(true)});
+
+    const primitive_iface_t *primitive_iface = prim.get();
+    stream_t *stream = astream.get();
+    int nargs = static_cast<int>(vec_args.size());
+    const dnnl_exec_arg_t *c_args = vec_args.data();
+
+    bool ok = true && !dnnl::impl::utils::any_null(primitive_iface, stream)
+            && primitive_iface->engine() == stream->engine()
+            && IMPLICATION(nargs > 0, c_args != nullptr);
+    if (!ok) return status::invalid_arguments;
+
+    exec_args_t args;
+    status_t status = cvt_primitive_args(
+            primitive_iface->pd()->impl().get(), nargs, c_args, args);
+    if (status != status::success) return status;
+
+    exec_ctx_t ctx(stream, std::move(args));
+    status = dnnl::impl::primitive_execute(primitive_iface, ctx);
+
+    return status;
 }
 
 } // namespace dnnl_impl

@@ -1,7 +1,7 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 * Copyright 2020-2024 FUJITSU LIMITED
-* Copyright 2022-2024 Arm Ltd. and affiliates
+* Copyright 2022-2024, 2026 Arm Ltd. and affiliates
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -38,6 +38,8 @@
 // For checking if fp16 isa is supported on the platform
 #include "arm_compute/core/CPP/CPPTypes.h"
 #endif
+#elif DNNL_RV64
+#include "cpu/rv64/cpu_isa_traits.hpp"
 #endif
 
 // For DNNL_X64 build we compute the timestamp using rdtsc. Use std::chrono for
@@ -128,6 +130,8 @@ bool has_data_type_support(data_type_t data_type) {
                     || x64::mayiuse(x64::avx2_vnni_2);
 #elif defined(DNNL_AARCH64_USE_ACL)
             return arm_compute::CPUInfo::get().has_fp16();
+#elif DNNL_RV64
+            return rv64::mayiuse(rv64::zvfh);
 #else
             return false;
 #endif
@@ -262,6 +266,21 @@ unsigned get_per_core_cache_size(int level) {
         return cpu().getDataCacheSize(l) / cpu().getCoresSharingDataCache(l);
     } else
         return 0;
+#elif DNNL_AARCH64
+    const auto num_caches
+            = static_cast<int>(aarch64::cpu().getLastDataCacheLevel());
+
+    if (num_caches == 0) { return guess(level); }
+
+    if (level > 0 && level <= num_caches) {
+        const auto &cache_level
+                = static_cast<Xbyak_aarch64::util::Arm64CacheLevel>(level);
+
+        return aarch64::cpu().getDataCacheSize(cache_level)
+                / aarch64::cpu().getCoresSharingDataCache(cache_level);
+    } else {
+        return 0;
+    }
 #else
     return guess(level);
 #endif
@@ -270,7 +289,7 @@ unsigned get_per_core_cache_size(int level) {
 unsigned get_num_cores() {
 #if DNNL_X64
     return x64::cpu().getNumCores(Xbyak::util::CoreLevel);
-#elif defined(DNNL_AARCH64_USE_ACL)
+#elif DNNL_AARCH64
     return aarch64::cpu().getNumCores(Xbyak_aarch64::util::CoreLevel);
 #else
     return 1;

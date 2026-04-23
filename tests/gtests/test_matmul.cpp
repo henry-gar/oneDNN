@@ -1,9 +1,9 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
-* You may obtain src copy of the License at
+* You may obtain a copy of the License at
 *
 *     http://www.apache.org/licenses/LICENSE-2.0
 *
@@ -160,9 +160,9 @@ protected:
         const int ndims = (int)p.base.dst.dims.size();
 
         // zero points
-        auto handle_zero_points = [&](int arg, unsigned flags,
-                                          const matmul_base_t::md_t &md,
-                                          memory &zero_points_m) {
+        auto handle_zero_points
+                = [&](int arg, unsigned flags, const matmul_base_t::md_t &md,
+                          memory &zero_points_m) {
             if (flags == P::NONE) return;
 
             ASSERT_TRUE(flags & P::ZERO_POINTS);

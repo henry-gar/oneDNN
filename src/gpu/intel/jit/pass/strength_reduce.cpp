@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -16,8 +16,8 @@
 
 #include "gpu/intel/jit/pass/strength_reduce.hpp"
 
-#include "gpu/intel/jit/pass/simplify.hpp"
-#include "gpu/intel/jit/utils/trace.hpp"
+#include "gemmstone/../../dsl/ir/pass/simplify.hpp"
+#include "gemmstone/../../dsl/ir/pass/trace.hpp"
 
 namespace dnnl {
 namespace impl {
@@ -56,6 +56,9 @@ public:
 
     object_t _mutate(const stmt_group_t &obj) override {
         gpu_assert(post_inc_stores_.empty());
+        if ((compute_loop_level_ == -1)
+                && (obj.label == stmt_label_t::compute_loop()))
+            compute_loop_level_ = int(loops_.size());
         stmt_t new_obj;
         if (obj.body.is<for_t>()) {
             loops_.emplace_back(obj.body);
@@ -120,7 +123,8 @@ public:
         }
 
         // Can't do anything, return as is.
-        if (init_store_level == -1) return ir_mutator_t::_mutate(obj);
+        if ((init_store_level <= 0) || (init_store_level > compute_loop_level_))
+            return ir_mutator_t::_mutate(obj);
 
         // Move this store up, remove from here.
         loops_[init_store_level].init_stores.push_back(init_store_stmt);
@@ -169,7 +173,7 @@ private:
             return store_t::make(store->buf, store->off, load + inc);
         }
 
-        bool is_empty() const { return is_zero(inc); }
+        bool is_empty() const { return inc.is(0); }
 
         void update(const loop_info_t &loop, const expr_t &loop_inc) {
             inc = simplify(iif_t::make(
@@ -232,6 +236,9 @@ private:
         return std::move(s);
     }
 
+    // The outermost loop level that belongs to the compute loop.
+    int compute_loop_level_ = -1;
+
     // Loops, ordered from outermost to innermost. The first loop is dummy, to
     // represent let statements in the top-level scope.
     std::vector<loop_info_t> loops_;
@@ -244,9 +251,9 @@ private:
 };
 
 stmt_t loop_strength_reduce(const stmt_t &s, ir_context_t &ir_ctx) {
-    trace_start();
+    ir::trace_start();
     auto ret = loop_strength_reducer_t().mutate(s);
-    trace_pass("loop_strength_reduce", ret, ir_ctx);
+    ir::trace_pass("loop_strength_reduce", ret, ir_ctx);
     return ret;
 }
 

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2025 Intel Corporation
+* Copyright 2021 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -94,11 +94,11 @@ cpu_isa_t get_supported_isa(bool is_f32, bool is_int8, bool is_bf16,
     if (one_of(true, is_f32, is_f32_bf16, is_f32_f16)) {
         isa_list = {avx512_core, avx2};
     } else if (is_int8) {
-        isa_list = {avx10_2_512, avx512_core_vnni, avx2_vnni_2, avx2_vnni};
+        isa_list = {avx10_2, avx512_core_vnni, avx2_vnni_2, avx2_vnni};
     } else if (is_bf16) {
         isa_list = {avx512_core_bf16, avx2_vnni_2};
     } else if (is_f16) {
-        isa_list = {avx10_2_512, avx512_core_fp16, avx2_vnni_2};
+        isa_list = {avx10_2, avx512_core_fp16, avx2_vnni_2};
     }
 
     for (auto isa : isa_list) {
@@ -292,9 +292,9 @@ void brdgmm_dw_convolution_fwd_t::pd_t::init_batch_elements() {
 
     auto &jcp = jcp_;
 
-    auto gen_batch_elements = [&jcp](int fpad, int backpad, int tpad, int bpad,
-                                      int lpad, int rpad, int &bs,
-                                      brgemm_batch_element_t *batches) {
+    auto gen_batch_elements
+            = [&jcp](int fpad, int backpad, int tpad, int bpad, int lpad,
+                      int rpad, int &bs, brgemm_batch_element_t *batches) {
         const bool requires_batch_pad
                 = jcp.s8s8_compensation_required || jcp.src_zero_point;
         const size_t src_w_stride = jcp.ngroups * jcp.src_dsz;
@@ -316,9 +316,9 @@ void brdgmm_dw_convolution_fwd_t::pd_t::init_batch_elements() {
                     || kh < tpad || kh >= jcp.kh - adj_bpad;
             if (!requires_batch_pad && padded_bs) continue;
             auto &batch = batches[bs];
-            batch.vvpad.top = nstl::max(0, div_up(lpad - kw, jcp.stride_w));
-            batch.vvpad.bottom = nstl::max(
-                    0, div_up(rpad - jcp.kw + kw + 1, jcp.stride_w));
+            batch.vvpad.top = div_up(nstl::max(0, lpad - kw), jcp.stride_w);
+            batch.vvpad.bottom = div_up(
+                    nstl::max(0, rpad - jcp.kw + kw + 1), jcp.stride_w);
             batch.has_s8s8_comp_batch_pad = padded_bs;
             const dim_t offs_A
                     = kd * src_d_stride + kh * src_h_stride + kw * src_w_stride;
@@ -342,7 +342,7 @@ void brdgmm_dw_convolution_fwd_t::pd_t::init_batch_elements() {
             = (jcp.ow_block - 1) * jcp.stride_w + jcp.kw - (jcp.iw + jcp.l_pad);
     const int rpad_1 = rpad_0 + (nstl::max(0, -rpad_0) / w_shift + 1) * w_shift;
     const int n_uniq_rpads
-            = 1 + nstl::max(0, div_up(jcp.r_pad - (rpad_1 - w_shift), w_shift));
+            = 1 + div_up(nstl::max(0, jcp.r_pad - (rpad_1 - w_shift)), w_shift);
 
     const auto h_blk_info = get_blocks_info(
             jcp.ih, jcp.oh, jcp.kh, jcp.stride_h, jcp.t_pad, jcp.b_pad, 1);
@@ -376,14 +376,14 @@ void brdgmm_dw_convolution_fwd_t::pd_t::init_batch_elements() {
         const int oh = ohb < h_blk_info.n_lpad_blks
                 ? ohb
                 : (h_blk_info.rpad_blk_start_idx
-                        + (ohb - h_blk_info.n_lpad_blks));
+                          + (ohb - h_blk_info.n_lpad_blks));
         const int bpad = oh * h_shift + jcp.kh - (jcp.ih + jcp.t_pad);
 
         const int fpad = jcp.f_pad - odb * d_shift;
         const int od = odb < d_blk_info.n_lpad_blks
                 ? odb
                 : (d_blk_info.rpad_blk_start_idx
-                        + (odb - d_blk_info.n_lpad_blks));
+                          + (odb - d_blk_info.n_lpad_blks));
         const int backpad = od * d_shift + jcp.kd - (jcp.id + jcp.f_pad);
 
         gen_batch_elements(fpad, backpad, tpad, bpad, lpad, rpad, bs_[bi],
@@ -476,9 +476,7 @@ status_t brdgmm_dw_convolution_fwd_t::pd_t::init_brdgmm_conf() {
                         = (work_per_thr / jcp.nb_ch) % jcp.ow;
                 if (ow_tail_block && (jcp.ow % ow_tail_block == 0))
                     jcp.ow_block = ow_tail_block;
-                else {
-                    jcp.ow_block = jcp.ow;
-                }
+                else { jcp.ow_block = jcp.ow; }
             } else {
                 const int max_ow_block = is_superset(jcp.isa, avx512_core)
                         ? 6
@@ -591,7 +589,7 @@ status_t brdgmm_dw_convolution_fwd_t::execute(const exec_ctx_t &ctx) const {
     const int32_t *dst_zero_points = CTX_IN_MEM(
             const int32_t *, DNNL_ARG_ATTR_ZERO_POINTS | DNNL_ARG_DST);
 
-    const memory_tracking::grantor_t scratchpad = ctx.get_scratchpad_grantor();
+    const auto &scratchpad = ctx.get_scratchpad_grantor();
 
     const memory_desc_wrapper weights_d(pd()->weights_md(0));
     const size_t wei_size = weights_d.size();
@@ -602,11 +600,11 @@ status_t brdgmm_dw_convolution_fwd_t::execute(const exec_ctx_t &ctx) const {
             : 0;
     int32_t *s8s8_comp_ptr = jcp.s8s8_compensation_required
             ? reinterpret_cast<int32_t *>(
-                    const_cast<char *>(weights) + extra_data_offset)
+                      const_cast<char *>(weights) + extra_data_offset)
             : nullptr;
     int32_t *zp_compensation = jcp.src_zero_point
-            ? reinterpret_cast<int32_t *>(
-                    const_cast<char *>(weights) + extra_data_offset + s8_offset)
+            ? reinterpret_cast<int32_t *>(const_cast<char *>(weights)
+                      + extra_data_offset + s8_offset)
             : nullptr;
 
     const int chb_step = jcp.nb_ch_blocking;
@@ -647,9 +645,9 @@ status_t brdgmm_dw_convolution_fwd_t::execute(const exec_ctx_t &ctx) const {
             = (jcp.ow_block - 1) * jcp.stride_w + jcp.kw - (jcp.iw + jcp.l_pad);
     const int rpad_1 = rpad_0 + (nstl::max(0, -rpad_0) / w_shift + 1) * w_shift;
     const int n_rpad_blks
-            = 1 + nstl::max(0, div_up(jcp.r_pad - (rpad_1 - w_shift), w_shift));
+            = 1 + div_up(nstl::max(0, jcp.r_pad - (rpad_1 - w_shift)), w_shift);
 
-    parallel(jcp.nthr, [&](const int ithr, const int nthr) {
+    parallel(jcp.nthr, [= COMPAT_THIS_CAPTURE](const int ithr, const int nthr) {
         int start {0}, end {0};
         balance211(work_amount, nthr, ithr, start, end);
         int n {0}, chb {0}, od {0}, oh {0}, owb {0};
@@ -728,9 +726,8 @@ status_t brdgmm_dw_convolution_fwd_t::execute(const exec_ctx_t &ctx) const {
             const int ow_e
                     = nstl::min(ow + cur_n_owb * jcp.ow_block, jcp.ow) - 1;
             const int rpad = ow_e * jcp.stride_w - jcp.l_pad + jcp.kw - jcp.iw;
-            const int rpad_i = rpad <= rpad_1 - w_shift
-                    ? 0
-                    : 1 + div_up(rpad - rpad_1, w_shift);
+            const int rpad_i
+                    = div_up(nstl::max(0, rpad - rpad_1 + w_shift), w_shift);
 
             const int bi //[d_bi][h_bi][w_bi][rpad_i] _
                     = ((d_bi * n_h_blks + h_bi) * n_w_blks + w_bi) * n_rpad_blks

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2024-2025 Intel Corporation
+* Copyright 2024 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -80,6 +80,8 @@ bool Decoder::getOperandRegion(autoswsb::DependencyRegion &region, int opNum) co
 {
     checkCompaction();
     region.hw = hw;
+    if (hw >= HW::Xe3p)
+        return get<InstructionXe3p>().getOperandRegion(region, opNum);
     if (hw >= HW::XeHPC)
         return get<InstructionXeHPC>().getOperandRegion(region, opNum);
     if (hw >= HW::Gen12LP)

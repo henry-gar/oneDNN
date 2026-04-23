@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 * Copyright 2025 Arm Ltd. and affiliates
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
@@ -41,7 +41,8 @@ struct pp_ker_t {
             const zero_point_call_params_t &zp,
             const void *post_ops_binary_rhs_arg_vec, const void *dst_orig,
             const exec_ctx_t &ctx, const memory_desc_t &dst_md,
-            const single_gemm_conv_chunk_desc_t &chunk_desc) const = 0;
+            const single_gemm_conv_chunk_desc_t &chunk_desc) const
+            = 0;
 
     virtual status_t create_kernel() { return status::success; }
 

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2024-2025 Intel Corporation
+* Copyright 2024 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
 *******************************************************************************/
 
 #include "gpu/intel/include/conversion.h"
+#include "gpu/intel/include/philox.h"
 #include "gpu/intel/include/tile_ops.h"
 #include "gpu/intel/include/types_interop.h"
 #include "gpu/intel/sdpa/utils.h"
@@ -30,7 +31,7 @@
 #define QUANTIZE_COMMON 3
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
-#define DIV_UP(x, y) (((x) + (y)-1) / (y))
+#define DIV_UP(x, y) (((x) + (y) - 1) / (y))
 
 #define sg_per_wg (ugemm_kq_sg_per_wg_m * ugemm_kq_sg_per_wg_n)
 #define q_tile_sg_n DIV_UP(ugemm_kq_wg_tile_n, sg_per_wg)
@@ -38,6 +39,56 @@
 /* Instantiate tile types and operations */
 typedef ugemm_kq_c_type s_tile_type;
 typedef ugemm_vs_c_type a_tile_type;
+
+#if WITH_DROPOUT
+
+inline void apply_dropout_s_tile(
+        s_tile_type *tile, int tile_offset_r, int tile_offset_c, int max_r,
+        int max_c, ulong batch_head_base, int k_stride, int use_dropout_offset,
+        long seed, long offset, uint threshold, float inv_q
+#if DROPOUT_OUTPUT_MASK
+        ,
+        global uchar *mask_buf
+#endif
+) {
+#define dropout_predicate(offset_r, offset_c) \
+    ({ \
+        ulong _goff = batch_head_base + (ulong)offset_c * (ulong)k_stride \
+                + (ulong)offset_r; \
+        uint _philox = use_dropout_offset \
+                ? philox_4x32_s64(_goff, (ulong)seed, (ulong)offset) \
+                : philox_4x32((uint)_goff, (uint)seed); \
+        (offset_r < max_r && offset_c < max_c) && (_philox > threshold); \
+    })
+
+    /* Build float scale tile: inv_q if keep, 0.f if drop -- same type as s_tile */
+    s_tile_type scale_tile;
+    tile_predicated_select_t(scale_tile, tile_offset_r, tile_offset_c,
+            dropout_predicate, inv_q, 0.f, SUBGROUP_SIZE,
+            ugemm_kq_c_type_block0, ugemm_kq_c_type_block1,
+            ugemm_kq_c_type_nblock0, ugemm_kq_c_type_nblock1);
+
+    /* Multiply S_tile element-wise by scale tile (both float, no conversion) */
+    s_tile_type tmp = *tile;
+#define dropout_mul(x, y) ((x) * (y))
+    tile_binary(tmp, scale_tile, dropout_mul);
+#undef dropout_mul
+    *tile = tmp;
+
+#if DROPOUT_OUTPUT_MASK
+    /* Derive uchar mask from scale_tile: nonzero -> 1 (keep), zero -> 0 (drop) */
+#define dropout_scale_to_mask(x) ((uchar)((x) != 0.f))
+    tile_store_global_bounds_cvt(scale_tile, mask_buf + batch_head_base,
+            (ulong)k_stride, tile_offset_r, tile_offset_c, max_r, max_c,
+            dropout_scale_to_mask, SUBGROUP_SIZE, ugemm_kq_c_type_block0,
+            ugemm_kq_c_type_block1, ugemm_kq_c_type_nblock0,
+            ugemm_kq_c_type_nblock1);
+#undef dropout_scale_to_mask
+#endif
+
+#undef dropout_predicate
+}
+#endif
 
 // Tile debugging example for s_tile
 //
@@ -370,7 +421,7 @@ inline void tile_store_t_slm_src1(q_tile_type *Q_tile, local QRY_DATA_T *Q_slm,
 
 __attribute__((intel_reqd_sub_group_size(SUBGROUP_SIZE))) kernel void
 micro_sdpa(const global KEY_DATA_T *K, const global QRY_DATA_T *Q,
-        const global VAL_DATA_T *V, global DST_DATA_T *A,
+        const global VAL_DATA_T *V, global float *ws, global DST_DATA_T *A,
 #if WITH_HOST_SCALE
         float scalar_scale, float inv_scalar_scale,
 #else
@@ -391,7 +442,18 @@ micro_sdpa(const global KEY_DATA_T *K, const global QRY_DATA_T *Q,
         MSK_OFFSETS
 #endif
         ,
-        const int remainder_k) {
+        const int remainder_k
+#if WITH_DROPOUT
+        ,
+        global uchar *dropout_mask_buf, int dropout_use_offset,
+#if DROPOUT_HOST_SCALARS
+        long dropout_seed, long dropout_offset, float dropout_p
+#else
+        global long *dropout_seed_buf, global long *dropout_offset_buf,
+        global float *dropout_p_buf
+#endif
+#endif
+) {
 
     uint sg_ij = sub_group_broadcast(get_local_id(1), 0);
     uint b1 = get_group_id(2);
@@ -426,9 +488,12 @@ micro_sdpa(const global KEY_DATA_T *K, const global QRY_DATA_T *Q,
 
     /* Leading dimension for matrices */
     uint ldk = TRANSPOSE_K ? KEY_S3 : KEY_S2;
-    uint ldq = QRY_S2;
     uint ldv = VAL_S2;
-    uint lda = DST_S2;
+    // For single-token cases we allow the query and dst to be transposed.
+    // This workaround is needed because the gemm_desc::get_trans treats both
+    // cases equally. For Q>1 checks prevent transposed query and dst
+    uint ldq = (QRY_S2 == 1) ? QRY_S1 : QRY_S2;
+    uint lda = (DST_S2 == 1) ? DST_S1 : DST_S2;
 
 #if KEY_SCALES || KEY_ZERO_POINTS
     uint ldkq = KEY_D3;
@@ -478,9 +543,9 @@ micro_sdpa(const global KEY_DATA_T *K, const global QRY_DATA_T *Q,
     A += DST_BATCH(b1, b0);
 #if WITH_ATTN_MASK
     msk += MSK_BATCH(b1 % MSK_D0, b0 % MSK_D1);
-#if BLOCK_MSK == false
     int mask_aligned = (((size_t)msk) % 4) == 0;
-#endif
+    bool block_msk = (b1 < MSK_D0 - ceil((float)ugemm_kq_wg_tile_m / MSK_S2))
+            && mask_aligned;
 #endif
 
 #if KEY_SCALES
@@ -541,7 +606,6 @@ micro_sdpa(const global KEY_DATA_T *K, const global QRY_DATA_T *Q,
 #endif
 #endif
 #endif
-        scale *= 1.442695f; // log2(e)
     }
 
 #if PREFETCH_K0
@@ -629,6 +693,20 @@ micro_sdpa(const global KEY_DATA_T *K, const global QRY_DATA_T *Q,
     uint sg_i0_kq = sg_i_kq * ugemm_kq_sg_tile_m;
     uint sg_j0_kq = sg_j_kq * ugemm_kq_sg_tile_n;
 
+#if WITH_DROPOUT
+    /* Hoist loop-invariant dropout scalars and batch offset once. */
+#if !DROPOUT_HOST_SCALARS
+    long dropout_seed = dropout_seed_buf[0];
+    long dropout_offset = dropout_use_offset ? dropout_offset_buf[0] : 0;
+    float dropout_p = dropout_p_buf[0];
+#endif
+    uint dropout_threshold = get_dropout_threshold(dropout_p);
+    float dropout_inv_q = (dropout_p != 1.f) ? 1.f / (1.f - dropout_p) : 0.f;
+    const ulong dropout_batch_head_idx = (ulong)(DST_BATCH(b1, b0) / DST_S1);
+    const ulong dropout_batch_head_base
+            = dropout_batch_head_idx * (ulong)q * (ulong)k;
+#endif
+
     /* Main loop over k blocks */
     for (int k0 = 0; k0 < k0end; k0 += ugemm_kq_wg_tile_m) {
         bool first = (k0 == 0);
@@ -639,23 +717,26 @@ micro_sdpa(const global KEY_DATA_T *K, const global QRY_DATA_T *Q,
         /* Load mask. No remainder handling needed assuming k block size is a power of 2. */
         mask_tile_type mask_tile;
 #if BROADCAST_MASK_Q
-#if BLOCK_MSK
-        tile_load_block(&mask_tile, msk, 0, k0 + sg_i0_kq, 0);
-#else
-        if (mask_aligned) {
-            tile_load_block(&mask_tile, msk, 0, k0 + sg_i0_kq, 0);
+        if (block_msk) {
+            tile_load_block(&mask_tile, msk, MSK_S2, 0, k0 + sg_i0_kq, 0);
         } else {
-            tile_load_full(&mask_tile, msk, 0, k0 + sg_i0_kq, 0);
+            tile_load(&mask_tile, msk, k, 1, MSK_S2, k0 + sg_i0_kq, 0);
         }
-#endif
 #else
-        tile_load_t(&mask_tile, msk, q, k, sg_j0_kq + wg_j0, k0 + sg_i0_kq);
+        tile_load_t(
+                &mask_tile, msk, q, k, MSK_S2, sg_j0_kq + wg_j0, k0 + sg_i0_kq);
 #endif
 #endif
 
         /* Prepare k mask: NaN in bounds, -inf out of bounds */
         kmask_tile_type_float k_mask;
-        if (remainder_k) {
+        bool needs_k_mask = remainder_k;
+#if WITH_CAUSAL_MASK
+        /* for q==1 with GQA batching, all queries are at sequence position 0,
+           use uniform k_mask instead of varying per-column */
+        if (q == 1) needs_k_mask = true;
+#endif
+        if (needs_k_mask) {
 #pragma unroll
             for (int ii = 0; ii < ugemm_kq_sg_tile_m / SUBGROUP_SIZE; ii++) {
                 k_mask.x[0][ii] = (k0 + sg_i0_kq + ii * SUBGROUP_SIZE
@@ -687,19 +768,20 @@ micro_sdpa(const global KEY_DATA_T *K, const global QRY_DATA_T *Q,
                         ldkq
 #endif
                 );
+
 #if KQ_F16_ACC
         s_tile_type_float S_tile;
         tile_copy_reblock(S_tile_f16, &S_tile);
 #endif
 
 #if KEY_SCALES == QUANTIZE_COMMON
-#define k_scale_op(x) ((x)*k_scale)
+#define k_scale_op(x) ((x) * k_scale)
         tile_elementwise(S_tile, k_scale_op);
 #endif
 
         /* Apply attention mask */
 #if WITH_ATTN_MASK
-#define unscale(x) ((x)*iscale)
+#define unscale(x) ((x) * iscale)
         mask_tile_type_float mask_tile_float;
         tile_copy_reblock(mask_tile, &mask_tile_float);
 #if WITH_ATTN_SCALE
@@ -713,20 +795,23 @@ micro_sdpa(const global KEY_DATA_T *K, const global QRY_DATA_T *Q,
 #endif
 
         /* Apply k mask */
-        if (remainder_k) { tile_hbroadcast_min(&S_tile, k_mask); }
+        if (needs_k_mask) { tile_hbroadcast_min(&S_tile, k_mask); }
 
 #if WITH_CAUSAL_MASK
+        /* For q==1 cases, the whole GQA batch is at position 0 (handled above w/uniform masking)
+           Only apply per-column causal masking for non-batched q-varying cases */
+        if (q != 1) {
 #define less_than(offset_k, offset_q) (offset_q < offset_k)
 
-        int col_offset = wg_j0 + sg_j0_kq;
-        if (q == 1) col_offset = 1;
-        if (attn_mask_type == ATTN_MASK_BOTTOM_RIGHT) col_offset += k - q;
+            int col_offset = wg_j0 + sg_j0_kq;
+            if (attn_mask_type == ATTN_MASK_BOTTOM_RIGHT) col_offset += k - q;
 
-        /* Apply causal mask */
-        tile_predicated_assignment_t(S_tile, k0 + sg_i0_kq, col_offset,
-                less_than, -INFINITY, SUBGROUP_SIZE, ugemm_kq_c_type_block0,
-                ugemm_kq_c_type_block1, ugemm_kq_c_type_nblock0,
-                ugemm_kq_c_type_nblock1);
+            /* Apply causal mask */
+            tile_predicated_assignment_t(S_tile, k0 + sg_i0_kq, col_offset,
+                    less_than, -INFINITY, SUBGROUP_SIZE, ugemm_kq_c_type_block0,
+                    ugemm_kq_c_type_block1, ugemm_kq_c_type_nblock0,
+                    ugemm_kq_c_type_nblock1);
+        }
 #endif
 
         /* Before softmax, we will need to scale columns by maximum values to avoid overflow. */
@@ -781,11 +866,10 @@ micro_sdpa(const global KEY_DATA_T *K, const global QRY_DATA_T *Q,
                 /* cache */ LSC_LDCC_L1C_L3C);
 #endif
 #endif
-#ifndef ALT_MAX
+
         /* Read back WG-wide maxima */
         intel_work_group_barrier_wait(CLK_LOCAL_MEM_FENCE);
         tile_load_full(&S_max_tile, S_max_slm, ugemm_kq_wg_tile_n, sg_j0_kq, 0);
-#endif
 
 #if SOFTMAX_INF_AS_ZERO
 #define set_zeros(v) vselect(-FLT_MAX, v, visfinite(v))
@@ -795,25 +879,25 @@ micro_sdpa(const global KEY_DATA_T *K, const global QRY_DATA_T *Q,
         tile_vbroadcast_sub(&S_tile, S_max_tile);
 
 /* Scale + exponentiate */
-#define scaled_exp(x) native_vexp2(x *scale)
+#define scaled_exp(x) native_vexp2(x *scale * 1.442695f)
         tile_elementwise(S_tile, scaled_exp);
-
-#ifdef ALT_MAX
-        /* Read back WG-wide maxima and adjust S to match */
-        intel_work_group_barrier_wait(CLK_LOCAL_MEM_FENCE);
-        s_sum_tile_type S_max_tile1;
-        tile_copy(S_max_tile, S_max_tile1);
-        tile_load_full(&S_max_tile, S_max_slm, ugemm_kq_wg_tile_n, sg_j0_kq, 0);
-
-#define binary_exp_neg(x, y) native_vexp2(scale *((x) - (y)))
-        tile_binary(S_max_tile1, S_max_tile, binary_exp_neg);
-        tile_vbroadcast_mul(&S_tile, S_max_tile1);
-#endif
+#undef scaled_exp
 
         /* Accumulate sums. S tile is transposed for easy summation. */
         s_sum_tile_type S_sum_tile1;
         tile_fill(S_sum_tile1, 0.0f);
         tile_vreduce_add(S_tile, &S_sum_tile1);
+
+#if WITH_DROPOUT
+        apply_dropout_s_tile(&S_tile, k0 + sg_i0_kq, wg_j0 + sg_j0_kq, k0end, q,
+                dropout_batch_head_base, k, dropout_use_offset, dropout_seed,
+                dropout_offset, dropout_threshold, dropout_inv_q
+#if DROPOUT_OUTPUT_MASK
+                ,
+                dropout_mask_buf
+#endif
+        );
+#endif
 
 #if USE_SYSTOLIC_UKERNEL
         /* Convert to half or bf16, VNNI format */
@@ -836,7 +920,7 @@ micro_sdpa(const global KEY_DATA_T *K, const global QRY_DATA_T *Q,
 
         /* Rescale existing accumulator and sums to match new maxima */
         if (!first) {
-#define binary_exp_sub(x, y) native_vexp2(scale *((x) - (y)))
+#define binary_exp_sub(x, y) native_vexp2(scale * 1.442695f * ((x) - (y)))
 #define binary_mul(x, y) ((x) * (y))
             tile_binary(S_max_tile_old, S_max_tile, binary_exp_sub);
             tile_binary(S_sum_tile, S_max_tile_old, binary_mul);
@@ -927,7 +1011,7 @@ micro_sdpa(const global KEY_DATA_T *K, const global QRY_DATA_T *Q,
 #if BROADCAST_MASK_Q
             cooperative_prefetch_2d_maybe_rem(
                     /* ptr */ msk + knext,
-                    /* r */ k0end - k0,
+                    /* r */ k0end - k0 - ugemm_kq_wg_tile_m,
                     /* c */ 1,
                     /* rmax */ ugemm_kq_wg_tile_m,
                     /* cmax */ 1,
@@ -1001,6 +1085,37 @@ micro_sdpa(const global KEY_DATA_T *K, const global QRY_DATA_T *Q,
         if (need_sum_barrier)
             intel_work_group_barrier_wait(CLK_LOCAL_MEM_FENCE);
 
+#if IS_TRAINING
+        s_sum_tile_type S_sum_total, S_sum_load;
+        tile_fill(S_sum_total, 0.f);
+#pragma unroll
+        for (uint sg1 = 0; sg1 < ugemm_kq_sg_per_wg_m; sg1++) {
+            tile_load_full(&S_sum_load, S_sum_slm, ugemm_kq_wg_tile_n,
+                    ugemm_kq_sg_tile_n * sg_j_kq, sg1);
+            tile_binary(S_sum_total, S_sum_load, binary_add);
+        }
+
+#define log2(x) (native_vlog2(x) * 0.6931471805f)
+        tile_elementwise(S_sum_total, log2);
+#define scale_op(x) ((x) * scale)
+        tile_elementwise(S_max_tile_old, scale_op);
+        tile_binary(S_max_tile_old, S_sum_total, binary_add);
+
+#if SOFTMAX_INF_AS_ZERO
+#define lse_set_zeros(v) vselect(0.f, v, visfinite(v))
+        tile_elementwise(S_max_tile_old, lse_set_zeros);
+#undef lse_set_zeros
+#endif
+
+        // save columns logsumexp to workspace for training pass
+        const uint preprocess_batch = b1 * (DST_D1 * q) + b0 * q;
+
+        global float *ws_logsumexp = ws + preprocess_batch;
+        tile_store(S_max_tile_old, ws_logsumexp, q_group_size, 1, q_group_size,
+                sg_j0_kq + wg_j0, sg_i0_kq);
+        // sg_i0 specified to avoid OOB subgroups from aliasing
+#endif
+
         /* Load column sums from SLM + reduce in registers */
         a_scale_tile_type A_scale_tile, A_scale_tile_load;
         tile_fill(A_scale_tile, 0.0f);
@@ -1012,7 +1127,7 @@ micro_sdpa(const global KEY_DATA_T *K, const global QRY_DATA_T *Q,
             tile_binary(A_scale_tile, A_scale_tile_load, binary_add);
         }
 #if VAL_SCALES == QUANTIZE_COMMON
-#define v_scale_op(x) ((x)*v_scale)
+#define v_scale_op(x) ((x) * v_scale)
         tile_elementwise(A_tile, v_scale_op);
 #endif
 

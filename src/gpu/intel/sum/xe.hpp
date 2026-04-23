@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -70,13 +70,13 @@ struct xe_t : public primitive_t {
         const memory_desc_wrapper data_s(pd()->src_md());
 
         kernel_ctx.set_data_type(data_s.data_type());
+        kernel_ctx.require_stateless_addressing(pd()->has_large_buffers());
         size_t io_bytes = (pd()->n_inputs() + 1) * data_d.data_type_size()
                 * data_d.nelems(true);
         // Heuristics: for IO bytes smaller than 10MB reduce vector size for better perf.
         if (io_bytes < 10 * 1024 * 1024) { vector_size /= 2; }
         kernel_ctx.define_int("VECT_DT_N", vector_size);
         kernel_ctx.define_int("N_INPUTS", pd()->n_inputs());
-        kernel_ctx.define_int("N_ELEMS", data_d.nelems(true));
 
         def_memory_desc_info(
                 kernel_ctx, memory_desc_info_t::create(data_d), "SRC");

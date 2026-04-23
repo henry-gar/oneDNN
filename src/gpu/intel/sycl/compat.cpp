@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2025 Intel Corporation
+* Copyright 2021 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -35,7 +35,6 @@
 #include "gpu/intel/compute/device_info.hpp"
 #include "gpu/intel/sycl/compat.hpp"
 #include "gpu/intel/sycl/engine.hpp"
-#include "gpu/intel/sycl/l0/utils.hpp"
 
 namespace dnnl {
 namespace impl {
@@ -63,13 +62,14 @@ status_t make_kernels(
             if (kernel_names[i] == nullptr) continue;
             cl_int err;
             xpu::ocl::wrapper_t<cl_kernel> ocl_kernel
-                    = clCreateKernel(ocl_program, kernel_names[i], &err);
+                    = xpu::ocl::clCreateKernel(
+                            ocl_program, kernel_names[i], &err);
             OCL_CHECK(err);
             sycl_kernels[i] = utils::make_unique<::sycl::kernel>(
                     ::sycl::make_kernel<::sycl::backend::opencl>(
                             ocl_kernel, sycl_engine->context()));
         }
-    } else if (backend == xpu::sycl::backend_t::level0) {
+    } else if (backend == xpu::sycl::backend_t::ze) {
         CHECK(sycl_create_kernels_with_level_zero(
                 sycl_kernels, kernel_names, sycl_engine, binary));
     } else {

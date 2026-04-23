@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2022 Intel Corporation
+* Copyright 2020 Intel Corporation
 * Copyright 2020-2025 FUJITSU LIMITED
 * Copyright 2025 Arm Ltd. and affiliates
 *
@@ -348,8 +348,8 @@ void jit_sve_conv_fwd_kernel_t<isa>::compute_loop_fma_core(
         return ZRegS(idx);
     };
 
-    auto bcast_load = [&](int jj, int nb_oc_block, int aux_input_offset,
-                              int prev_ofs) {
+    auto bcast_load
+            = [&](int jj, int nb_oc_block, int aux_input_offset, int prev_ofs) {
         if (ld1rw_imm_check(aux_input_offset)) {
             ld1rw(zreg_inp_s(jj, nb_oc_block), P_ALL_ONE,
                     ptr(aux_reg_inp, static_cast<int32_t>(aux_input_offset)));
@@ -574,9 +574,7 @@ void jit_sve_conv_fwd_kernel_t<isa>::compute_loop(
         else if (jcp.kernel_kind == embd_bcast && jcp.nb_oc_blocking == 1)
             assert(!"STOP:jcp.kernel_kind == embd_bcast && jcp.nb_oc_blocking "
                     "== 1");
-        else {
-            compute_loop_fma_core(ur_w, pad_l, pad_r);
-        }
+        else { compute_loop_fma_core(ur_w, pad_l, pad_r); }
     else
         assert(!"unknown convolution version");
 
@@ -855,7 +853,7 @@ status_t jit_sve_conv_fwd_kernel_t<isa>::init_conf(jit_conv_conf_t &jcp,
     const bool with_groups = weights_d.ndims() == src_d.ndims() + 1;
     int ndims = src_d.ndims();
 
-    jcp = zero<decltype(jcp)>();
+    jcp = utils::zero<decltype(jcp)>();
     jcp.nthr = jcp.aligned_threads = nthreads;
     jcp.ndims = ndims;
     jcp.prop_kind = cd.prop_kind;
@@ -901,12 +899,13 @@ status_t jit_sve_conv_fwd_kernel_t<isa>::init_conf(jit_conv_conf_t &jcp,
 
     const auto dat_tag_nxc = pick(ndims - 3, nwc, nhwc, ndhwc);
     const auto dat_tag_ncx = pick(ndims - 3, ncw, nchw, ncdhw);
+    const auto dat_tag_nCx4c = pick(ndims - 3, nCw4c, nChw4c, nCdhw4c);
     const auto dat_tag_nCx8c = pick(ndims - 3, nCw8c, nChw8c, nCdhw8c);
     const auto dat_tag_nCx16c = pick(ndims - 3, nCw16c, nChw16c, nCdhw16c);
-    auto curr_src_tag = src_d.matches_one_of_tag(
-            dat_tag_nxc, dat_tag_nCx16c, dat_tag_nCx8c, dat_tag_ncx);
+    auto curr_src_tag = src_d.matches_one_of_tag(dat_tag_nxc, dat_tag_nCx16c,
+            dat_tag_nCx8c, dat_tag_nCx4c, dat_tag_ncx);
     auto curr_dst_tag = dst_d.matches_one_of_tag(
-            dat_tag_nxc, dat_tag_nCx16c, dat_tag_nCx8c);
+            dat_tag_nxc, dat_tag_nCx16c, dat_tag_nCx8c, dat_tag_nCx4c);
     bool is_data_layout_nxc
             = utils::everyone_is(dat_tag_nxc, curr_src_tag, curr_dst_tag);
 
@@ -965,7 +964,13 @@ status_t jit_sve_conv_fwd_kernel_t<isa>::init_conf(jit_conv_conf_t &jcp,
             wei_tag = pick(2 * ndims - 6 + with_groups, OIw8i8o, gOIw8i8o,
                     OIhw8i8o, gOIhw8i8o, OIdhw8i8o, gOIdhw8i8o);
             break;
-        default: break;
+        case sve_128:
+            dst_tag = dat_tag_nCx4c;
+            src_tag = jcp.is_1stconv ? dat_tag_ncx : dat_tag_nCx4c;
+            wei_tag = pick(2 * ndims - 6 + with_groups, OIw4i4o, gOIw4i4o,
+                    OIhw4i4o, gOIhw4i4o, OIdhw4i4o, gOIdhw4i4o);
+            break;
+        default: return status::unimplemented;
     }
 
     if (src_md.format_kind == format_kind::any)
@@ -1005,7 +1010,12 @@ status_t jit_sve_conv_fwd_kernel_t<isa>::init_conf(jit_conv_conf_t &jcp,
                             ? pick(ndims - 3, gOwi8o, gOhwi8o, gOdhwi8o)
                             : pick(ndims - 3, Owi8o, Ohwi8o, Odhwi8o);
                     break;
-                default: break;
+                case sve_128:
+                    wei_tag = with_groups
+                            ? pick(ndims - 3, gOwi4o, gOhwi4o, gOdhwi4o)
+                            : pick(ndims - 3, Owi4o, Ohwi4o, Odhwi4o);
+                    break;
+                default: return status::unimplemented;
             }
         }
     } else {
@@ -2075,7 +2085,7 @@ status_t jit_sve_conv_bwd_data_kernel_f32_t<isa>::init_conf(
     const memory_desc_wrapper diff_src_d(&diff_src_md);
     const memory_desc_wrapper weights_d(&weights_md);
     const memory_desc_wrapper diff_dst_d(&diff_dst_md);
-    jcp = zero<decltype(jcp)>();
+    jcp = utils::zero<decltype(jcp)>();
 
     const bool with_groups = weights_d.ndims() == diff_src_d.ndims() + 1;
     int ndims = diff_src_d.ndims();
@@ -2539,9 +2549,9 @@ void jit_sve_conv_bwd_weights_kernel_f32_t<isa>::compute_ic_block_step(int ur_w,
     int num_zregs4out = 4;
     num_zregs4out = (28 - num_zregs4ker) / num_zregs4ker
             ? nstl::max(num_zregs4out
-                            + ((32 - num_zregs4out - num_zregs4ker)
-                                    % (num_zregs4ker)),
-                    4)
+                              + ((32 - num_zregs4out - num_zregs4ker)
+                                      % (num_zregs4ker)),
+                      4)
             : nstl::max(32 - (num_zregs4ker + ic_block_step), 4);
     int idata_reg_offset = num_zregs4ker + num_zregs4out;
     int num_zregs4idata = 32 - idata_reg_offset;
@@ -3601,8 +3611,9 @@ void jit_sve_conv_bwd_weights_kernel_f32_t<isa>::compute_oh_loop_common() {
         }
     }
 
-    const int oj_end_value = nstl::min(
-            oh, utils::div_up(ihp - b_pad - (kh - 1) * dilate_h, stride_h));
+    const int oj_end_value = nstl::min(oh,
+            utils::div_up(
+                    nstl::max(0, ihp - b_pad - (kh - 1) * dilate_h), stride_h));
     cmp_imm(reg_oj, oj_end_value, reg_tmp_imm);
     b(GE, oh_label_end);
 
@@ -3672,8 +3683,8 @@ void jit_sve_conv_bwd_weights_kernel_f32_t<isa>::compute_oh_loop_partial() {
             : (jcp.is_1stconv ? 1 : jcp.ic_block);
     const int out_mult
             = is_ddst_layout_nxc() ? jcp.ngroups * jcp.oc : jcp.oc_block;
-    const int input_bottom_padding_overlap
-            = div_up(jcp.ih + jcp.t_pad - (jcp.kh - 1), jcp.stride_h);
+    const int input_bottom_padding_overlap = div_up(
+            nstl::max(0, jcp.ih + jcp.t_pad - (jcp.kh - 1)), jcp.stride_h);
 
     const size_t filter_shift = jcp.typesize_out * jcp.kw * ic_block * oc_block;
     const size_t input_shift = jcp.typesize_in * jcp.iw * inp_mult;
@@ -3818,8 +3829,8 @@ void jit_sve_conv_bwd_weights_kernel_f32_t<isa>::compute_od_loop_partial() {
             = is_ddst_layout_nxc() ? jcp.ngroups * jcp.oc : jcp.oc_block;
     int iw = jcp.iw;
     int ow = jcp.ow;
-    const int input_backpad_overlap
-            = div_up(jcp.id + jcp.f_pad - (jcp.kd - 1), jcp.stride_d);
+    const int input_backpad_overlap = div_up(
+            nstl::max(0, jcp.id + jcp.f_pad - (jcp.kd - 1)), jcp.stride_d);
 
     const size_t filter_shift
             = jcp.typesize_out * jcp.kh * jcp.kw * ic_block * oc_block;
@@ -3984,7 +3995,7 @@ status_t jit_sve_conv_bwd_weights_kernel_f32_t<isa>::init_conf(
     const bool with_groups = diff_weights_d.ndims() == src_d.ndims() + 1;
     int ndims = src_d.ndims();
 
-    jcp = zero<decltype(jcp)>();
+    jcp = utils::zero<decltype(jcp)>();
 
     jcp.simd_w = cpu_isa_traits<isa>::vlen / typesize;
     jcp.nthr = jcp.aligned_threads = nthreads;
@@ -4460,6 +4471,7 @@ void jit_sve_conv_bwd_weights_kernel_f32_t<isa>::balance(
 /*struct instantiation*/
 template struct jit_sve_conv_fwd_kernel_t<sve_512>;
 template struct jit_sve_conv_fwd_kernel_t<sve_256>;
+template struct jit_sve_conv_fwd_kernel_t<sve_128>;
 template struct jit_sve_conv_bwd_data_kernel_f32_t<sve_512>;
 template struct jit_sve_conv_bwd_data_kernel_f32_t<sve_256>;
 template struct jit_sve_conv_bwd_weights_kernel_f32_t<sve_512>;

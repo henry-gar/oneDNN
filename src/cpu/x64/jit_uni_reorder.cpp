@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2018-2025 Intel Corporation
+* Copyright 2018 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -121,7 +121,7 @@ struct jit_uni_reorder_kernel_f32_t : public kernel_t, public jit_generator_t {
 #define PARAM(x) \
     prb_.is_tail_present \
             ? ptr[abi_param1 + offsetof(tail_call_param_t, base_params) \
-                    + offsetof(call_param_t, x)] \
+                      + offsetof(call_param_t, x)] \
             : ptr[abi_param1 + offsetof(call_param_t, x)]
 #define TAIL_PARAM(x) ptr[abi_param1 + offsetof(tail_call_param_t, x)]
 
@@ -203,14 +203,13 @@ struct jit_uni_reorder_kernel_f32_t : public kernel_t, public jit_generator_t {
                         mayiuse(avx512_core_fp16) || mayiuse(avx2_vnni_2))
                 && IMPLICATION(utils::one_of(f8_e5m2, p.itype, p.otype)
                                 || utils::one_of(f8_e4m3, p.itype, p.otype),
-                        (mayiuse(avx512_core_fp16) || mayiuse(avx10_2_512)))
+                        (mayiuse(avx512_core_fp16) || mayiuse(avx10_2)))
                 && prb_has_small_strides(p) && !prb_has_huge_prime_number(p);
         return ok;
     }
 
     static bool is_f8_supported(cpu_isa_t isa) {
-        return is_superset(isa, avx512_core_fp16)
-                || is_superset(isa, avx10_2_512);
+        return is_superset(isa, avx512_core_fp16) || is_superset(isa, avx10_2);
     }
 
     Address i_addr(int i_off) {
@@ -286,8 +285,8 @@ struct jit_uni_reorder_kernel_f32_t : public kernel_t, public jit_generator_t {
     void tr8x8_avx2(int i_off, int o_off) {
         using namespace data_type;
 
-        const auto cvt2ps = [this](const Ymm dst, const Operand &src,
-                                    data_type_t idt) {
+        const auto cvt2ps
+                = [this](const Ymm dst, const Operand &src, data_type_t idt) {
             switch (idt) {
                 case f32:
                     if (src.isMEM() || src.getIdx() != dst.getIdx())
@@ -346,7 +345,7 @@ struct jit_uni_reorder_kernel_f32_t : public kernel_t, public jit_generator_t {
                     case s8:
                     case u8: vpmovusdb(xmm, ymm); break;
                     case s32: break; // nothing to do
-                    default: assert("unsupported data type");
+                    default: assert(!"unsupported data type");
                 }
                 return;
             }
@@ -601,8 +600,8 @@ struct jit_uni_reorder_kernel_f32_t : public kernel_t, public jit_generator_t {
             const int *zero_padding, const bool tail_processing) {
         using namespace data_type;
 
-        const auto cvt2ps = [this](const Xmm dst, const Operand &src,
-                                    data_type_t idt) {
+        const auto cvt2ps
+                = [this](const Xmm dst, const Operand &src, data_type_t idt) {
             Xmm dst_pure = Xmm(dst.getIdx());
             switch (idt) {
                 case f32:
@@ -652,7 +651,7 @@ struct jit_uni_reorder_kernel_f32_t : public kernel_t, public jit_generator_t {
                     case s8:
                     case u8: vpmovusdb(xmm, xmm); break;
                     case s32: break; // nothing to do
-                    default: assert("unsupported data type");
+                    default: assert(!"unsupported data type");
                 }
                 return;
             }
@@ -957,9 +956,9 @@ struct jit_uni_reorder_kernel_f32_t : public kernel_t, public jit_generator_t {
 
         /* scale and beta processing */
         if (can_store_xmm) {
-            const auto apply_scales = [&](const Xmm &vreg_scales,
-                                              scale_arg_t scale_arg,
-                                              scale_type_t scale_type) {
+            const auto apply_scales
+                    = [&](const Xmm &vreg_scales, scale_arg_t scale_arg,
+                              scale_type_t scale_type) {
                 if (scale_type == scale_type_t::COMMON) {
                     for (int ur = 0; ur < reg_unroll; ur += ur_step)
                         uni_vmulps(Xmm(ur), Xmm(ur), vreg_scales);
@@ -1046,19 +1045,19 @@ struct jit_uni_reorder_kernel_f32_t : public kernel_t, public jit_generator_t {
             const auto apply_scales
                     = [&](const Xmm &vreg_scales, scale_arg_t scale_arg,
                               scale_type_t scale_type) {
-                          if (scale_type == scale_type_t::COMMON) {
-                              for (int ur = 0; ur < reg_unroll; ur += ur_step)
-                                  uni_vmulss(Xmm(ur), Xmm(ur), vreg_scales);
-                          } else if (scale_type == scale_type_t::MANY) {
-                              for (int ur = 0; ur < reg_unroll; ur += ur_step) {
-                                  if (zero_padding[ur] == 0 || !tail_processing)
-                                      uni_vmulss(Xmm(ur), Xmm(ur),
-                                              scale_arg == scale_arg_t::SRC
-                                                      ? src_s_addr(s_off[ur])
-                                                      : dst_s_addr(s_off[ur]));
-                              }
-                          }
-                      };
+                if (scale_type == scale_type_t::COMMON) {
+                    for (int ur = 0; ur < reg_unroll; ur += ur_step)
+                        uni_vmulss(Xmm(ur), Xmm(ur), vreg_scales);
+                } else if (scale_type == scale_type_t::MANY) {
+                    for (int ur = 0; ur < reg_unroll; ur += ur_step) {
+                        if (zero_padding[ur] == 0 || !tail_processing)
+                            uni_vmulss(Xmm(ur), Xmm(ur),
+                                    scale_arg == scale_arg_t::SRC
+                                            ? src_s_addr(s_off[ur])
+                                            : dst_s_addr(s_off[ur]));
+                    }
+                }
+            };
 
             /* xmm[0] <-- src_scales * xmm[0] */
             apply_scales(
@@ -1136,15 +1135,15 @@ struct jit_uni_reorder_kernel_f32_t : public kernel_t, public jit_generator_t {
             const bool mayiuse_avx2 = mayiuse(avx2);
             const auto uni_vpaddd_wrapper
                     = [&](const Xmm xmm, const Address &addr) {
-                          if (mayiuse_avx2)
-                              vpaddd(xmm, xmm, addr);
-                          else {
-                              //isas < avx2 demand paddd instruction addr to be aligned
-                              assert(xmm.getIdx() != xmm_tmp_.getIdx());
-                              uni_vmovups(xmm_tmp_, addr);
-                              paddd(xmm, xmm_tmp_);
-                          }
-                      };
+                if (mayiuse_avx2)
+                    vpaddd(xmm, xmm, addr);
+                else {
+                    //isas < avx2 demand paddd instruction addr to be aligned
+                    assert(xmm.getIdx() != xmm_tmp_.getIdx());
+                    uni_vmovups(xmm_tmp_, addr);
+                    paddd(xmm, xmm_tmp_);
+                }
+            };
             if (can_store_xmm) {
                 enum class comp_load_type_t { bcast, load, gather };
 
@@ -2201,8 +2200,8 @@ static void prb_block_for_cache(tr::prb_t &prb) {
             const auto dim_last_it = dim_beg_it + prb.ndims;
             const auto min_n_node_it = std::min_element(dim_two_it, dim_last_it,
                     [](const tr::node_t &lhs, const tr::node_t &rhs) {
-                        return lhs.n < rhs.n;
-                    });
+                return lhs.n < rhs.n;
+            });
             const auto min_idx = std::distance(dim_beg_it, min_n_node_it);
             // check if min_idx node is parent of node with tail processing which
             // is currently unsupported (i.e. tail processing can only be handled
@@ -2487,40 +2486,36 @@ void jit_uni_reorder_t::omp_driver_2d(int ithr, int nthr, int off,
     const tr::node_t *ns = prb.nodes + off;
     for_nd(ithr, nthr, (ptrdiff_t)ns[1].n, (ptrdiff_t)ns[0].n,
             [&](ptrdiff_t d1, ptrdiff_t d0) {
-                tr::call_param_t base_params;
-                base_params.in = in
-                        + (d0 * ns[0].is + d1 * ns[1].is)
-                                * data_type_size(prb.itype);
-                base_params.out = out
-                        + (d0 * ns[0].os + d1 * ns[1].os)
-                                * data_type_size(prb.otype);
-                if (prb.src_scale_type != tr::scale_type_t::NONE)
-                    base_params.src_scales
-                            = static_cast<const float *>(src_scales)
-                            + d0 * ns[0].ss + d1 * ns[1].ss;
-                if (prb.dst_scale_type != tr::scale_type_t::NONE)
-                    base_params.dst_scales
-                            = static_cast<const float *>(dst_scales)
-                            + d0 * ns[0].ss + d1 * ns[1].ss;
-                base_params.src_zp = src_zp;
-                base_params.dst_zp = dst_zp;
-                base_params.compensation_scratch
-                        = compensation_scratch + d0 * ns[0].cs + d1 * ns[1].cs;
+        tr::call_param_t base_params;
+        base_params.in = in
+                + (d0 * ns[0].is + d1 * ns[1].is) * data_type_size(prb.itype);
+        base_params.out = out
+                + (d0 * ns[0].os + d1 * ns[1].os) * data_type_size(prb.otype);
+        if (prb.src_scale_type != tr::scale_type_t::NONE)
+            base_params.src_scales = static_cast<const float *>(src_scales)
+                    + d0 * ns[0].ss + d1 * ns[1].ss;
+        if (prb.dst_scale_type != tr::scale_type_t::NONE)
+            base_params.dst_scales = static_cast<const float *>(dst_scales)
+                    + d0 * ns[0].ss + d1 * ns[1].ss;
+        base_params.src_zp = src_zp;
+        base_params.dst_zp = dst_zp;
+        base_params.compensation_scratch
+                = compensation_scratch + d0 * ns[0].cs + d1 * ns[1].cs;
 
-                if (prb.is_tail_present) {
-                    tr::tail_call_param_t tail_params;
-                    tail_params.base_params = base_params;
+        if (prb.is_tail_present) {
+            tr::tail_call_param_t tail_params;
+            tail_params.base_params = base_params;
 
-                    static constexpr int omp_ndims = 2;
-                    const ptrdiff_t omp_data_chunks[omp_ndims] = {d0, d1};
-                    fill_curr_data_chunks(
-                            prb, off, omp_data_chunks, omp_ndims, tail_params);
+            static constexpr int omp_ndims = 2;
+            const ptrdiff_t omp_data_chunks[omp_ndims] = {d0, d1};
+            fill_curr_data_chunks(
+                    prb, off, omp_data_chunks, omp_ndims, tail_params);
 
-                    (*kernel_)(&tail_params);
-                } else {
-                    (*kernel_)(&base_params);
-                }
-            });
+            (*kernel_)(&tail_params);
+        } else {
+            (*kernel_)(&base_params);
+        }
+    });
 }
 
 void jit_uni_reorder_t::omp_driver_3d(int ithr, int nthr, int off,
@@ -2531,40 +2526,38 @@ void jit_uni_reorder_t::omp_driver_3d(int ithr, int nthr, int off,
     const tr::node_t *ns = prb.nodes + off;
     for_nd(ithr, nthr, (ptrdiff_t)ns[2].n, (ptrdiff_t)ns[1].n,
             (ptrdiff_t)ns[0].n, [&](ptrdiff_t d2, ptrdiff_t d1, ptrdiff_t d0) {
-                tr::call_param_t base_params;
-                base_params.in = in
-                        + (d0 * ns[0].is + d1 * ns[1].is + d2 * ns[2].is)
-                                * data_type_size(prb.itype);
-                base_params.out = out
-                        + (d0 * ns[0].os + d1 * ns[1].os + d2 * ns[2].os)
-                                * data_type_size(prb.otype);
-                if (prb.src_scale_type != tr::scale_type_t::NONE)
-                    base_params.src_scales
-                            = static_cast<const float *>(src_scales)
-                            + d0 * ns[0].ss + d1 * ns[1].ss + d2 * ns[2].ss;
-                if (prb.dst_scale_type != tr::scale_type_t::NONE)
-                    base_params.dst_scales
-                            = static_cast<const float *>(dst_scales)
-                            + d0 * ns[0].ss + d1 * ns[1].ss + d2 * ns[2].ss;
-                base_params.src_zp = src_zp;
-                base_params.dst_zp = dst_zp;
-                base_params.compensation_scratch = compensation_scratch
-                        + d0 * ns[0].cs + d1 * ns[1].cs + d2 * ns[2].cs;
+        tr::call_param_t base_params;
+        base_params.in = in
+                + (d0 * ns[0].is + d1 * ns[1].is + d2 * ns[2].is)
+                        * data_type_size(prb.itype);
+        base_params.out = out
+                + (d0 * ns[0].os + d1 * ns[1].os + d2 * ns[2].os)
+                        * data_type_size(prb.otype);
+        if (prb.src_scale_type != tr::scale_type_t::NONE)
+            base_params.src_scales = static_cast<const float *>(src_scales)
+                    + d0 * ns[0].ss + d1 * ns[1].ss + d2 * ns[2].ss;
+        if (prb.dst_scale_type != tr::scale_type_t::NONE)
+            base_params.dst_scales = static_cast<const float *>(dst_scales)
+                    + d0 * ns[0].ss + d1 * ns[1].ss + d2 * ns[2].ss;
+        base_params.src_zp = src_zp;
+        base_params.dst_zp = dst_zp;
+        base_params.compensation_scratch = compensation_scratch + d0 * ns[0].cs
+                + d1 * ns[1].cs + d2 * ns[2].cs;
 
-                if (prb.is_tail_present) {
-                    tr::tail_call_param_t tail_params;
-                    tail_params.base_params = base_params;
+        if (prb.is_tail_present) {
+            tr::tail_call_param_t tail_params;
+            tail_params.base_params = base_params;
 
-                    static constexpr int omp_ndims = 3;
-                    const ptrdiff_t omp_data_chunks[omp_ndims] = {d0, d1, d2};
-                    fill_curr_data_chunks(
-                            prb, off, omp_data_chunks, omp_ndims, tail_params);
+            static constexpr int omp_ndims = 3;
+            const ptrdiff_t omp_data_chunks[omp_ndims] = {d0, d1, d2};
+            fill_curr_data_chunks(
+                    prb, off, omp_data_chunks, omp_ndims, tail_params);
 
-                    (*kernel_)(&tail_params);
-                } else {
-                    (*kernel_)(&base_params);
-                }
-            });
+            (*kernel_)(&tail_params);
+        } else {
+            (*kernel_)(&base_params);
+        }
+    });
 }
 
 void jit_uni_reorder_t::omp_driver_4d(int ithr, int nthr, int off,
@@ -2576,46 +2569,42 @@ void jit_uni_reorder_t::omp_driver_4d(int ithr, int nthr, int off,
     for_nd(ithr, nthr, (ptrdiff_t)ns[3].n, (ptrdiff_t)ns[2].n,
             (ptrdiff_t)ns[1].n, (ptrdiff_t)ns[0].n,
             [&](ptrdiff_t d3, ptrdiff_t d2, ptrdiff_t d1, ptrdiff_t d0) {
-                tr::call_param_t base_params;
-                base_params.in = in
-                        + (d0 * ns[0].is + d1 * ns[1].is + d2 * ns[2].is
-                                  + d3 * ns[3].is)
-                                * data_type_size(prb.itype);
-                base_params.out = out
-                        + (d0 * ns[0].os + d1 * ns[1].os + d2 * ns[2].os
-                                  + d3 * ns[3].os)
-                                * data_type_size(prb.otype);
-                if (prb.src_scale_type != tr::scale_type_t::NONE)
-                    base_params.src_scales
-                            = static_cast<const float *>(src_scales)
-                            + d0 * ns[0].ss + d1 * ns[1].ss + d2 * ns[2].ss
-                            + d3 * ns[3].ss;
-                if (prb.dst_scale_type != tr::scale_type_t::NONE)
-                    base_params.dst_scales
-                            = static_cast<const float *>(dst_scales)
-                            + d0 * ns[0].ss + d1 * ns[1].ss + d2 * ns[2].ss
-                            + d3 * ns[3].ss;
-                base_params.src_zp = src_zp;
-                base_params.dst_zp = dst_zp;
-                base_params.compensation_scratch = compensation_scratch
-                        + d0 * ns[0].cs + d1 * ns[1].cs + d2 * ns[2].cs
-                        + d3 * ns[3].cs;
+        tr::call_param_t base_params;
+        base_params.in = in
+                + (d0 * ns[0].is + d1 * ns[1].is + d2 * ns[2].is
+                          + d3 * ns[3].is)
+                        * data_type_size(prb.itype);
+        base_params.out = out
+                + (d0 * ns[0].os + d1 * ns[1].os + d2 * ns[2].os
+                          + d3 * ns[3].os)
+                        * data_type_size(prb.otype);
+        if (prb.src_scale_type != tr::scale_type_t::NONE)
+            base_params.src_scales = static_cast<const float *>(src_scales)
+                    + d0 * ns[0].ss + d1 * ns[1].ss + d2 * ns[2].ss
+                    + d3 * ns[3].ss;
+        if (prb.dst_scale_type != tr::scale_type_t::NONE)
+            base_params.dst_scales = static_cast<const float *>(dst_scales)
+                    + d0 * ns[0].ss + d1 * ns[1].ss + d2 * ns[2].ss
+                    + d3 * ns[3].ss;
+        base_params.src_zp = src_zp;
+        base_params.dst_zp = dst_zp;
+        base_params.compensation_scratch = compensation_scratch + d0 * ns[0].cs
+                + d1 * ns[1].cs + d2 * ns[2].cs + d3 * ns[3].cs;
 
-                if (prb.is_tail_present) {
-                    tr::tail_call_param_t tail_params;
-                    tail_params.base_params = base_params;
+        if (prb.is_tail_present) {
+            tr::tail_call_param_t tail_params;
+            tail_params.base_params = base_params;
 
-                    static constexpr int omp_ndims = 4;
-                    const ptrdiff_t omp_data_chunks[omp_ndims]
-                            = {d0, d1, d2, d3};
-                    fill_curr_data_chunks(
-                            prb, off, omp_data_chunks, omp_ndims, tail_params);
+            static constexpr int omp_ndims = 4;
+            const ptrdiff_t omp_data_chunks[omp_ndims] = {d0, d1, d2, d3};
+            fill_curr_data_chunks(
+                    prb, off, omp_data_chunks, omp_ndims, tail_params);
 
-                    (*kernel_)(&tail_params);
-                } else {
-                    (*kernel_)(&base_params);
-                }
-            });
+            (*kernel_)(&tail_params);
+        } else {
+            (*kernel_)(&base_params);
+        }
+    });
 }
 
 void jit_uni_reorder_t::reduce_compensation(char *out,
@@ -2638,7 +2627,7 @@ void jit_uni_reorder_t::reduce_compensation(char *out,
     const size_t zp_offset
             = offset + (pd()->prb_.req_s8s8_comp ? GN * comp_dt_size : 0);
 
-    parallel_nd(GN, [&](int idx) {
+    parallel_nd(GN, [=](int idx) {
         int32_t acc = 0;
         for (int ithr = 0; ithr < nthr; ithr++) {
             acc -= compensation_reduce_scratch[ithr * wspace_per_thr_size
@@ -2749,8 +2738,6 @@ status_t jit_uni_reorder_t::execute(const exec_ctx_t &ctx) const {
     const bool req_compensation = req_s8s8_comp || req_asymmetric_comp;
     assert(ndims_level <= ndims_driver_max);
 
-    auto src_zp = src_zero_points ? src_zero_points[0] : 0;
-    auto dst_zp = dst_zero_points ? dst_zero_points[0] : 0;
     int32_t *compensation_reduce_scratch = scratchpad.template get<int32_t>(
             memory_tracking::names::key_reorder_space);
 
@@ -2762,7 +2749,7 @@ status_t jit_uni_reorder_t::execute(const exec_ctx_t &ctx) const {
     const auto wspace_per_thr_bytes = wspace_per_thr_size * sizeof(int32_t);
 
     const int nthr_par = ndims_level == 0 ? 1 : pd()->nthr_;
-    parallel(nthr_par, [&](const int ithr, const int nthr) {
+    parallel(nthr_par, [= COMPAT_THIS_CAPTURE](const int ithr, const int nthr) {
         int32_t *compensation_scratch = nullptr;
         if (req_compensation) {
             if (ndims_level == 0)
@@ -2786,6 +2773,9 @@ status_t jit_uni_reorder_t::execute(const exec_ctx_t &ctx) const {
                 dst_scales_inv_ptr[i] = 1.f / dst_scales_ptr[i];
             }
         }
+
+        auto src_zp = src_zero_points ? src_zero_points[0] : 0;
+        auto dst_zp = dst_zero_points ? dst_zero_points[0] : 0;
 
         switch (ndims_level) {
             case 0:
@@ -2897,7 +2887,7 @@ status_t jit_blk_reorder_t::execute(const exec_ctx_t &ctx) const {
     auto itype_sz_ = data_type_size(pd()->prb_.itype);
     auto otype_sz_ = data_type_size(pd()->prb_.otype);
 
-    parallel_nd(BH, FL, [&](dim_t bh, dim_t fl) {
+    parallel_nd(BH, FL, [= COMPAT_THIS_CAPTURE](dim_t bh, dim_t fl) {
         auto fl_b = fl * block_sz;
         auto bh_b = bh_stride * bh;
         auto *i = in + (bh_b + fl_b * i1) * itype_sz_;

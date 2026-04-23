@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -38,6 +38,12 @@
 #include "gpu/intel/compute/kernel.hpp"
 #include "gpu/intel/compute/kernel_ctx.hpp"
 
+namespace gemmstone {
+namespace dsl {
+struct kernel_t;
+}
+} // namespace gemmstone
+
 namespace dnnl {
 namespace impl {
 namespace gpu {
@@ -45,7 +51,7 @@ namespace intel {
 
 namespace jit {
 struct generator_base_t;
-struct kernel_t;
+namespace dsl = gemmstone::dsl;
 } // namespace jit
 
 class engine_t : public gpu::engine_t {
@@ -60,14 +66,17 @@ public:
     }
 
     virtual status_t create_kernel(
-            compute::kernel_t *kernel, jit::generator_base_t *jitter) const = 0;
+            compute::kernel_t *kernel, jit::generator_base_t *jitter) const
+            = 0;
 
     virtual status_t create_kernel(compute::kernel_t &kernel,
-            const jit::kernel_t &kernel_ir) const = 0;
+            const jit::dsl::kernel_t &kernel_ir) const
+            = 0;
 
     virtual status_t create_kernels(std::vector<compute::kernel_t> *kernels,
             const std::vector<const char *> &kernel_names,
-            const compute::kernel_ctx_t &kernel_ctx) const = 0;
+            const compute::kernel_ctx_t &kernel_ctx) const
+            = 0;
 
     status_t create_kernel_bundle(compute::kernel_bundle_t &bundle,
             const std::vector<const char *> &kernel_names,
@@ -80,12 +89,14 @@ public:
 
     virtual status_t create_kernel_from_binary(compute::kernel_t &kernel,
             const xpu::binary_t &binary, const char *kernel_name,
-            const compute::program_src_t &src) const = 0;
+            const compute::program_src_t &src) const
+            = 0;
 
     virtual status_t create_kernels_from_cache_blob(
             const cache_blob_t &cache_blob,
             std::vector<compute::kernel_t> &kernels,
-            const std::vector<const char *> &kernel_names) const = 0;
+            const std::vector<const char *> &kernel_names) const
+            = 0;
 
     status_t create_kernel_from_cache_blob(const cache_blob_t &cache_blob,
             compute::kernel_t &kernel, const char *kernel_name) const {
@@ -95,7 +106,7 @@ public:
         if (kernels.size() != 1) return status::runtime_error;
         kernel = std::move(kernels[0]);
         return status::success;
-    };
+    }
 
     status_t get_zero_pad_primitive(
             impl::primitive_t *&result, const resource_mapper_t *&resources) {
@@ -115,7 +126,7 @@ public:
         result = zero_pad_primitive_.get();
         resources = &zero_pad_resources_;
         return result != nullptr ? status::success : status::unimplemented;
-    };
+    }
 
     bool mayiuse_f16_accumulator_with_f16() const override {
         // XeHPC+ must use f32 accumulation with f16 operations as documented.
@@ -204,7 +215,9 @@ private:
 } // namespace dnnl
 
 // Exported for testing purposes only.
-extern "C" bool DNNL_API dnnl_impl_gpu_mayiuse_ngen_kernels(
+extern "C" bool DNNL_API dnnl_impl_gpu_intel_mayiuse_ngen_kernels(
+        dnnl::impl::engine_t *engine);
+extern "C" DNNL_API const char *dnnl_impl_gpu_intel_get_isa_name(
         dnnl::impl::engine_t *engine);
 
 #endif

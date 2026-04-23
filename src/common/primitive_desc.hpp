@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2016-2025 Intel Corporation
+* Copyright 2016 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -70,8 +70,20 @@ struct primitive_desc_t : public c_compatible {
     const primitive_attr_t *attr() const { return &attr_; }
     primitive_kind_t kind() const { return kind_; }
 
-    const char *info(engine_t *engine) const {
-        if (!info_.is_initialized()) info_.init(engine, this);
+    // Returns an `info` string for the primitive configuration including
+    //     details like name, implementation, prop_kind, tensor info,
+    //     attributes and problem description.
+    // Note: If the info string hasn't already been constructed, it will be
+    //     automatically initialized and built before returning.
+    //     This can be optionally disabled by setting `do_init` argument to
+    //     `false` - in that case, the call to `info(...)` returns an empty
+    //     string if `info_` is empty. This helps avoiding overheads
+    //     associated with constructing `info_` strings when it isn't desired.
+    // Note: The `do_init` workaround is utilized during ITT task setup for
+    //     primitive operations, since the `info_` string is used as metadata
+    //     for ITT tasks and can significantly slow down execution times.
+    const char *info(engine_t *engine, bool do_init = true) const {
+        if (!info_.is_initialized() && do_init) info_.init(engine, this);
         return info_.c_str();
     }
 
@@ -151,7 +163,7 @@ struct primitive_desc_t : public c_compatible {
                            .has_runtime_dims_or_strides()
                 || memory_desc_wrapper(invariant_dst_md())
                            .has_runtime_dims_or_strides();
-    };
+    }
 
     enum class arg_usage_t { unused, input, output };
     virtual arg_usage_t arg_usage(int arg) const {
@@ -170,22 +182,35 @@ struct primitive_desc_t : public c_compatible {
         }
         if (arg & DNNL_ARG_ATTR_SCALES) {
             int scale_arg = arg & ~DNNL_ARG_ATTR_SCALES;
-            return !attr()->scales_.has_default_values(scale_arg)
-                    ? arg_usage_t::input
-                    : arg_usage_t::unused;
+            if (!attr()->scales_.has_default_values(scale_arg)) {
+                if (attr()->scales_.get(scale_arg).is_dynamic())
+                    return arg_usage_t::output;
+                else
+                    return arg_usage_t::input;
+            } else
+                return arg_usage_t::unused;
         }
+
         if (arg == DNNL_ARG_SCRATCHPAD)
             return !is_zero_md(scratchpad_md()) ? arg_usage_t::output
                                                 : arg_usage_t::unused;
         if (arg == DNNL_ARG_ATTR_DROPOUT_MASK)
-            return !attr()->dropout_.has_default_values() ? arg_usage_t::output
-                                                          : arg_usage_t::unused;
+            return !attr()->dropout_.has_default_values()
+                            && attr()->dropout_.has_output_mask()
+                    ? arg_usage_t::output
+                    : arg_usage_t::unused;
         if (arg == DNNL_ARG_ATTR_DROPOUT_PROBABILITY)
             return !attr()->dropout_.has_default_values() ? arg_usage_t::input
                                                           : arg_usage_t::unused;
         if (arg == DNNL_ARG_ATTR_DROPOUT_SEED)
             return !attr()->dropout_.has_default_values() ? arg_usage_t::input
                                                           : arg_usage_t::unused;
+        if (arg == DNNL_ARG_ATTR_DROPOUT_OFFSET)
+            return !attr()->dropout_.has_default_values()
+                            && attr()->dropout_.use_offset_
+                    ? arg_usage_t::input
+                    : arg_usage_t::unused;
+
         if (arg == DNNL_ARG_ATTR_ROUNDING_SEED)
             return !attr()->rounding_mode_.has_default_values()
                     ? arg_usage_t::input
@@ -255,12 +280,12 @@ struct primitive_desc_t : public c_compatible {
     virtual const memory_desc_t *invariant_bia_md() const {
         return invariant_wei_md(1);
     }
-    virtual const memory_desc_t *invariant_dst_md() const {
+    virtual const memory_desc_t *invariant_dst_md(int index = 0) const {
         const auto prop_kind = get_prop_kind();
         return utils::one_of(prop_kind, prop_kind::backward_data,
                        prop_kind::backward_weights, prop_kind::backward)
-                ? diff_dst_md()
-                : dst_md();
+                ? diff_dst_md(index)
+                : dst_md(index);
     }
 
     virtual format_kind_t invariant_src_user_format_kind(int index = 0) const {
@@ -411,7 +436,8 @@ struct primitive_desc_t : public c_compatible {
     virtual status_t create_primitive(
             std::pair<std::shared_ptr<primitive_t>, cache_state_t> &primitive,
             engine_t *engine, const cache_blob_t &cache_blob,
-            bool force_create_from_blob) const = 0;
+            bool force_create_from_blob) const
+            = 0;
 
     // This is a proxy interface that is used for creating nested primitives.
     // It ignores the cache_state_t value that indicates whether the requested primitive
@@ -464,6 +490,28 @@ struct primitive_desc_t : public c_compatible {
 
     int pd_iterator_offset() const { return pd_iterator_offset_; }
     int skip_idx() const { return skip_idx_; }
+
+    bool has_large_buffers() const {
+        auto is_large = [](const memory_desc_t *md) {
+            return memory_desc_wrapper(md).size() > UINT32_MAX;
+        };
+
+        for (int i = 0; i < n_inputs(); i++) {
+            if (is_large(invariant_src_md(i))) return true;
+        }
+        if (is_large(invariant_wei_md())) return true;
+        for (int i = 0; i < n_outputs(); i++) {
+            if (is_large(invariant_dst_md(i))) return true;
+        }
+        const auto &post_ops = attr()->post_ops_;
+        for (int i = 0; i < post_ops.len(); i++) {
+            const auto &e = post_ops.entry_[i];
+            if (e.is_binary()) {
+                if (is_large(&(e.binary.src1_desc))) return true;
+            }
+        }
+        return false;
+    }
 
 protected:
     primitive_attr_t attr_;
@@ -545,7 +593,9 @@ protected:
                 primitive, this, engine, use_global_scratchpad, cache_blob, \
                 force_create_from_blob); \
     } \
-    const char *name() const override { return impl_name; } \
+    const char *name() const override { \
+        return impl_name; \
+    } \
     template <typename pd_t> \
     friend status_t primitive_desc_t::create(primitive_desc_t **pd, \
             const op_desc_t *adesc, const primitive_attr_t *attr, \

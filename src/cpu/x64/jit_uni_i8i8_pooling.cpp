@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2017-2025 Intel Corporation
+* Copyright 2017 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -198,9 +198,9 @@ struct jit_uni_i8i8_pooling_fwd_ker_t : public jit_generator_t {
 
     Mmx mmx_mask(int ll) {
         return Mmx(mmx_msk_base_reg + ll);
-    }; // ll: 0..4 [Mmx(2)...Mmx(5)]
+    } // ll: 0..4 [Mmx(2)...Mmx(5)]
 
-    static bool init_post_ops_conf(jit_pool_conf_t &jpp,
+    static status_t init_post_ops_conf(jit_pool_conf_t &jpp,
             const primitive_attr_t &attr, const memory_desc_wrapper &dst_d);
 
     void init_tmp_reg();
@@ -283,7 +283,7 @@ void jit_uni_i8i8_pooling_fwd_ker_t<avx2>::load_vreg_mask_q(int ll) {
 
     // Move mask from ll-th pos to 0-th pos
     if (ll > 0) vpermq(vreg_mask_q, vreg_mask_q, ll);
-};
+}
 
 template <>
 void jit_uni_i8i8_pooling_fwd_ker_t<sse41>::load_src_max_op(
@@ -357,7 +357,7 @@ void jit_uni_i8i8_pooling_fwd_ker_t<avx2>::load_src_max_op(
 
     } else
         vmovups(vreg_src(jj), ptr[aux_reg_src_w + offset]);
-};
+}
 
 template <>
 void jit_uni_i8i8_pooling_fwd_ker_t<avx512_core>::load_src_max_op(
@@ -371,7 +371,7 @@ void jit_uni_i8i8_pooling_fwd_ker_t<avx512_core>::load_src_max_op(
             vmovdqu8(vreg_src(jj) | mask(0), ptr[aux_reg_src_w + offset]);
     } else
         vmovups(vreg_src(jj), ptr[aux_reg_src_w + offset]);
-};
+}
 
 template <>
 void jit_uni_i8i8_pooling_fwd_ker_t<sse41>::load_src_avg_op(
@@ -496,7 +496,7 @@ void jit_uni_i8i8_pooling_fwd_ker_t<avx2>::load_src_avg_op(
         case u8: load_i8(false, vreg_src_s32(jj, ll)); break;
         default: assert(!"unsupported src data type");
     }
-};
+}
 
 template <>
 void jit_uni_i8i8_pooling_fwd_ker_t<avx512_core>::load_src_avg_op(
@@ -512,7 +512,7 @@ void jit_uni_i8i8_pooling_fwd_ker_t<avx512_core>::load_src_avg_op(
         case u8: vpmovzxbd(vr_src, ptr[aux_reg_src_w + offset]); break;
         default: assert(!"unsupported src data type");
     }
-};
+}
 
 template <cpu_isa_t isa>
 void jit_uni_i8i8_pooling_fwd_ker_t<isa>::load_src(int jj, int ll, int c_tail) {
@@ -1373,14 +1373,13 @@ status_t jit_uni_i8i8_pooling_fwd_ker_t<isa>::init_conf(
         default: return status::unimplemented;
     }
 
-    VDISPATCH_POOLING_IC(init_post_ops_conf(jpp, *ppd->attr(), dst_d),
-            VERBOSE_UNSUPPORTED_POSTOP);
+    CHECK(init_post_ops_conf(jpp, *ppd->attr(), dst_d));
 
     return status::success;
 }
 
 template <cpu_isa_t isa>
-bool jit_uni_i8i8_pooling_fwd_ker_t<isa>::init_post_ops_conf(
+status_t jit_uni_i8i8_pooling_fwd_ker_t<isa>::init_post_ops_conf(
         jit_pool_conf_t &jpp, const primitive_attr_t &attr,
         const memory_desc_wrapper &dst_d) {
     const auto &post_ops = attr.post_ops_;
@@ -1388,30 +1387,32 @@ bool jit_uni_i8i8_pooling_fwd_ker_t<isa>::init_post_ops_conf(
     jpp.with_eltwise = false;
     jpp.with_binary = false;
 
-    if (post_ops.len() == 0) return true;
+    if (post_ops.len() == 0) return status::success;
 
-    if (jpp.alg == pooling_max) {
-        /*
-        * TODO Currently eltwise/binary injectors assumes that data in vmm has f32 dt.
-        * In max pooling data remains in i8 data type.
-        */
-        return false;
-    }
+    // TODO: currently, eltwise/binary injectors assume vmms data is f32.
+    // In max pooling data remains in i8 data type.
+    VDISPATCH_POOLING_IC(jpp.alg != pooling_max, "%s: %s",
+            VERBOSE_UNSUPPORTED_POSTOP, VERBOSE_BAD_ALGORITHM);
 
     jpp.with_eltwise = post_ops.find(primitive_kind::eltwise) != -1;
     jpp.with_binary = post_ops.find(primitive_kind::binary) != -1;
     jpp.with_postops = jpp.with_eltwise || jpp.with_binary;
 
-    if (!jpp.with_postops) return false;
+    VDISPATCH_POOLING_IC(jpp.with_postops, VERBOSE_UNSUPPORTED_POSTOP);
 
     jpp.post_ops = post_ops;
 
     using namespace injector;
-    return post_ops_ok(post_ops_ok_args_t(isa, {binary, eltwise}, post_ops,
-            &dst_d, false /*sum_at_pos_0_only*/,
+    const bool po_ok = post_ops_ok(post_ops_ok_args_t(isa, {binary, eltwise},
+            post_ops, &dst_d, false /*sum_at_pos_0_only*/,
             false /*sum_requires_scale_one*/, false /*sum_requires_zp_zero*/,
             false /*sum_requires_same_params*/,
             get_supported_bcast_strategies()));
+
+    // Verbose is reported inside `post_ops_ok`.
+    if (!po_ok) return status::unimplemented;
+
+    return status::success;
 }
 
 template <cpu_isa_t isa>
@@ -1457,43 +1458,39 @@ status_t jit_uni_i8i8_pooling_fwd_t<isa>::execute_forward(
             - (cpu_isa_traits_t<isa>::vlen - 1));
 
     parallel_nd(jpp.mb, jpp.od, jpp.oh, jpp.ow,
-            [&](dim_t n, dim_t od, dim_t oh, dim_t ow) {
-                dim_t id = nstl::max(od * jpp.stride_d - jpp.f_pad, dim_t(0));
-                dim_t ih = nstl::max(oh * jpp.stride_h - jpp.t_pad, dim_t(0));
-                dim_t iw = nstl::max(ow * jpp.stride_w - jpp.l_pad, dim_t(0));
+            [= COMPAT_THIS_CAPTURE](dim_t n, dim_t od, dim_t oh, dim_t ow) {
+        dim_t id = nstl::max(od * jpp.stride_d - jpp.f_pad, dim_t(0));
+        dim_t ih = nstl::max(oh * jpp.stride_h - jpp.t_pad, dim_t(0));
+        dim_t iw = nstl::max(ow * jpp.stride_w - jpp.l_pad, dim_t(0));
 
-                dim_t kd_start
-                        = nstl::max(dim_t(0), jpp.f_pad - od * jpp.stride_d);
-                dim_t kd_end = nstl::min(
-                        dim_t(jpp.kd), jpp.id + jpp.f_pad - od * jpp.stride_d);
-                dim_t kh_start
-                        = nstl::max(dim_t(0), jpp.t_pad - oh * jpp.stride_h);
-                dim_t kh_end = nstl::min(
-                        dim_t(jpp.kh), jpp.ih + jpp.t_pad - oh * jpp.stride_h);
-                dim_t kw_start
-                        = nstl::max(dim_t(0), jpp.l_pad - ow * jpp.stride_w);
-                dim_t kw_end = nstl::min(
-                        dim_t(jpp.kw), jpp.iw + jpp.l_pad - ow * jpp.stride_w);
+        dim_t kd_start = nstl::max(dim_t(0), jpp.f_pad - od * jpp.stride_d);
+        dim_t kd_end = nstl::min(
+                dim_t(jpp.kd), jpp.id + jpp.f_pad - od * jpp.stride_d);
+        dim_t kh_start = nstl::max(dim_t(0), jpp.t_pad - oh * jpp.stride_h);
+        dim_t kh_end = nstl::min(
+                dim_t(jpp.kh), jpp.ih + jpp.t_pad - oh * jpp.stride_h);
+        dim_t kw_start = nstl::max(dim_t(0), jpp.l_pad - ow * jpp.stride_w);
+        dim_t kw_end = nstl::min(
+                dim_t(jpp.kw), jpp.iw + jpp.l_pad - ow * jpp.stride_w);
 
-                auto p = jit_uni_i8i8_pool_call_params_t();
-                p.src_i8 = &src_i8[get_offset(src_d, n, 0, id, ih, iw)
-                        * src_d.data_type_size()];
-                p.dst_i8 = &dst_i8[get_offset(dst_d, n, 0, od, oh, ow)
-                        * dst_d.data_type_size()];
-                p.dst_orig = dst_i8;
-                p.kd_range = kd_end - kd_start;
-                p.kh_range = kh_end - kh_start;
-                p.kw_range = kw_end - kw_start;
-                p.idivider = 1.0f
-                        / ((jpp.alg == pooling_avg_exclude_padding)
-                                        ? p.kd_range * p.kh_range * p.kw_range
-                                        : jpp.kd * jpp.kh * jpp.kw);
-                p.src_safe_access = src_safe_access;
-                p.dst_safe_access = dst_safe_access;
-                p.post_ops_binary_rhs_arg_vec
-                        = post_ops_binary_rhs_arg_vec.data();
-                (*ker_)(&p);
-            });
+        auto p = jit_uni_i8i8_pool_call_params_t();
+        p.src_i8 = &src_i8[get_offset(src_d, n, 0, id, ih, iw)
+                * src_d.data_type_size()];
+        p.dst_i8 = &dst_i8[get_offset(dst_d, n, 0, od, oh, ow)
+                * dst_d.data_type_size()];
+        p.dst_orig = dst_i8;
+        p.kd_range = kd_end - kd_start;
+        p.kh_range = kh_end - kh_start;
+        p.kw_range = kw_end - kw_start;
+        p.idivider = 1.0f
+                / ((jpp.alg == pooling_avg_exclude_padding)
+                                ? p.kd_range * p.kh_range * p.kw_range
+                                : jpp.kd * jpp.kh * jpp.kw);
+        p.src_safe_access = src_safe_access;
+        p.dst_safe_access = dst_safe_access;
+        p.post_ops_binary_rhs_arg_vec = post_ops_binary_rhs_arg_vec.data();
+        (*ker_)(&p);
+    });
     return status::success;
 }
 

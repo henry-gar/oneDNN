@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -91,12 +91,10 @@ protected:
                 !(supported_format(p.fmt_i) && supported_format(p.fmt_o)),
                 "Unsupported generic format tag");
 
-        catch_expected_failures(
-                [&]() {
-                    engine eng = get_test_engine();
-                    RunTest(eng, eng);
-                },
-                p.expect_to_fail, p.expected_status);
+        catch_expected_failures([&]() {
+            engine eng = get_test_engine();
+            RunTest(eng, eng);
+        }, p.expect_to_fail, p.expected_status);
     }
 #endif
     bool supported_format(memory::format_tag fmt) {

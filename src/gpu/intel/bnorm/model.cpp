@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -56,10 +56,14 @@ int get_nhwc_sp_block_size(
         const dim_t nblock = div_up(sp, curr_block_size);
         const dim_t nthr_gen = nblock * ic_nsg;
 
-        const float curr_efficiency_eus
-                = (float)nthr_gen / rnd_up(nthr_gen, eu_count);
+        auto efficiency = [](dim_t size, dim_t block) {
+            // avoid msvc warning 'potential divide by zero'
+            if (size <= 0 || block == 0) return 0.f;
+            return (float)size / rnd_up(size, block);
+        };
+        const float curr_efficiency_eus = efficiency(nthr_gen, eu_count);
         const float curr_efficiency_thr
-                = (float)nthr_gen / rnd_up(nthr_gen, eu_count * threads_per_eu);
+                = efficiency(nthr_gen, eu_count * threads_per_eu);
 
         if (curr_efficiency_thr > efficiency_thr) {
             efficiency_thr = curr_efficiency_thr;
@@ -91,7 +95,8 @@ void init_hw_params(hw_params_t &hw_params, impl::engine_t *engine) {
             = intel_engine->device_info()->max_wg_size(large_grf_mode);
     hw_params.eus_per_ss = intel_engine->device_info()->max_eus_per_wg();
     hw_params.max_ss = div_up(hw_params.eu_count, hw_params.eus_per_ss);
-    hw_params.max_slm_size = compute::device_info_t::max_slm_size(gpu_arch);
+    hw_params.max_slm_size = compute::device_info_t::max_slm_size(
+            intel_engine->device_info()->gpu_product());
     hw_params.engine = engine;
 
     // Experimentally selected, based on microbenchmarks results
@@ -479,7 +484,7 @@ size_t get_ss_util_idx(float v) {
     for (size_t i = 0; i < ss_util_set.size(); i++)
         if (v <= ss_util_set[i]) return i;
     return ss_util_set.size() - 1;
-};
+}
 size_t get_appr_table_idx(float ss_util, data_type_t dt, mem_operation_t op,
         bool is_reusable, data_location_t location) {
     size_t idx = get_ss_util_idx(ss_util);

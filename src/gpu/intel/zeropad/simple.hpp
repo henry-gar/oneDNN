@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -49,6 +49,7 @@ struct simple_t : public primitive_t {
 
     status_t init(impl::engine_t *engine) override {
         compute::kernel_ctx_t kernel_ctx;
+        kernel_ctx.require_stateless_addressing(pd()->has_large_buffers());
 
         std::vector<compute::kernel_t> kernels {};
         CHECK(create_kernels(engine, &kernels,

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2022 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -101,6 +101,6 @@ HANDLE_EXCEPTIONS_FOR_TEST(global_scratchpad_t, TestGlobalScratchpad) {
     global_conv_ctx2.Setup(src2, wei2, dst2, str2, dil2, pad_l2, pad_r2);
 
     // if something goes wrong, test should return 139 on Linux.
-};
+}
 
 } // namespace dnnl

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2023 Intel Corporation
+* Copyright 2020 Intel Corporation
 * Copyright 2022-2023 FUJITSU LIMITED
 * Copyright 2025 Arm Ltd. and affiliates
 *
@@ -133,7 +133,7 @@ private:
     post_ops_t post_ops_;
     jit_generator_t *host_;
     // Key is a numerical order of a post-op in attributes.
-    std::map<int, jit_uni_eltwise_injector_f32_t<to_vla_sve(isa)>>
+    std::map<int, jit_uni_eltwise_injector_t<to_vla_sve(isa)>>
             alg_to_eltwise_injector_;
     std::unique_ptr<binary_injector::jit_uni_binary_injector_t<isa>>
             binary_injector_;

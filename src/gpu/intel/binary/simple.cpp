@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -58,7 +58,7 @@ status_t simple_t::pd_t::init_conf(impl::engine_t *engine) {
         if (is_ternary_op()) {
             conf.src2_bcast_dims[i] = i < ndims
                     ? (src2_d.dims()[i] == 1
-                            && src2_d.dims()[i] != dst_d.dims()[i])
+                              && src2_d.dims()[i] != dst_d.dims()[i])
                     : 0;
         }
     }
@@ -125,7 +125,7 @@ status_t simple_t::pd_t::init_conf(impl::engine_t *engine) {
 
 status_t simple_t::pd_t::init_kernel_ctx(
         compute::kernel_ctx_t &kernel_ctx) const {
-    def_binary_alg_kinds(kernel_ctx);
+    kernel_ctx.require_stateless_addressing(has_large_buffers());
     kernel_ctx.define_int("BINARY_ALG", conf.alg);
     kernel_ctx.define_int("IS_TERNARY", (conf.alg == alg_kind::binary_select));
 

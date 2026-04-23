@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@
 #include "common/verbose_msg.hpp"
 #include "gpu/intel/compute/utils.hpp"
 #include "gpu/intel/gemm/jit/walk_orders.hpp"
+#include "gpu/intel/gemm/utils.hpp"
 #include "gpu/intel/gemm/xe_systolic_copy_kernel.hpp"
 
 namespace dnnl {
@@ -100,7 +101,7 @@ status_t xe_hp_systolic_t::pd_t::init(impl::engine_t *engine) {
     if (dt_int_ok) attr_skip_mask |= smask_t::zero_points;
 
     bool arch_ok = utils::one_of(arch, arch_t::xe_hp, arch_t::xe_hpg,
-            arch_t::xe_hpc, arch_t::xe2, arch_t::xe3);
+            arch_t::xe_hpc, arch_t::xe2, arch_t::xe3, arch_t::xe3p);
 
     VDISPATCH_GEMM(limits_ok, VERBOSE_RUNTIMEDIM_UNSUPPORTED);
     VDISPATCH_GEMM((dt_float_ok || dt_int_ok), VERBOSE_UNSUPPORTED_DT_CFG);
@@ -130,6 +131,8 @@ status_t xe_hp_systolic_t::pd_t::init(impl::engine_t *engine) {
     VDISPATCH_GEMM(scales_ok(), VERBOSE_UNSUPPORTED_SCALES_CFG);
 
     if (!attr()->zero_points_.has_default_values()) {
+        VDISPATCH_GEMM(!attr()->zero_points_.has_host_scalars(),
+                VERBOSE_UNSUPPORTED_ZP_CFG);
         VDISPATCH_GEMM(zp_ok(), VERBOSE_UNSUPPORTED_ZP_CFG);
     }
 
@@ -522,15 +525,13 @@ status_t xe_hp_systolic_t::init(impl::engine_t *engine) {
             if (clear_sum && !pd()->with_ab_zero_points()) continue;
             if (!copy_b ? pd()->packed_a() : pd()->packed_b()) continue;
 
-            using copy_kernel_params_t = xe_systolic_copy_kernel_t;
-            compute::kernel_ctx_t kernel_ctx;
-
             auto trans
                     = !copy_b ? pd()->desc()->transa() : pd()->desc()->transb();
-            copy_kernel_params_t params;
+            xe_systolic_copy_kernel_t params;
             CHECK(params.init(arch_, !copy_b ? a_type : b_type,
                     pd()->unroll_n(), copy_b, trans,
-                    pd()->with_ab_zero_points(), clear_sum));
+                    pd()->with_ab_zero_points(), clear_sum,
+                    pd()->has_large_buffers()));
 
             // TODO: Refactor so this can be switched to 1 batch compilation.
             // Having up to 4 calls to the OpenCL compiler is sub-optimal.
@@ -579,8 +580,9 @@ status_t xe_hp_systolic_t::init_compute(impl::engine_t *engine) {
     kd_t kd_full;
 
     bool is_integrated = intel_engine->device_info()->is_integrated();
+    auto product = intel_engine->device_info()->gpu_product();
 
-    auto status = kd_full.select_kernel(arch_, stepping, eu_count_,
+    auto status = kd_full.select_kernel(product, stepping, eu_count_,
             is_integrated, pd()->with_batch(), pd()->packed_c(), trans_co,
             pd()->with_a_zero_points(), pd()->with_b_zero_points(),
             pd()->with_c_zero_points(), pd()->with_bias(), pd()->alpha(),
@@ -618,7 +620,7 @@ status_t xe_hp_systolic_t::init_compute(impl::engine_t *engine) {
 
                 kd_t kd;
 
-                auto status = kd.select_kernel(arch_, stepping, eu_count_,
+                auto status = kd.select_kernel(product, stepping, eu_count_,
                         is_integrated, pd()->with_batch(), pd()->packed_c(),
                         trans_co, pd()->with_a_zero_points(),
                         pd()->with_b_zero_points(), this_c_offset,
@@ -628,6 +630,11 @@ status_t xe_hp_systolic_t::init_compute(impl::engine_t *engine) {
                         pd()->unroll_n(), pd()->alt(), std::move(gpu_post_ops));
 
                 if (status != status::success) return status;
+
+                // Protection against C zero-point host scalar implementation in gen gemm
+                auto *kd_problem
+                        = const_cast<gemmstone::GEMMProblem *>(kd.problem());
+                kd_problem->coPtrDims = pd()->c_quant.zp_ndims;
 
                 if (!got_info) {
                     compute_info_ = *kd.driver_info();
@@ -983,7 +990,8 @@ status_t xe_hp_systolic_t::execute(const exec_ctx_t &ctx) const {
                                   .exec_args
                                   .at(DNNL_ARG_ATTR_MULTIPLE_POST_OP(src.index)
                                           | DNNL_ARG_SRC_1)
-                                  .mem->memory_storage();
+                                  .mem()
+                                  ->memory_storage();
                 break;
             case pd_t::binary_src_t::prelu:
                 po_srcs[i]
@@ -991,7 +999,8 @@ status_t xe_hp_systolic_t::execute(const exec_ctx_t &ctx) const {
                                   .exec_args
                                   .at(DNNL_ARG_ATTR_MULTIPLE_POST_OP(src.index)
                                           | DNNL_ARG_WEIGHTS)
-                                  .mem->memory_storage();
+                                  .mem()
+                                  ->memory_storage();
                 break;
             case pd_t::binary_src_t::bias: po_srcs[i] = &bias; break;
             case pd_t::binary_src_t::scales:

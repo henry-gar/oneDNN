@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2024-2025 Intel Corporation
+* Copyright 2024 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -47,7 +47,7 @@ public:
         backend_ = xpu::sycl::get_backend(device_);
         VERROR_ENGINE_IMPL(
                 utils::one_of(backend_, backend_t::host, backend_t::opencl,
-                        backend_t::level0, backend_t::nvidia, backend_t::amd),
+                        backend_t::ze, backend_t::nvidia, backend_t::amd),
                 status::invalid_arguments, VERBOSE_UNSUPPORTED_BACKEND, "sycl");
 
         CHECK(check_device(kind(), device_, context_));
@@ -113,9 +113,15 @@ private:
 };
 
 #define DECLARE_COMMON_SYCL_ENGINE_FUNCTIONS() \
-    const ::sycl::device &device() const { return impl()->device(); } \
-    const ::sycl::context &context() const { return impl()->context(); } \
-    xpu::sycl::backend_t backend() const { return impl()->backend(); }
+    const ::sycl::device &device() const { \
+        return impl()->device(); \
+    } \
+    const ::sycl::context &context() const { \
+        return impl()->context(); \
+    } \
+    xpu::sycl::backend_t backend() const { \
+        return impl()->backend(); \
+    }
 
 } // namespace sycl
 } // namespace xpu

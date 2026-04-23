@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2017-2025 Intel Corporation
+* Copyright 2017 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -184,36 +184,35 @@ int fill_src_add(const prb_t *prb, const cfg_t &cfg, dnn_mem_t &mem_fp,
 
     benchdnn_parallel_nd(prb->ic, prb->mb, prb->id, prb->ih, prb->iw,
             [&](int64_t c, int64_t mb, int64_t d, int64_t h, int64_t w) {
-                const int64_t l_base
-                        = mb * prb->id * prb->ih * prb->iw + c * 239 * 2;
-                const int64_t sp = d * prb->ih * prb->iw + h * prb->iw + w;
-                const int64_t offset = data_off(prb, mb, c, 0, 0, 0) + sp;
-                const int64_t l = l_base + sp;
-                const float s = ref_src.get_f32_elem(offset);
-                const float m = ref_mean.get_f32_elem(c);
+        const int64_t l_base = mb * prb->id * prb->ih * prb->iw + c * 239 * 2;
+        const int64_t sp = d * prb->ih * prb->iw + h * prb->iw + w;
+        const int64_t offset = data_off(prb, mb, c, 0, 0, 0) + sp;
+        const int64_t l = l_base + sp;
+        const float s = ref_src.get_f32_elem(offset);
+        const float m = ref_mean.get_f32_elem(c);
 
-                if (!(prb->flags & GLOB_STATS) && s == 0) {
-                    mem_fp.set_f32_elem(offset, 1.f);
-                    return;
-                }
+        if (!(prb->flags & GLOB_STATS) && s == 0) {
+            mem_fp.set_f32_elem(offset, 1.f);
+            return;
+        }
 
-                float val = 0.f;
-                if (prb->flags & GLOB_STATS) {
-                    val = (l % 17) - 8;
-                } else {
-                    // The main purpose of such filling is to avoid catastrophic
-                    // cancellation. To do that, the sign of `Add` tensor final
-                    // values is kept the same as it would be after applying
-                    // bnorm: what's below mean, that has negative sign, what's
-                    // equal or higher - positive.
-                    const int64_t mod2_base = (mb + c + d + h + w) % 5;
-                    const float mod2_val = 1.f / (2LL << mod2_base);
-                    const int64_t sign_val = s < m ? -1 : 1;
-                    val = mod2_val * sign_val;
-                }
-                mem_fp.set_f32_elem(
-                        offset, round_to_nearest_representable(prb->dt, val));
-            });
+        float val = 0.f;
+        if (prb->flags & GLOB_STATS) {
+            val = (l % 17) - 8;
+        } else {
+            // The main purpose of such filling is to avoid catastrophic
+            // cancellation. To do that, the sign of `Add` tensor final
+            // values is kept the same as it would be after applying
+            // bnorm: what's below mean, that has negative sign, what's
+            // equal or higher - positive.
+            const int64_t mod2_base = (mb + c + d + h + w) % 5;
+            const float mod2_val = 1.f / (2LL << mod2_base);
+            const int64_t sign_val = s < m ? -1 : 1;
+            val = mod2_val * sign_val;
+        }
+        mem_fp.set_f32_elem(
+                offset, round_to_nearest_representable(prb->dt, val));
+    });
 
     if (mem_dt) SAFE(mem_dt.reorder(mem_fp), WARN);
 
@@ -514,8 +513,8 @@ void setup_cmp(compare::compare_t &cmp, const prb_t *prb, data_kind_t kind,
     // Since bwd testing is done using results from forward which are random
     // fp32 values, diff_scale starts fluctuating, so we check norm for both
     // data, SC, and SH.
-    const bool compare_with_norm = (prb->dir & FLAG_BWD);
-    cmp.set_norm_validation_mode(compare_with_norm);
+    const bool allow_norm_check = (prb->dir & FLAG_BWD);
+    cmp.set_allow_norm_check(allow_norm_check);
 
     // Digits must be non-negative for safe left-shifting when `digits_dt`
     // exceeds `digits_f32`.
@@ -564,31 +563,30 @@ void setup_cmp(compare::compare_t &cmp, const prb_t *prb, data_kind_t kind,
     const auto bnorm_add_check =
             [&, kind, prb](
                     const compare::compare_t::driver_check_func_args_t &args) {
-                bool ok = is_nvidia_gpu() && args.diff < args.trh;
-                if (ok) return true;
+        bool ok = is_nvidia_gpu() && args.diff < args.trh;
+        if (ok) return true;
 
-                if (!((prb->dir & FLAG_FWD) && kind == DST && prb->use_sh()))
-                    return false;
+        if (!((prb->dir & FLAG_FWD) && kind == DST && prb->use_sh()))
+            return false;
 
-                const auto &sh = ref_args.find(DNNL_ARG_SHIFT);
-                const auto &dst = ref_args.find(DNNL_ARG_DST);
-                const int64_t c
-                        = dst.get_idx(args.idx, 1 << 1 /* channel_mask */);
-                const float beta = sh.get_f32_elem(c);
-                // Using an empirically derived threshold, check if
-                // cancellation error in `|Y| = |a*X - (-b)|` is huge.
-                const float abs_exp = fabsf(args.exp);
-                const float norm_denom = abs_exp > FLT_MIN ? abs_exp : 1.f;
-                const float abs_exp_delta = fabsf(args.exp - beta);
-                bool maybe_cancel_error = abs_exp_delta / norm_denom > 1.f;
-                if (!maybe_cancel_error) return false;
+        const auto &sh = ref_args.find(DNNL_ARG_SHIFT);
+        const auto &dst = ref_args.find(DNNL_ARG_DST);
+        const int64_t c = dst.get_idx(args.idx, 1 << 1 /* channel_mask */);
+        const float beta = sh.get_f32_elem(c);
+        // Using an empirically derived threshold, check if
+        // cancellation error in `|Y| = |a*X - (-b)|` is huge.
+        const float abs_exp = fabsf(args.exp);
+        const float norm_denom = abs_exp > FLT_MIN ? abs_exp : 1.f;
+        const float abs_exp_delta = fabsf(args.exp - beta);
+        bool maybe_cancel_error = abs_exp_delta / norm_denom > 1.f;
+        if (!maybe_cancel_error) return false;
 
-                // Check for error in `a * X`
-                float diff_aX = fabsf((args.exp - beta) - (args.got - beta));
-                float rel_diff_aX = diff_aX
-                        / (abs_exp_delta > FLT_MIN ? abs_exp_delta : 1.f);
-                return rel_diff_aX <= args.trh;
-            };
+        // Check for error in `a * X`
+        float diff_aX = fabsf((args.exp - beta) - (args.got - beta));
+        float rel_diff_aX
+                = diff_aX / (abs_exp_delta > FLT_MIN ? abs_exp_delta : 1.f);
+        return rel_diff_aX <= args.trh;
+    };
     cmp.set_driver_check_function(bnorm_add_check);
 }
 
@@ -617,7 +615,7 @@ std::vector<int> supported_exec_args(dir_t dir) {
             DNNL_ARG_DIFF_SRC_1,
     };
     return (dir & FLAG_FWD) ? exec_fwd_args : exec_bwd_args;
-};
+}
 
 int init_ref_memory_args(dnn_mem_map_t &ref_mem_map, dnn_mem_map_t &mem_map,
         dnnl_primitive_t prim, const prb_t *prb, res_t *res,
@@ -748,7 +746,7 @@ int doit(const std::vector<benchdnn_dnnl_wrapper_t<dnnl_primitive_t>> &v_prim,
 
     args_t args(mem_map), ref_args(ref_mem_map);
 
-    SAFE(execute_and_wait(v_prim[0], args, res), WARN);
+    SAFE(run_execution(v_prim[0], args, res), WARN);
 
     check_correctness(prb, get_kinds_to_check(prb, FLAG_FWD), args, ref_args,
             setup_cmp, res, FLAG_FWD);
@@ -769,7 +767,7 @@ int doit(const std::vector<benchdnn_dnnl_wrapper_t<dnnl_primitive_t>> &v_prim,
         args = args_t(mem_map);
         ref_args = args_t(ref_mem_map);
 
-        SAFE(execute_and_wait(v_prim[1], args, res), WARN);
+        SAFE(run_execution(v_prim[1], args, res), WARN);
 
         check_correctness(prb, get_kinds_to_check(prb, FLAG_BWD), args,
                 ref_args, setup_cmp, res, FLAG_BWD);

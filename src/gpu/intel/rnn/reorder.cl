@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -94,8 +94,8 @@ __kernel void wei_reorder(__global DT_IN *input, __global DT_IN *scales,
 
     int reduction = 0;
     for (int d2 = 0; d2 < SRC_D2; ++d2) {
-        const int in_off = IN_OFF(d0, d1, d2, d3, d4, 0);
-        const int out_off = OUT_OFF(d0, d1, d2, d3, d4, 0);
+        const off_t in_off = IN_OFF(d0, d1, d2, d3, d4, 0);
+        const off_t out_off = OUT_OFF(d0, d1, d2, d3, d4, 0);
 
         REORDER(output[out_off], input[in_off], s);
 

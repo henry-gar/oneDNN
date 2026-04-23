@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -16,8 +16,7 @@
 
 #include "gpu/intel/jit/eltwise_injector.hpp"
 #include "common/impl_registration.hpp"
-#include "gpu/intel/jit/codegen/kernel.hpp"
-#include "gpu/intel/jit/codegen/ngen_helpers.hpp"
+#include "gpu/intel/jit/utils/type_bridge.hpp"
 
 #include <limits>
 
@@ -53,7 +52,7 @@ int eltwise_injector_f32_t<ngen_generator_t>::min_scratch_regs() {
             case eltwise_square: return 0;
             case eltwise_swish: return 1;
             case eltwise_tanh:
-            case eltwise_tanh_use_dst_for_bwd: return 2;
+            case eltwise_tanh_use_dst_for_bwd: return (hw() < gpu_xe3p) ? 2 : 1;
             case eltwise_round: return 0;
             case eltwise_linear: return 0;
             case eltwise_clip:
@@ -63,6 +62,7 @@ int eltwise_injector_f32_t<ngen_generator_t>::min_scratch_regs() {
             case eltwise_logistic:
             case eltwise_logistic_use_dst_for_bwd: return 0;
             case eltwise_stochastic_round: return 6;
+            case eltwise_mx_scale: return hw() >= gpu_xe_hpc ? 1 : 2;
             default: assert(!"unsupported eltwise algorithm");
         }
     } else {
@@ -72,7 +72,7 @@ int eltwise_injector_f32_t<ngen_generator_t>::min_scratch_regs() {
             case eltwise_square: return 0;
             case eltwise_linear: return 0;
             case eltwise_clip: return 1;
-            case eltwise_gelu_tanh: return 2;
+            case eltwise_gelu_tanh: return (hw() < gpu_xe3p) ? 2 : 1;
             default: assert(!"unsupported eltwise algorithm");
         }
     }
@@ -162,24 +162,24 @@ int eltwise_injector_f32_t<ngen_generator_t>::phase_count(alg_kind_t alg) {
             case eltwise_relu:
             case eltwise_relu_use_dst_for_bwd: return (alpha_ == 0) ? 1 : 2;
             case eltwise_soft_relu: return 10;
-            case eltwise_swish: return 5;
+            case eltwise_swish: return (hw() < gpu_xe3p) ? 5 : 3;
             case eltwise_tanh:
-            case eltwise_tanh_use_dst_for_bwd:
-                return (use_tanh_compat()) ? 9 : 6;
+            case eltwise_tanh_use_dst_for_bwd: return (hw() < gpu_xe3p) ? 6 : 1;
             case eltwise_linear: return (beta_ == 0) ? 1 : 2;
             case eltwise_clip:
             case eltwise_clip_v2:
             case eltwise_clip_v2_use_dst_for_bwd: return 2;
             case eltwise_gelu_tanh: return 8;
             case eltwise_logistic:
-            case eltwise_logistic_use_dst_for_bwd: return 4;
+            case eltwise_logistic_use_dst_for_bwd:
+                return (hw() < gpu_xe3p) ? 4 : 1;
             default: break;
         }
     } else {
         switch (alg) {
             case eltwise_abs: return 2;
             case eltwise_clip: return 4;
-            case eltwise_gelu_tanh: return 14;
+            case eltwise_gelu_tanh: return (hw() < gpu_xe3p) ? 14 : 8;
             default: break;
         }
     }
@@ -260,17 +260,24 @@ void eltwise_injector_f32_t<ngen_generator_t>::square_compute_fwd(
 template <typename ngen_generator_t>
 void eltwise_injector_f32_t<ngen_generator_t>::tanh_compute_fwd(
         int simd, const ngen::GRF &r, int phase, int off, int batch) {
-    const float log2e = 1.44269502162933349609375f; // log_2(e)
-    auto one_half = scratch_[0].f(7);
-    auto a = scratch_[off + batch].f();
-    switch (phase) {
-        case 0: h->mul(simd, a, abs(r), 2.f * log2e); break;
-        case 1: h->exp(simd, a, a); break;
-        case 2: h->mad(simd, a, one_half, a, one_half); break;
-        case 3: h->inv(simd, a, a); break;
-        case 4: h->add(simd, a, -a, 1.f); break;
-        case 5: h->csel(simd | ge | f0[0], r, a, -a, r); break;
-        default: assert(!"invalid phase");
+    if (hw() < gpu_xe3p) {
+        const float log2e = 1.44269502162933349609375f; // log_2(e)
+        auto one_half = scratch_[0].f(7);
+        auto a = scratch_[off + batch].f();
+        switch (phase) {
+            case 0: h->mul(simd, a, abs(r), 2.f * log2e); break;
+            case 1: h->exp(simd, a, a); break;
+            case 2: h->mad(simd, a, one_half, a, one_half); break;
+            case 3: h->inv(simd, a, a); break;
+            case 4: h->add(simd, a, -a, 1.f); break;
+            case 5: h->csel(simd | ge | f0[0], r, a, -a, r); break;
+            default: assert(!"invalid phase");
+        }
+    } else {
+        switch (phase) {
+            case 0: h->tanh(simd, r, r); break;
+            default: assert(!"invalid phase");
+        }
     }
 }
 
@@ -307,6 +314,69 @@ void eltwise_injector_f32_t<ngen_generator_t>::round_compute_fwd(
 }
 
 template <typename ngen_generator_t>
+void eltwise_injector_f32_t<ngen_generator_t>::mx_scale_compute_fwd(int simd,
+        const ngen::GRF &r, int off, const ngen::Subregister &seed, int nreg,
+        const ngen::DataType dst_dt, int phase) {
+    assert(simd == 32);
+    assert(utils::one_of(dst_dt, ngen::DataType::bf8, ngen::DataType::hf8,
+            static_cast<ngen::DataType>(0x5A)));
+
+    int scale_off = (phase / nreg * 4);
+    int grf_bytes = GRF::bytes(hw());
+    int scale_reg_incr = scale_off / grf_bytes;
+    auto scale_dst = scale_reg_incr ? ngen::GRF(seed.getBase() + scale_reg_incr)
+                                              .ub(scale_off % grf_bytes)
+                                    : seed.ub(scale_off);
+
+    ngen::GRF r_alt(off);
+    auto max = scratch_[0].f();
+
+    // Inverse max float within e8m0 range for f8_e2m5, f8_e4m3, f4_e2m1.
+    float zero_e8m0 = 5.877472e-39f, inv_fmax_bf8 = 0.000030517578125f,
+          inv_fmax_hf8 = 0.00390625f, inv_fmax_f4_e2m1 = 0.25f;
+    auto fmax = (dst_dt == ngen::DataType::bf8) ? Immediate::f(inv_fmax_bf8)
+            : (dst_dt == ngen::DataType::hf8)   ? Immediate::f(inv_fmax_hf8)
+                                              : Immediate::f(inv_fmax_f4_e2m1);
+
+    // Handle Inf/NaNs during max selection.
+    h->add(16, r.ud(0)(1), r.ud(0)(1), Immediate::ud(0x80800000));
+    h->add(16, r_alt.ud(0)(1), r_alt.ud(0)(1), Immediate::ud(0x80800000));
+
+    // Get Max value from group.
+    h->sel(16 | ge, max.f(0)(1), abs(r.f(0)(1)), abs(r_alt.f(0)(1)));
+
+    // Revert Inf/NaN offset.
+    h->add(16, r.d(0)(1), r.d(0)(1), Immediate::d(0x7F800000));
+    h->add(16, r_alt.d(0)(1), r_alt.d(0)(1), Immediate::d(0x7F800000));
+
+    h->sel(8 | ge, max.ud(0)(1), max.ud(8)(1), max.ud(0)(1));
+    h->sel(4 | ge, max.ud(0)(1), max.ud(4)(1), max.ud(0)(1));
+    h->sel(2 | ge, max.ud(0)(1), max.ud(2)(1), max.ud(0)(1));
+    h->sel(1 | ge, max.ud(0)(1), max.ud(1)(1), max.ud(0)(1));
+
+    h->add(1, max.d(0)(1), max.d(0)(1), Immediate::d(0x7F800000));
+
+    // Clamp max to e8m0 range.
+    h->and_(1, max.ud(0), max.ud(0), Immediate::ud(0x7F800000));
+
+    // Compute scale within e8m0 range.
+    h->mul(1, max.f(0), max.f(0), fmax);
+    h->and_(1, max.ud(0), max.ud(0), Immediate::ud(0x7F800000));
+    h->sel(1 | ge, max.f(0)(1), max.f(0), Immediate::f(zero_e8m0));
+
+    // Invert scale for application.
+    h->inv(1, max.f(1), max.f(0));
+
+    // Apply scale to dst.
+    h->mul(16, r, r, max.f(1)(0));
+    h->mul(16, r_alt.f(0)(1), r_alt.f(0)(1), max.f(1)(0));
+
+    // Store scale value.
+    h->shr(1, max.ud(0), max.ud(0), 23);
+    h->mov(1, scale_dst.ub(0), max.ub(0));
+}
+
+template <typename ngen_generator_t>
 void eltwise_injector_f32_t<ngen_generator_t>::sround_compute_fwd(int simd,
         const ngen::GRF &r, int phase, const ngen::Subregister &seed,
         const ngen::DataType dst_dt, int off) {
@@ -332,7 +402,7 @@ void eltwise_injector_f32_t<ngen_generator_t>::sround_compute_fwd(int simd,
             convert_ngen_type_to_dnnl(dst_dt));
     assert(dst_dt_digits <= 24);
 
-    data_type_t dnnl_t = to_dnnl(to_ir(dst_dt));
+    data_type_t dnnl_t = convert_ngen_type_to_dnnl(dst_dt);
     const float f_min = types::min_value<float>(dnnl_t);
     const float max = types::max_value<float>(dnnl_t);
     const float lowest = types::lowest_value<float>(dnnl_t);
@@ -385,18 +455,33 @@ void eltwise_injector_f32_t<ngen_generator_t>::philox_4x32(
         h->mov(4, key.ud(1)(4, 4, 2), uint32_t(0xBB67AE85u));
     }
 
-    h->template mov<uint16_t>(4, offs.uw(16)(1), Immediate::uv(0x00009988));
-    h->template mul<uint32_t>(
-            4, offs.ud(8)(1), key.ud(0)(4, 4, 1), offs.uw(16)(4, 4, 1));
-    h->add(4, offs.ud(8)(1), offs.ud(8)(4, 4, 1), sround_seed);
+    if (hw() < gpu_xe3p) {
+        h->template mov<uint16_t>(4, offs.uw(16)(1), Immediate::uv(0x00009988));
+        h->template mul<uint32_t>(
+                4, offs.ud(8)(1), key.ud(0)(4, 4, 1), offs.uw(16)(4, 4, 1));
+        h->add(4, offs.ud(8)(1), offs.ud(8)(4, 4, 1), sround_seed);
 
-    h->template mov<uint16_t>(8, offs.uw(8)(1), Immediate::uv(0x77665544));
-    h->template mov<uint16_t>(8, offs.uw(0)(1), Immediate::uv(0x33221100));
-    h->template mul<uint32_t>(
-            8, key.ud(8)(1), key.ud(0)(8, 8, 1), offs.uw(8)(8, 8, 1));
-    h->template mul<uint32_t>(
-            8, key.ud(0)(1), key.ud(0)(8, 8, 1), offs.uw(0)(8, 8, 1));
-    h->add(16, key, key, sround_seed);
+        h->template mov<uint16_t>(8, offs.uw(8)(1), Immediate::uv(0x77665544));
+        h->template mov<uint16_t>(8, offs.uw(0)(1), Immediate::uv(0x33221100));
+        h->template mul<uint32_t>(
+                8, key.ud(8)(1), key.ud(0)(8, 8, 1), offs.uw(8)(8, 8, 1));
+        h->template mul<uint32_t>(
+                8, key.ud(0)(1), key.ud(0)(8, 8, 1), offs.uw(0)(8, 8, 1));
+        h->add(16, key, key, sround_seed);
+    } else {
+        h->template mov<uint16_t>(4, offs.ud(0)(1), Immediate::uv(0x00009988));
+        h->template mul<uint32_t>(
+                4, offs.ud(0)(1), key.ud(0)(4, 4, 1), offs.ud(0)(4, 4, 1));
+        h->template mov<uint16_t>(8, offs.ud(8)(1), Immediate::uv(0x77665544));
+        h->template mov<uint16_t>(8, key.ud(8)(8, 8, 1), key.ud(0)(8, 8, 1));
+        h->template mul<uint32_t>(
+                8, key.ud(8)(1), key.ud(8)(8, 8, 1), offs.ud(8)(8, 8, 1));
+        h->template mov<uint16_t>(8, offs.ud(0)(1), Immediate::uv(0x33221100));
+        h->template mul<uint32_t>(
+                8, key.ud(0)(1), key.ud(0)(8, 8, 1), offs.ud(0)(8, 8, 1));
+        h->add(16, key, key, sround_seed);
+    }
+
     // Compute ctr_mul.
     h->mov(4, ctr_mul.ud(2)(4), 0xCD9E8D57);
     h->mov(4, ctr_mul.ud(0)(4), 0xD2511F53);
@@ -437,15 +522,20 @@ void eltwise_injector_f32_t<ngen_generator_t>::philox_4x32(
         const auto grf_size = ngen::GRF::bytes(hw());
         const int esize = grf_size / 8; // 8 = 2 * dword bytes
         const int steps = utils::div_up(8, esize);
-
-        auto acc = h->acc0.retype(DataType::ud);
-        for (int i = 0, off = 0; i < steps; ++i, off += 2 * esize)
-            h->mul(esize, acc[i](2), ctr.ud(off)(8, 4, 2),
-                    ctr_mul.uw(off)(8, 2, 4));
-        h->mach(8, ctrLo, ctr.ud(0)(8, 4, 2), ctr_mul.ud(0)(8, 4, 2));
-        h->mov(8, ctrHi, ctrLo);
-        for (int i = 0, off = 0; i < steps; ++i, off += 2 * esize)
-            h->mov(esize, ctr.ud(off)(2), acc[i](2));
+        if (hw() < gpu_xe3p) {
+            auto acc = h->acc0.retype(DataType::ud);
+            for (int i = 0, off = 0; i < steps; ++i, off += 2 * esize)
+                h->mul(esize, acc[i](2), ctr.ud(off)(8, 4, 2),
+                        ctr_mul.uw(off)(8, 2, 4));
+            h->mach(8, ctrLo, ctr.ud(0)(8, 4, 2), ctr_mul.ud(0)(8, 4, 2));
+            h->mov(8, ctrHi, ctrLo);
+            for (int i = 0, off = 0; i < steps; ++i, off += 2 * esize)
+                h->mov(esize, ctr.ud(off)(2), acc[i](2));
+        } else {
+            for (int i = 0, off = 0; i < steps; ++i, off += 2 * esize)
+                h->mul(esize, ctr.uq(off)(1), ctr.ud(off)(8, 4, 2),
+                        ctr_mul.ud(off)(8, 4, 2));
+        }
 
         // xor results
         h->xor_(8, ctr.ud(1)(2), ctr.ud(1)(8, 4, 2), ctr_mul.ud(1)(8, 4, 2));
@@ -473,15 +563,24 @@ void eltwise_injector_f32_t<ngen_generator_t>::philox_4x32(
 template <typename ngen_generator_t>
 void eltwise_injector_f32_t<ngen_generator_t>::swish_compute_fwd(
         int simd, const ngen::GRF &r, int phase, int off) {
-    const float log2e = 1.442695f; // log_2(e)
     auto temp = scratch_[off].f();
-    switch (phase) {
-        case 0: h->mul(simd, temp, r, -1.f * log2e * alpha_); break;
-        case 1: h->exp(simd, temp, temp); break;
-        case 2: h->add(simd, temp, temp, 1.f); break;
-        case 3: h->inv(simd, temp, temp); break;
-        case 4: h->mul(simd, r, r, temp); break;
-        default: assert(!"invalid phase");
+    if (hw() < gpu_xe3p) {
+        const float log2e = 1.442695f; // log_2(e)
+        switch (phase) {
+            case 0: h->mul(simd, temp, r, -1.f * log2e * alpha_); break;
+            case 1: h->exp(simd, temp, temp); break;
+            case 2: h->add(simd, temp, temp, 1.f); break;
+            case 3: h->inv(simd, temp, temp); break;
+            case 4: h->mul(simd, r, r, temp); break;
+            default: assert(!"invalid phase");
+        }
+    } else {
+        switch (phase) {
+            case 0: h->mul(simd, temp, r, alpha_); break;
+            case 1: h->sigm(simd, temp, temp); break;
+            case 2: h->mul(simd, r, r, temp); break;
+            default: assert(!"invalid phase");
+        }
     }
 }
 
@@ -534,13 +633,20 @@ void eltwise_injector_f32_t<ngen_generator_t>::gelu_tanh_compute_fwd(
 template <typename ngen_generator_t>
 void eltwise_injector_f32_t<ngen_generator_t>::logistic_compute_fwd(
         int simd, const ngen::GRF &r, int phase) {
-    const float log2e = 1.442695f; // log_2(e)
-    switch (phase) {
-        case 0: h->mul(simd, r, r, -1.f * log2e); break;
-        case 1: h->exp(simd, r, r); break;
-        case 2: h->add(simd, r, r, 1.f); break;
-        case 3: h->inv(simd, r, r); break;
-        default: assert(!"invalid phase");
+    if (hw() < gpu_xe3p) {
+        const float log2e = 1.442695f; // log_2(e)
+        switch (phase) {
+            case 0: h->mul(simd, r, r, -1.f * log2e); break;
+            case 1: h->exp(simd, r, r); break;
+            case 2: h->add(simd, r, r, 1.f); break;
+            case 3: h->inv(simd, r, r); break;
+            default: assert(!"invalid phase");
+        }
+    } else {
+        switch (phase) {
+            case 0: h->sigm(simd, r, r); break;
+            default: assert(!"invalid phase");
+        }
     }
 }
 
@@ -581,8 +687,10 @@ void eltwise_injector_f32_t<ngen_generator_t>::clip_prepare_bwd() {
 
 template <typename ngen_generator_t>
 void eltwise_injector_f32_t<ngen_generator_t>::tanh_prepare_fwd() {
-    auto one_half = scratch_[0].f(7);
-    h->mov(1, one_half, 0.5f);
+    if (hw() < gpu_xe3p) {
+        auto one_half = scratch_[0].f(7);
+        h->mov(1, one_half, 0.5f);
+    }
 }
 
 template <typename ngen_generator_t>
@@ -652,23 +760,37 @@ void eltwise_injector_f32_t<ngen_generator_t>::gelu_tanh_compute_bwd(
     if (hw() == gpu_xe_hp) msimd = 16;
 
     auto a = scratch_[off].f();
-    auto b = scratch_[off + batch].f();
-    switch (phase) {
-        case 0: h->mul(simd, a, r, r); break;
-        case 1: h->mul(simd, b, a, 3.0f * k); break;
-        case 2: h->mul(simd, a, a, k); break;
-        case 3: h->mad(simd, a, r, a, r); break;
-        case 4: h->mad(simd, b, r, b, r); break;
-        case 5: h->mul(simd, a, a, -2 * sqrt_2_over_pi * log2e); break;
-        case 6: h->mul(simd, b, b, 2 * sqrt_2_over_pi); break;
-        case 7: h->exp(msimd, a, a); break;
-        case 8: h->add(simd, r, a, 1.0f); break;
-        case 9: h->inv(msimd, r, r); break;
-        case 10: h->mul(simd, a, a, r); break;
-        case 11: h->mul(simd, a, a, b); break;
-        case 12: h->add(simd, a, a, 1.0f); break;
-        case 13: h->mul(simd, r, r, a); break;
-        default: assert(!"invalid phase");
+    if (hw() < gpu_xe3p) {
+        auto b = scratch_[off + batch].f();
+        switch (phase) {
+            case 0: h->mul(simd, a, r, r); break;
+            case 1: h->mul(simd, b, a, 3.0f * k); break;
+            case 2: h->mul(simd, a, a, k); break;
+            case 3: h->mad(simd, a, r, a, r); break;
+            case 4: h->mad(simd, b, r, b, r); break;
+            case 5: h->mul(simd, a, a, -2 * sqrt_2_over_pi * log2e); break;
+            case 6: h->mul(simd, b, b, 2 * sqrt_2_over_pi); break;
+            case 7: h->exp(msimd, a, a); break;
+            case 8: h->add(simd, r, a, 1.0f); break;
+            case 9: h->inv(msimd, r, r); break;
+            case 10: h->mul(simd, a, a, r); break;
+            case 11: h->mul(simd, a, a, b); break;
+            case 12: h->add(simd, a, a, 1.0f); break;
+            case 13: h->mul(simd, r, r, a); break;
+            default: assert(!"invalid phase");
+        }
+    } else {
+        switch (phase) {
+            case 0: h->mul(simd, a, r, k); break;
+            case 1: h->mad(simd, a, half(1.f), a, r); break;
+            case 2: h->mul(simd, a, a, r); break;
+            case 3: h->mul(simd, a, a, sqrt_2_over_pi); break;
+            case 4: h->tanh(simd, r, a); break;
+            case 5: h->mad(simd, a, a, a, -r); break;
+            case 6: h->mad(simd, r, half(0.5f), r, half(0.5f)); break;
+            case 7: h->mad(simd, r, r, r, a); break;
+            default: assert(!"invalid phase");
+        }
     }
 }
 
@@ -847,6 +969,9 @@ void eltwise_injector_f32_t<ngen_generator_t>::compute(const int *grfs,
 
                 int simd = nreg * GRF::bytes(hw()) / sizeof(float);
 
+                auto grf0_t = grfs[idx0 + (ii / 2)];
+                auto base_t = GRF(grf0_t).f();
+                auto grf1 = grfs[idx0 + off + (ii / 2)];
                 if (is_fwd_) {
                     switch ((int)alg_) {
                         case eltwise_elu:
@@ -925,6 +1050,10 @@ void eltwise_injector_f32_t<ngen_generator_t>::compute(const int *grfs,
                         case eltwise_stochastic_round:
                             sround_compute_fwd(simd, base, phase,
                                     GRF(seed).ud(off), dt, ii);
+                            break;
+                        case eltwise_mx_scale:
+                            mx_scale_compute_fwd(simd, base_t, grf1,
+                                    GRF(seed).ud(0), nreg, dt, ii);
                             break;
                         default: assert(!"unsupported eltwise algorithm");
                     }
@@ -1009,6 +1138,7 @@ REG_XEHPG_ISA(template struct eltwise_injector_f32_t<code_gen<gpu_xe_hpg>>);
 REG_XEHPC_ISA(template struct eltwise_injector_f32_t<code_gen<gpu_xe_hpc>>);
 REG_XE2_ISA(template struct eltwise_injector_f32_t<code_gen<gpu_xe2>>);
 REG_XE3_ISA(template struct eltwise_injector_f32_t<code_gen<gpu_xe3>>);
+REG_XE3P_ISA(template struct eltwise_injector_f32_t<code_gen<gpu_xe3p>>);
 
 #ifdef NGEN_ASM
 template struct eltwise_injector_f32_t<ngen::AsmCodeGenerator>;

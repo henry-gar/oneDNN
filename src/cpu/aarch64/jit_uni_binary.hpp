@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2023 Intel Corporation
+* Copyright 2019 Intel Corporation
 * Copyright 2022-2023 FUJITSU LIMITED
 * Copyright 2025 Arm Ltd. and affiliates
 *
@@ -43,7 +43,7 @@ struct jit_uni_binary_t : public primitive_t {
 
         status_t init(engine_t *engine);
 
-        jit_binary_conf_t get_conf() const { return conf_; };
+        jit_binary_conf_t get_conf() const { return conf_; }
 
     private:
         op_t get_op_type(const memory_desc_wrapper &src0_d);

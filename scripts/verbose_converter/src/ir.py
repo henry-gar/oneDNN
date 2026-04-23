@@ -1,5 +1,5 @@
 ################################################################################
-# Copyright 2024-2025 Intel Corporation
+# Copyright 2024 Intel Corporation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,7 +17,7 @@
 import enum
 import string
 from abc import ABC, abstractmethod
-from collections.abc import MutableMapping
+from collections.abc import Mapping as ImmutableMapping
 from dataclasses import MISSING, dataclass, fields
 from typing import Dict, List, Optional, Union
 
@@ -40,7 +40,7 @@ def hash_str(obj):
 
 
 @dataclass(eq=False)
-class Mapping(MutableMapping):
+class Mapping(ImmutableMapping):
     def __getitem__(self, item):
         try:
             value = getattr(self, item)
@@ -58,12 +58,6 @@ class Mapping(MutableMapping):
             return value
         except AttributeError:
             raise KeyError(item)
-
-    def __setitem__(self, item, value):
-        setattr(self, item, value)
-
-    def __delitem__(self, item):
-        delattr(self, item)
 
     def __len__(self):
         return len(fields(self))
@@ -158,9 +152,17 @@ class MemoryDescriptor(Mapping):
 @dataclass(eq=False)
 class Dropout(Mapping):
     tag: Optional[str] = None
+    seed_dt: str = "s32"
+    use_offset: bool = False
+    use_host_scalars: bool = False
 
     def __str__(self):
-        return self.tag or ""
+        if self.tag is None:
+            return ""
+        return (
+            f"{self.tag}:{self.seed_dt}:"
+            + f"{self.use_offset:1}:{self.use_host_scalars:1}"
+        )
 
 
 class FormattedMapping(Mapping, ABC):
@@ -284,6 +286,7 @@ class BinaryPostOp(AlgPostOp):
     dt: str
     mask: int = 0
     tag: str = "any"
+    strides: str = ""
 
 
 @dataclass(eq=False)
@@ -307,11 +310,17 @@ class QuantizationParam(Mapping):
     mask: int = 0
     groups: str = ""
     is_host_scalar: bool = False
+    quantization_mode: str = ""
 
     def __str__(self):
+        repr = f"{self.mask}:{self.data_type}"
         if self.groups:
-            return f"{self.mask}:{self.data_type}:{self.groups}"
-        return f"{self.mask}:{self.data_type}"
+            repr += f":{self.groups}"
+        if self.is_host_scalar:
+            repr += ":host_scalar"
+        if self.quantization_mode:
+            repr += f":{self.quantization_mode}"
+        return repr
 
 
 @dataclass(eq=False)
@@ -399,13 +408,10 @@ class Attributes(FormattedMapping):
         value = getattr(self, self._attr_name_to_field_name(item))
         if value is None:
             raise KeyError(item)
+        if isinstance(value, CompositeAttribute):
+            # CompositeAttributes get stringified when using the old interface
+            return str(value)
         return value
-
-    def __setitem__(self, item: str, value: Attribute):
-        return setattr(self, self._attr_name_to_field_name(item), value)
-
-    def __delitem__(self, item: str):
-        setattr(self, self._attr_name_to_field_name(item), None)
 
     def __iter__(self):
         for field in fields(self):

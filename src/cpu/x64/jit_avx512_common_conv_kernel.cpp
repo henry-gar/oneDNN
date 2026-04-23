@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2016-2025 Intel Corporation
+* Copyright 2016 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -152,25 +152,22 @@ void jit_avx512_common_conv_fwd_kernel_vmm_t<Vmm>::apply_postops(int ur_w) {
         const bool oc_blk_is_smaller_than_vmm = jcp.oc_block < isa_simd_width_;
         iterate(jcp.nb_oc_blocking, ur_w, mask_tail, oc_blk_is_smaller_than_vmm,
                 [&](const bool mask_flag, const int i_load, const int i_ur) {
-                    const size_t aux_output_l_off
-                            = get_output_offset(i_ur, i_load);
-                    const auto vmm_idx = vmm_out_idx(i_ur, i_load);
-                    vmm_idxs.emplace(vmm_idx);
+            const size_t aux_output_l_off = get_output_offset(i_ur, i_load);
+            const auto vmm_idx = vmm_out_idx(i_ur, i_load);
+            vmm_idxs.emplace(vmm_idx);
 
-                    rhs_arg_params.vmm_idx_to_out_reg.emplace(vmm_idx, reg_out);
-                    rhs_arg_params.vmm_idx_to_out_elem_off_val.emplace(
-                            vmm_idx, aux_output_l_off);
-                    if (mask_flag) {
-                        rhs_arg_params.vmm_tail_idx_.emplace(vmm_idx);
-                    }
-                });
+            rhs_arg_params.vmm_idx_to_out_reg.emplace(vmm_idx, reg_out);
+            rhs_arg_params.vmm_idx_to_out_elem_off_val.emplace(
+                    vmm_idx, aux_output_l_off);
+            if (mask_flag) { rhs_arg_params.vmm_tail_idx_.emplace(vmm_idx); }
+        });
 
         postops_injector_->compute_vector_range(vmm_idxs, rhs_arg_params);
     } else {
         iterate(jcp.nb_oc_blocking, ur_w,
                 [&](const bool, const int i_load, const int i_ur) {
-                    vmm_idxs.emplace(vmm_out_idx(i_ur, i_load));
-                });
+            vmm_idxs.emplace(vmm_out_idx(i_ur, i_load));
+        });
         postops_injector_->compute_vector_range(vmm_idxs);
     }
 }
@@ -924,8 +921,9 @@ status_t jit_avx512_common_conv_fwd_kernel_t::init_conf(jit_conv_conf_t &jcp,
     if (jcp.is_1stconv) {
         wei_tag = with_groups
                 ? ((jcp.simd_w == 4)
-                                ? pick(ndims - 3, gOwi4o, gOhwi4o, gOdhwi4o)
-                                : pick(ndims - 3, gOwi16o, gOhwi16o, gOdhwi16o))
+                                  ? pick(ndims - 3, gOwi4o, gOhwi4o, gOdhwi4o)
+                                  : pick(ndims - 3, gOwi16o, gOhwi16o,
+                                            gOdhwi16o))
                 : pick(ndims - 3, Owi16o, Ohwi16o, Odhwi16o);
     }
 
@@ -2160,8 +2158,8 @@ status_t jit_avx512_common_conv_bwd_data_kernel_f32_t::init_conf(
         return thr_eff;
     };
 
-    auto get_iw_block = [&](int nb_ic_blocking, int ur_w, float &eff,
-                                int nthr) {
+    auto get_iw_block
+            = [&](int nb_ic_blocking, int ur_w, float &eff, int nthr) {
         int res_iw_block = jcp.iw;
         if (!is_iw_threading_applicable()) return res_iw_block;
 
@@ -2451,8 +2449,8 @@ void jit_avx512_common_conv_bwd_weights_kernel_f32_t::
     };
     auto get_diff_dst_reg_idx
             = [ddst_pipeline_start_idx, ddst_pipeline_len](int i_ur) {
-                  return ddst_pipeline_start_idx + i_ur % ddst_pipeline_len;
-              };
+        return ddst_pipeline_start_idx + i_ur % ddst_pipeline_len;
+    };
 
     for (int i_kw = 0; i_kw < kw; i_kw++)
         for (int i_ic = 0; i_ic < ic_block_step; i_ic++) {
@@ -3301,8 +3299,9 @@ void jit_avx512_common_conv_bwd_weights_kernel_f32_t ::
         }
     }
 
-    const int oj_end_value = nstl::min(
-            oh, utils::div_up(ihp - b_pad - (kh - 1) * dilate_h, stride_h));
+    const int oj_end_value = nstl::min(oh,
+            utils::div_up(
+                    nstl::max(0, ihp - b_pad - (kh - 1) * dilate_h), stride_h));
     cmp(reg_oj, oj_end_value);
     jge(oh_label_end, T_NEAR);
 
@@ -3367,8 +3366,8 @@ void jit_avx512_common_conv_bwd_weights_kernel_f32_t::
             : (jcp.is_1stconv ? 1 : jcp.ic_block);
     const int out_mult
             = is_ddst_layout_nxc() ? jcp.ngroups * jcp.oc : jcp.oc_block;
-    const int input_bottom_padding_overlap
-            = div_up(jcp.ih + jcp.t_pad - (jcp.kh - 1), jcp.stride_h);
+    const int input_bottom_padding_overlap = div_up(
+            nstl::max(0, jcp.ih + jcp.t_pad - (jcp.kh - 1)), jcp.stride_h);
     const int bottom_pad_input_correction
             = jcp.ih + jcp.t_pad - input_bottom_padding_overlap * jcp.stride_h;
 
@@ -3499,8 +3498,8 @@ void jit_avx512_common_conv_bwd_weights_kernel_f32_t::
 
     int iw = jcp.iw;
     int ow = jcp.ow;
-    const int input_backpad_overlap
-            = div_up(jcp.id + jcp.f_pad - (jcp.kd - 1), jcp.stride_d);
+    const int input_backpad_overlap = div_up(
+            nstl::max(0, jcp.id + jcp.f_pad - (jcp.kd - 1)), jcp.stride_d);
     const int back_pad_input_correction
             = jcp.id + jcp.f_pad - input_backpad_overlap * jcp.stride_d;
 
@@ -4165,14 +4164,24 @@ status_t jit_avx512_common_conv_bwd_weights_kernel_f32_t::init_conf(
     jcp.typesize_in = typesize;
     jcp.typesize_out = typesize;
 
+    dim_t src_size = static_cast<dim_t>(jcp.mb)
+            * (is_data_layout_nxc ? jcp.ic : rnd_up(jcp.ic, jcp.ic_block))
+            * jcp.id * jcp.ih * jcp.iw * jcp.typesize_in;
+
+    dim_t diff_dst_size = static_cast<dim_t>(jcp.mb)
+            * (is_data_layout_nxc ? jcp.oc : rnd_up(jcp.oc, jcp.oc_block))
+            * jcp.id * jcp.ih * jcp.iw * jcp.typesize_in;
+
+    VDISPATCH_CONV_IC(src_size <= INT_MAX, VERBOSE_UNSUPPORTED_FEATURE,
+            "src size > INT_MAX is not supported");
+
+    VDISPATCH_CONV_IC(diff_dst_size <= INT_MAX, VERBOSE_UNSUPPORTED_FEATURE,
+            "diff_dst size > INT_MAX is not supported");
+
     bool use_nxc_harness = false;
     if (is_data_layout_nxc) {
         dim_t kernel_size = static_cast<dim_t>(jcp.ic) * jcp.oc * jcp.kd
                 * jcp.kh * jcp.kw * jcp.typesize_out;
-        dim_t src_size = static_cast<dim_t>(jcp.mb) * jcp.ic * jcp.id * jcp.ih
-                * jcp.iw * jcp.typesize_in;
-        dim_t diff_dst_size = static_cast<dim_t>(jcp.mb) * jcp.oc * jcp.id
-                * jcp.ih * jcp.iw * jcp.typesize_in;
         dim_t data_size = src_size + diff_dst_size;
 
         // The advantage of the nxc kernel is cache traversal, this comes at a

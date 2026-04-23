@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2025 Intel Corporation
+* Copyright 2021 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -61,9 +61,11 @@ void jit_uni_deconv_zp_pad_str_kernel_base_t::compute() {
 
         const int n_inner_ic_blk = jcp_.is_depthwise
                 ? 1
-                : (is_last_icb && ic_tail_exists ? utils::div_up(
-                           jcp_.ic_without_padding % jcp_.ic_block, 4)
-                                                 : (jcp_.ic_block / 4));
+                : (is_last_icb && ic_tail_exists
+                                  ? utils::div_up(jcp_.ic_without_padding
+                                                    % jcp_.ic_block,
+                                            4)
+                                  : (jcp_.ic_block / 4));
 
         const dim_t outer_wei_offset = icb * outer_icb_step;
 
@@ -322,7 +324,7 @@ void compute_deconv_zp_pad_str_comp_ker(const jit_conv_conf_t &jcp,
             ? jcp.nthr
             : 1;
 
-    parallel(nthrs, [&](const int ithr, const int nthr) {
+    parallel(nthrs, [=](const int ithr, const int nthr) {
         int start {0}, end {0};
         balance211(work_amount, nthr, ithr, start, end);
 

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -49,10 +49,11 @@ cpu_isa_t get_io_isa(cpu_isa_t isa, bool has_f16, bool has_bf16) {
     // re-using avx512_core instantiation for xf16
     // re-using avx2 instantiation for xf16
     if (has_f16 || has_bf16)
-        return is_superset(isa, avx512_core) ? (has_f16    ? avx512_core_fp16
-                               : mayiuse(avx512_core_bf16) ? avx512_core_bf16
-                                                           : avx512_core)
-                                             : avx2_vnni_2;
+        return is_superset(isa, avx512_core)
+                ? (has_f16                                    ? avx512_core_fp16
+                                  : mayiuse(avx512_core_bf16) ? avx512_core_bf16
+                                                              : avx512_core)
+                : avx2_vnni_2;
     else
         return isa;
 }
@@ -403,8 +404,8 @@ protected:
         if (has_ne_convert_src_xf16_)
             compute_ne_convert_xf16(
                     vmm_mean, [&](Vmm vmm_dst, Vmm vmm_src, bool need_tail) {
-                        uni_vaddps(vmm_dst, vmm_dst, vmm_src);
-                    });
+                uni_vaddps(vmm_dst, vmm_dst, vmm_src);
+            });
         else
             compute(vmm_mean, [&](Vmm vmm_dst, Vmm vmm_src, bool need_tail) {
                 uni_vaddps(vmm_dst, vmm_dst, vmm_src);
@@ -415,11 +416,11 @@ protected:
     void compute_var() {
         auto compute_var_lambda
                 = [&](Vmm vmm_dst, Vmm vmm_src, bool need_tail) {
-                      if (!skip_mean_) {
-                          uni_vsubps_maybe_tail(vmm_src, vmm_mean, need_tail);
-                      }
-                      uni_vfmadd231ps(vmm_dst, vmm_src, vmm_src);
-                  };
+            if (!skip_mean_) {
+                uni_vsubps_maybe_tail(vmm_src, vmm_mean, need_tail);
+            }
+            uni_vfmadd231ps(vmm_dst, vmm_src, vmm_src);
+        };
 
         if (has_ne_convert_src_xf16_)
             compute_ne_convert_xf16(vmm_inv_sqrtvar, compute_var_lambda);
@@ -852,7 +853,7 @@ protected:
 
         io_[f32]->store(vmm_dscale, d_scale_ptr(offt_elems), tail);
         io_[f32]->store(vmm_dshift, d_shift_ptr(offt_elems), tail);
-    };
+    }
 
     void generate() override {
         const size_t c_src_size
@@ -1065,7 +1066,7 @@ protected:
         uni_vaddps(vmm_dd_scale, vmm_dd_scale, vmm_ddst);
         if (!skip_mean_) { uni_vsubps(vmm_src, vmm_src, vmm_mean); }
         uni_vfmadd231ps(vmm_dd_scale_x, vmm_ddst, vmm_src);
-    };
+    }
 
     void compute_diff_src(size_t offt_elems, bool tail = false) {
         Vmm vmm_ddst = vmm_dsrc;
@@ -1084,7 +1085,7 @@ protected:
         }
         uni_vmulps(vmm_dsrc, vmm_dsrc, vmm_inv_sqrtvar);
         io_[d_src_d_.data_type()]->store(vmm_dsrc, d_src_ptr(offt_elems), tail);
-    };
+    }
 
     void generate() override {
         const size_t c_src_size
@@ -1282,7 +1283,7 @@ status_t jit_uni_layer_normalization_fwd_t::pd_t::init(engine_t *engine) {
 
 status_t jit_uni_layer_normalization_fwd_t::execute_forward(
         const exec_ctx_t &ctx) const {
-    auto scratchpad = ctx.get_scratchpad_grantor();
+    const auto &scratchpad = ctx.get_scratchpad_grantor();
     const auto src = CTX_IN_MEM(const void *, DNNL_ARG_SRC);
     auto dst = CTX_OUT_MEM(void *, DNNL_ARG_DST);
 
@@ -1302,7 +1303,7 @@ status_t jit_uni_layer_normalization_fwd_t::execute_forward(
                 : CTX_OUT_MEM(float *, DNNL_ARG_MEAN);
         variance = pd()->stats_are_src()
                 ? const_cast<float *>(
-                        CTX_IN_MEM(const float *, DNNL_ARG_VARIANCE))
+                          CTX_IN_MEM(const float *, DNNL_ARG_VARIANCE))
                 : CTX_OUT_MEM(float *, DNNL_ARG_VARIANCE);
     }
 
@@ -1321,7 +1322,8 @@ status_t jit_uni_layer_normalization_fwd_t::execute_forward(
     const dim_t N = pd()->across_axis();
     const dim_t C_padded = src_d.padded_dims()[pd()->ndims() - 1];
 
-    parallel(pd()->nthr_, [&](const int ithr, const int nthr) {
+    parallel(pd()->nthr_,
+            [= COMPAT_THIS_CAPTURE](const int ithr, const int nthr) {
         dim_t N_start = 0, N_end = 0;
         balance211(N, nthr, ithr, N_start, N_end);
         const char *const __restrict src_ptr
@@ -1352,7 +1354,7 @@ status_t jit_uni_layer_normalization_bwd_t::execute_backward(
         const exec_ctx_t &ctx) const {
     status_t status = status::success;
 
-    auto scratchpad = ctx.get_scratchpad_grantor();
+    const auto &scratchpad = ctx.get_scratchpad_grantor();
     auto src = CTX_IN_MEM(const void *, DNNL_ARG_SRC);
     auto diff_dst = CTX_IN_MEM(const void *, DNNL_ARG_DIFF_DST);
     auto scale = CTX_IN_MEM(float *, DNNL_ARG_SCALE);
@@ -1395,7 +1397,7 @@ status_t jit_uni_layer_normalization_bwd_t::execute_backward(
 
     const int max_nthr = pd()->nthr_;
 
-    parallel(max_nthr, [&](int ithr, int nthr) {
+    parallel(max_nthr, [= COMPAT_THIS_CAPTURE](int ithr, int nthr) {
         dim_t N_start = 0, N_end = 0;
         balance211(N, nthr, ithr, N_start, N_end);
         const int block_size = N_end - N_start;
@@ -1418,7 +1420,7 @@ status_t jit_uni_layer_normalization_bwd_t::execute_backward(
                 block_size);
     });
 
-    parallel_nd(C, [&](dim_t c) {
+    parallel_nd(C, [=](dim_t c) {
         float diff_gamma = 0, diff_beta = 0;
         for (dim_t n = 0; n < max_nthr; n++) {
             diff_gamma += reduce[C * n + c];
@@ -1428,7 +1430,7 @@ status_t jit_uni_layer_normalization_bwd_t::execute_backward(
         diff_shift[c] = diff_beta;
     });
 
-    parallel(max_nthr, [&](int ithr, int nthr) {
+    parallel(max_nthr, [= COMPAT_THIS_CAPTURE](int ithr, int nthr) {
         dim_t N_start = 0, N_end = 0;
         balance211(N, nthr, ithr, N_start, N_end);
         const int block_size = N_end - N_start;

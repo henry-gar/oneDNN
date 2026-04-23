@@ -1,6 +1,7 @@
 /*******************************************************************************
+* Copyright 2026 Intel Corporation
 * Copyright 2025 FUJITSU LIMITED
-* Copyright 2025 Arm Ltd. and affiliates
+* Copyright 2025-2026 Arm Ltd. and affiliates
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -17,34 +18,19 @@
 
 #include <cassert>
 
-#include <math.h>
-#include <stddef.h>
-#include <stdint.h>
-#include <stdlib.h>
-#include <string.h>
-
-#include <algorithm>
-#include <iostream>
-#include <iterator>
-#include <ranges>
-#include <vector>
-
 #include "common/c_types_map.hpp"
 #include "common/dnnl_thread.hpp"
-#include "common/math_utils.hpp"
 #include "common/memory_tracking.hpp"
-#include "common/nstl.hpp"
-#include "common/tag_traits.hpp"
 #include "common/type_helpers.hpp"
 #include "common/utils.hpp"
-#include "cpu/aarch64/jit_generator.hpp"
+#include "common/verbose_msg.hpp"
+
 #include "cpu/cpu_primitive.hpp"
 #include "cpu/matmul/matmul_utils.hpp"
 #include "cpu/scale_utils.hpp"
 
-#include "cpu/platform.hpp"
-#include "cpu/primitive_attr_postops.hpp"
-
+#include "cpu/aarch64/injectors/jit_uni_eltwise_injector.hpp"
+#include "cpu/aarch64/jit_generator.hpp"
 #include "cpu/aarch64/matmul/jit_int8_kernel_types.hpp"
 #include "cpu/aarch64/matmul/jit_int8_matmul.hpp"
 #include "cpu/aarch64/matmul/jit_int8_matmul_utils.hpp"
@@ -54,7 +40,7 @@
 #define LDR_IMM(reg, addr, off) \
     { \
         const uint64_t IMM12_MASK = ~uint64_t(0xfff); \
-        if (((off)&IMM12_MASK) == 0) { \
+        if (((off) & IMM12_MASK) == 0) { \
             ldr(reg, ptr(addr, off)); \
         } else { \
             add_imm(X_DEFAULT_ADDR, addr, off, X_TMP_0); \
@@ -81,6 +67,7 @@ using namespace nstl;
 
 using namespace data_type;
 
+template <cpu_isa_t isa>
 struct jit_int8_matmul_kernel_t : public jit_generator_t {
 
     DECLARE_CPU_JIT_AUX_FUNCTIONS(jit_int8_matmul_kernel_t)
@@ -134,6 +121,13 @@ struct jit_int8_matmul_kernel_t : public jit_generator_t {
                 eor(acc(a, b).d, acc(a, b).d, acc(a, b).d);
     }
     void store_regs(int bdb, int ldb, int tail) {
+        // temporary vector registers used by the epilogue / zero-point paths.
+        // these overlap with some B-load registers in the compute loop
+        // but are only used after the compute loop is done.
+        const ZReg zp_b_val = ZReg(6);
+        const ZReg zp_b_prod0 = ZReg(4);
+        const ZReg zp_b_prod1 = ZReg(5);
+
         for (int a = 0; a < bdb; a++) {
             for (int b = 0; b < ldb; b++) {
                 if (brg_.is_s8 || brg_.is_u8_s8)
@@ -171,22 +165,15 @@ struct jit_int8_matmul_kernel_t : public jit_generator_t {
         if (brg_.zp_type_b != jit_int8_broadcast_t::none) {
             int ao = 0;
             if (brg_.is_zp_b_int8) {
-                mov(reg_tmp_1, reg_zp_aux_b_buf);
-                int ilp = (brg_.is_n_tail) ? n_blks : 3;
-                for (int i = 0; i < ilp; i++) {
-                    PReg p = (brg_.is_n_tail && i == ilp - 1) ? prd_zp_b_tl
-                                                              : prd_8;
-                    ld1b(ZRegB(i + 1), p, ptr(reg_tmp_1));
-                    if (brg_.zp_b_dt == u8) {
-                        uunpklo(ZRegH(i + 1), ZRegB(i + 1));
-                        uunpklo(ZRegS(i + 1), ZRegH(i + 1));
-                        ucvtf(ZRegS(i + 1), P_ALL_ONE, ZRegS(i + 1));
-                    } else {
-                        sunpklo(ZRegH(i + 1), ZRegB(i + 1));
-                        sunpklo(ZRegS(i + 1), ZRegH(i + 1));
-                        scvtf(ZRegS(i + 1), P_ALL_ONE, ZRegS(i + 1));
-                    }
-                    add_imm(reg_tmp_1, reg_tmp_1, 8, X_TMP_0);
+                // Weights zero-point is per-tensor; when provided as an int8/u8
+                // runtime buffer, it contains a single scalar value.
+                ldrb(W_TMP_0, ptr(reg_zp_aux_b_buf));
+                if (brg_.zp_b_dt == data_type::s8) sxtb(W_TMP_0, W_TMP_0);
+                dup(zp_b_val.s, W_TMP_0);
+                if (brg_.zp_b_dt == data_type::u8) {
+                    ucvtf(zp_b_val.s, P_ALL_ONE, zp_b_val.s);
+                } else {
+                    scvtf(zp_b_val.s, P_ALL_ONE, zp_b_val.s);
                 }
             }
             for (int a = 0; a < bdb; a++) {
@@ -194,10 +181,10 @@ struct jit_int8_matmul_kernel_t : public jit_generator_t {
                 ld1rw(z0.s, P_ALL_ONE, ptr(reg_zp_aux_b, (ao + 1) * 4));
                 for (int b = 0; b < ldb; b += 2) {
                     if (brg_.is_zp_b_int8) {
-                        fmul(z4.s, z31.s, ZRegS(b / 2 + 1));
-                        fmul(z5.s, z0.s, ZRegS(b / 2 + 1));
-                        fsub(acc(a, b).s, acc(a, b).s, z4.s);
-                        fsub(acc(a, b + 1).s, acc(a, b + 1).s, z5.s);
+                        fmul(zp_b_prod0.s, z31.s, zp_b_val.s);
+                        fmul(zp_b_prod1.s, z0.s, zp_b_val.s);
+                        fsub(acc(a, b).s, acc(a, b).s, zp_b_prod0.s);
+                        fsub(acc(a, b + 1).s, acc(a, b + 1).s, zp_b_prod1.s);
                     } else {
                         fsub(acc(a, b).s, acc(a, b).s, z31.s);
                         fsub(acc(a, b + 1).s, acc(a, b + 1).s, z0.s);
@@ -230,6 +217,21 @@ struct jit_int8_matmul_kernel_t : public jit_generator_t {
                 for (int a = 0; a < bdb; a++) {
                     fadd(acc(a, b).s, acc(a, b).s, z31.s);
                     fadd(acc(a, b + 1).s, acc(a, b + 1).s, z31.s);
+                }
+            }
+        }
+
+        if (!eltwise_injectors_.empty()) {
+            for (int a = 0; a < bdb; a++) {
+                for (int b = 0; b < ldb; b += 2) {
+                    // apply element-wise op to every vector register
+                    // whose index is in [start, end)
+                    int start_idx = acc(a, b).getIdx();
+                    int end_idx = acc(a, b + 1).getIdx() + 1;
+                    for (int i = 0; i < (int)eltwise_injectors_.size(); i++) {
+                        eltwise_injectors_[i]->compute_vector_range(
+                                start_idx, end_idx);
+                    }
                 }
             }
         }
@@ -282,22 +284,74 @@ struct jit_int8_matmul_kernel_t : public jit_generator_t {
         for (rd = 0; rd < rdb; rd++) {
             int ao = 0;
 
-            for (ld = 0; ld < ldb; ld++) {
-                PReg p = (brg_.is_n_tail && ld == ldb - 1) ? prd_ld : P_ALL_ONE;
-                ld1b(loadb(ld).b, p, ptr(reg_tmp, ld, MUL_VL));
-            }
-            for (bd = 0; bd < bdb; bd++) {
-                add_imm(X_DEFAULT_ADDR, reg_aux_a, a_off + ao, X_TMP_0);
-                ld1rqb(z0.b, P_ALL_ONE, ptr(X_DEFAULT_ADDR));
-                ao += brg_.m_blk * 2;
-
+            // For SVE128 and no N-tail, use NEON loads (v/z regs overlap) to
+            // reduce predicated SVE load overhead in the hot loop.
+            if (simd_bytes(isa) == 16 && !brg_.is_n_tail) {
+                constexpr int bytes_per_vec = 16;
+                for (ld = 0; ld + 1 < ldb; ld += 2) {
+                    QReg q0(loadb(ld).getIdx());
+                    QReg q1(loadb(ld + 1).getIdx());
+                    ldp(q0, q1, ptr(reg_tmp, ld * bytes_per_vec));
+                }
+                if (ld < ldb) {
+                    QReg q(loadb(ld).getIdx());
+                    ldr(q, ptr(reg_tmp, ld * bytes_per_vec));
+                }
+            } else {
                 for (ld = 0; ld < ldb; ld++) {
-                    if (brg_.is_s8)
-                        smmla(acc(bd, ld).s, z0.b, loadb(ld).b);
-                    else if (brg_.is_u8_s8)
-                        usmmla(acc(bd, ld).s, z0.b, loadb(ld).b);
-                    else
-                        ummla(acc(bd, ld).s, z0.b, loadb(ld).b);
+                    PReg p = (brg_.is_n_tail && ld == ldb - 1) ? prd_ld
+                                                               : P_ALL_ONE;
+                    ld1b(loadb(ld).b, p, ptr(reg_tmp, ld, MUL_VL));
+                }
+            }
+            for (bd = 0; bd < bdb;) {
+                const int a_inc = brg_.m_blk * 2;
+                const int32_t a_off_bytes = a_off + ao;
+                if (simd_bytes(isa) == 16 && bd + 1 < bdb) {
+                    // Load two consecutive A blocks (each 16 bytes for SVE128)
+                    // and compute two rows to amortize load overhead.
+                    if ((a_off_bytes & 0xf) == 0 && a_off_bytes >= -1024
+                            && a_off_bytes <= 1008) {
+                        ldp(QReg(0), QReg(31), ptr(reg_aux_a, a_off_bytes));
+                    } else {
+                        add_imm(X_DEFAULT_ADDR, reg_aux_a, a_off_bytes,
+                                X_TMP_0);
+                        ldp(QReg(0), QReg(31), ptr(X_DEFAULT_ADDR));
+                    }
+                    ao += 2 * a_inc;
+
+                    for (ld = 0; ld < ldb; ld++) {
+                        if (brg_.is_s8) {
+                            smmla(acc(bd, ld).s, z0.b, loadb(ld).b);
+                            smmla(acc(bd + 1, ld).s, z31.b, loadb(ld).b);
+                        } else if (brg_.is_u8_s8) {
+                            usmmla(acc(bd, ld).s, z0.b, loadb(ld).b);
+                            usmmla(acc(bd + 1, ld).s, z31.b, loadb(ld).b);
+                        } else {
+                            ummla(acc(bd, ld).s, z0.b, loadb(ld).b);
+                            ummla(acc(bd + 1, ld).s, z31.b, loadb(ld).b);
+                        }
+                    }
+                    bd += 2;
+                } else {
+                    if (simd_bytes(isa) == 16) {
+                        ldr(QReg(0), ptr(reg_aux_a, a_off_bytes));
+                    } else {
+                        add_imm(X_DEFAULT_ADDR, reg_aux_a, a_off_bytes,
+                                X_TMP_0);
+                        ld1rqb(z0.b, P_ALL_ONE, ptr(X_DEFAULT_ADDR));
+                    }
+                    ao += a_inc;
+
+                    for (ld = 0; ld < ldb; ld++) {
+                        if (brg_.is_s8)
+                            smmla(acc(bd, ld).s, z0.b, loadb(ld).b);
+                        else if (brg_.is_u8_s8)
+                            usmmla(acc(bd, ld).s, z0.b, loadb(ld).b);
+                        else
+                            ummla(acc(bd, ld).s, z0.b, loadb(ld).b);
+                    }
+                    bd += 1;
                 }
             }
             a_off += brg_.m_blk * brg_.k_blk;
@@ -312,17 +366,15 @@ struct jit_int8_matmul_kernel_t : public jit_generator_t {
         mov(reg_aux_b, reg_b);
         if (k_full_blks > 0) {
             mov(reg_rd_loop, k_full_blks);
-            Label l0;
-            L(l0);
-            microkernel(brg_.rd_block, bdb, ldb, tail);
-            add_imm(reg_aux_a, reg_aux_a,
-                    brg_.m_blk * brg_.k_blk * brg_.rd_block, X_TMP_0);
-            add_imm(reg_aux_b, reg_aux_b,
-                    brg_.k_blk * brg_.n_blk * brg_.ld_block * brg_.rd_block,
-                    X_TMP_0);
-            sub(reg_rd_loop, reg_rd_loop, 1);
-            cmp(reg_rd_loop, 0);
-            b(GT, l0);
+
+            asm_do_while(reg_rd_loop, [&]() {
+                microkernel(brg_.rd_block, bdb, ldb, tail);
+                add_imm(reg_aux_a, reg_aux_a,
+                        brg_.m_blk * brg_.k_blk * brg_.rd_block, X_TMP_0);
+                add_imm(reg_aux_b, reg_aux_b,
+                        brg_.k_blk * brg_.n_blk * brg_.ld_block * brg_.rd_block,
+                        X_TMP_0);
+            });
         }
         if (k_tail_blk > 0) {
             microkernel(k_tail_blk, bdb, ldb, tail);
@@ -337,25 +389,32 @@ struct jit_int8_matmul_kernel_t : public jit_generator_t {
     }
 
     void loop_k_zp(int bdb, int ldb, int is_a, int is_b) {
-        eor(z3.d, z3.d, z3.d);
-        eor(z4.d, z4.d, z4.d);
+        const ZReg zp_b_sum0 = ZReg(3);
+        const ZReg zp_b_sum1 = ZReg(4);
+        const ZReg zp_b_sum2 = ZReg(5);
+        const ZReg zp_b_sum3 = ZReg(6);
+
+        eor(zp_b_sum0.d, zp_b_sum0.d, zp_b_sum0.d);
+        eor(zp_b_sum1.d, zp_b_sum1.d, zp_b_sum1.d);
+        if (simd_bytes(isa) == 16) {
+            eor(zp_b_sum2.d, zp_b_sum2.d, zp_b_sum2.d);
+            eor(zp_b_sum3.d, zp_b_sum3.d, zp_b_sum3.d);
+        }
         for (int i = 0; i < 6; i++)
             eor(acc(2, i).d, acc(2, i).d, acc(2, i).d);
         mov(reg_aux_a, reg_aux_a1);
         mov(reg_aux_b, reg_b);
         if (k_full_blks > 0) {
             mov(reg_rd_loop, k_full_blks);
-            Label l0;
-            L(l0);
-            zp_comp(brg_.rd_block, bdb, ldb, is_a, is_b);
-            add_imm(reg_aux_a, reg_aux_a,
-                    brg_.m_blk * brg_.k_blk * brg_.rd_block, X_TMP_0);
-            add_imm(reg_aux_b, reg_aux_b,
-                    brg_.k_blk * brg_.n_blk * brg_.ld_block * brg_.rd_block,
-                    X_TMP_0);
-            sub(reg_rd_loop, reg_rd_loop, 1);
-            cmp(reg_rd_loop, 0);
-            b(GT, l0);
+
+            asm_do_while(reg_rd_loop, [&]() {
+                zp_comp(brg_.rd_block, bdb, ldb, is_a, is_b);
+                add_imm(reg_aux_a, reg_aux_a,
+                        brg_.m_blk * brg_.k_blk * brg_.rd_block, X_TMP_0);
+                add_imm(reg_aux_b, reg_aux_b,
+                        brg_.k_blk * brg_.n_blk * brg_.ld_block * brg_.rd_block,
+                        X_TMP_0);
+            });
         }
         if (k_tail_blk > 0) {
             zp_comp(k_tail_blk, bdb, ldb, is_a, is_b);
@@ -368,13 +427,23 @@ struct jit_int8_matmul_kernel_t : public jit_generator_t {
         if (k_residual_blk > 0) { zp_comp(1, bdb, ldb, is_a, is_b); }
 
         if (brg_.zp_type_b != jit_int8_broadcast_t::none && is_b == 1) {
-            uzp1(z3.d, z3.d, z4.d);
-            scvtf(z3.s, P_ALL_ONE, z3.s);
+            if (simd_bytes(isa) == 16) {
+                uzp1(zp_b_sum0.d, zp_b_sum0.d, zp_b_sum1.d);
+                uzp1(zp_b_sum2.d, zp_b_sum2.d, zp_b_sum3.d);
+                scvtf(zp_b_sum0.s, P_ALL_ONE, zp_b_sum0.s);
+                scvtf(zp_b_sum2.s, P_ALL_ONE, zp_b_sum2.s);
+            } else {
+                uzp1(zp_b_sum0.d, zp_b_sum0.d, zp_b_sum1.d);
+                scvtf(zp_b_sum0.s, P_ALL_ONE, zp_b_sum0.s);
+            }
             if (!brg_.is_zp_b_int8) {
                 ldr(W_TMP_0, ptr(reg_zp_val_b));
                 dup(z0.s, W_TMP_0);
                 scvtf(z0.s, P_ALL_ONE, z0.s);
-                fmul(z3.s, P_ALL_ONE, z0.s);
+                fmul(zp_b_sum0.s, P_ALL_ONE, z0.s);
+                if (simd_bytes(isa) == 16) {
+                    fmul(zp_b_sum2.s, P_ALL_ONE, z0.s);
+                }
             } else {
                 if (brg_.zp_type_a != jit_int8_broadcast_t::none) {
                     ldr(W_TMP_0, ptr(reg_zp_val_a));
@@ -384,10 +453,16 @@ struct jit_int8_matmul_kernel_t : public jit_generator_t {
                     scvtf(z0.s, P_ALL_ONE, z0.s);
                     scvtf(z1.s, P_ALL_ONE, z1.s);
                     fmul(z0.s, z1.s, z0.s);
-                    fsub(z3.s, z3.s, z0.s);
+                    fsub(zp_b_sum0.s, zp_b_sum0.s, z0.s);
+                    if (simd_bytes(isa) == 16) {
+                        fsub(zp_b_sum2.s, zp_b_sum2.s, z0.s);
+                    }
                 }
             }
-            st1w(z3.s, P_ALL_ONE, ptr(reg_zp_b));
+            st1w(zp_b_sum0.s, P_ALL_ONE, ptr(reg_zp_b));
+            if (simd_bytes(isa) == 16) {
+                st1w(zp_b_sum2.s, P_ALL_ONE, ptr(reg_zp_b, 1, MUL_VL));
+            }
         }
 
         if ((brg_.zp_type_a != jit_int8_broadcast_t::none) && is_a == 1) {
@@ -427,7 +502,6 @@ struct jit_int8_matmul_kernel_t : public jit_generator_t {
     }
 
     void han_blk() {
-        Label ld_loop, bd_loop;
         LDR_IMM(reg_tmp, reg_param, GET_OFF(nb));
         LDR_IMM(reg_na, reg_param, GET_OFF(na));
         ldr(WReg(reg_ld_loop.getIdx()), ptr(reg_tmp));
@@ -435,98 +509,117 @@ struct jit_int8_matmul_kernel_t : public jit_generator_t {
         mov(reg_aux_c1, reg_c);
         mov(reg_aux_c, reg_aux_c1);
         mov(reg_zp_aux_b, reg_zp_b);
-        L(ld_loop);
-        ldr(WReg(reg_bd_loop.getIdx()), ptr(reg_na));
-        L(bd_loop);
-        loop_k(bdb, ldb, 0);
-        add_imm(reg_aux_a1, reg_aux_a1,
-                div_up(brg_.K, brg_.k_blk) * brg_.k_blk * brg_.bd_block,
-                X_TMP_0);
-        add_imm(reg_aux_c, reg_aux_c, brg_.N * brg_.bd_block * brg_.dst_dt_sz,
-                X_TMP_0);
-        add_imm(reg_zp_aux_b, reg_zp_aux_b, brg_.m_blk * brg_.dst_dt_sz,
-                X_TMP_0);
-        sub(reg_bd_loop, reg_bd_loop, 1);
-        cmp(reg_bd_loop, 0);
-        b(GT, bd_loop);
-        mov(reg_aux_a1, reg_a);
-        mov(reg_zp_aux_b, reg_zp_b);
-        add_imm(reg_b, reg_b,
-                (brg_.n_blk * brg_.ld_block) * div_up(brg_.K, brg_.k_blk)
-                        * brg_.k_blk,
-                X_TMP_0);
-        add_imm(reg_aux_c1, reg_aux_c1,
-                brg_.dst_dt_sz * (brg_.n_blk * brg_.ld_block), X_TMP_0);
-        add_imm(reg_zp_a, reg_zp_a, brg_.n_blk * brg_.ld_block * brg_.dst_dt_sz,
-                X_TMP_0);
-        if (brg_.is_oc_scales)
-            add_imm(reg_scales, reg_scales,
-                    brg_.dst_dt_sz * (brg_.n_blk * brg_.ld_block), X_TMP_0);
-        add_imm(reg_bias, reg_bias,
-                brg_.dst_dt_sz * (brg_.n_blk * brg_.ld_block), X_TMP_0);
-        mov(reg_aux_c, reg_aux_c1);
-        sub(reg_ld_loop, reg_ld_loop, 1);
-        cmp(reg_ld_loop, 0);
-        b(GT, ld_loop);
-    }
 
-    void han_blk_zp() {
-        Label ld_loop, bd_loop, skip_ld_loop, skip_bd_loop;
-        LDR_IMM(reg_tmp, reg_param, GET_OFF(nb));
-        LDR_IMM(reg_na, reg_param, GET_OFF(na));
-        ldr(WReg(reg_ld_loop.getIdx()), ptr(reg_tmp));
-        ldr(WReg(reg_bd_loop.getIdx()), ptr(reg_na));
-        mov(reg_aux_a1, reg_a);
-        // mov(reg_b,reg_b);
-        if (brg_.zp_type_b != jit_int8_broadcast_t::none) {
-            cmp(reg_bd_loop, 0);
-            b(EQ, skip_bd_loop);
-            L(bd_loop);
-            loop_k_zp(bdb, ldb, 0, 1);
-            add_imm(reg_aux_a1, reg_aux_a1,
-                    div_up(brg_.K, brg_.k_blk) * brg_.k_blk * brg_.bd_block,
-                    X_TMP_0);
-            add_imm(reg_zp_b, reg_zp_b, brg_.m_blk * brg_.dst_dt_sz, X_TMP_0);
-            sub(reg_bd_loop, reg_bd_loop, 1);
-            cmp(reg_bd_loop, 0);
-            b(GT, bd_loop);
-            L(skip_bd_loop);
-        }
-        if (brg_.zp_type_a != jit_int8_broadcast_t::none) {
-            cmp(reg_ld_loop, 0);
-            b(EQ, skip_ld_loop);
-            L(ld_loop);
-            loop_k_zp(bdb, ldb, 1, 0);
-            add_imm(reg_zp_a, reg_zp_a,
-                    brg_.n_blk * brg_.ld_block * brg_.dst_dt_sz, X_TMP_0);
+        asm_do_while(reg_ld_loop, [&]() {
+            ldr(WReg(reg_bd_loop.getIdx()), ptr(reg_na));
+            asm_do_while(reg_bd_loop, [&]() {
+                loop_k(bdb, ldb, 0);
+                add_imm(reg_aux_a1, reg_aux_a1,
+                        div_up(brg_.K, brg_.k_blk) * brg_.k_blk * brg_.bd_block,
+                        X_TMP_0);
+                add_imm(reg_aux_c, reg_aux_c,
+                        brg_.N * brg_.bd_block * brg_.dst_dt_sz, X_TMP_0);
+                add_imm(reg_zp_aux_b, reg_zp_aux_b, brg_.m_blk * brg_.dst_dt_sz,
+                        X_TMP_0);
+            });
+
+            mov(reg_aux_a1, reg_a);
+            mov(reg_zp_aux_b, reg_zp_b);
             add_imm(reg_b, reg_b,
                     (brg_.n_blk * brg_.ld_block) * div_up(brg_.K, brg_.k_blk)
                             * brg_.k_blk,
                     X_TMP_0);
-            sub(reg_ld_loop, reg_ld_loop, 1);
-            cmp(reg_ld_loop, 0);
-            b(GT, ld_loop);
-            L(skip_ld_loop);
+            add_imm(reg_aux_c1, reg_aux_c1,
+                    brg_.dst_dt_sz * (brg_.n_blk * brg_.ld_block), X_TMP_0);
+            add_imm(reg_zp_a, reg_zp_a,
+                    brg_.n_blk * brg_.ld_block * brg_.dst_dt_sz, X_TMP_0);
+            if (brg_.is_oc_scales)
+                add_imm(reg_scales, reg_scales,
+                        brg_.dst_dt_sz * (brg_.n_blk * brg_.ld_block), X_TMP_0);
+            add_imm(reg_bias, reg_bias,
+                    brg_.dst_dt_sz * (brg_.n_blk * brg_.ld_block), X_TMP_0);
+            mov(reg_aux_c, reg_aux_c1);
+        });
+    }
+
+    void han_blk_zp() {
+        LDR_IMM(reg_tmp, reg_param, GET_OFF(nb));
+        LDR_IMM(reg_na, reg_param, GET_OFF(na));
+        mov(reg_aux_a1, reg_a);
+        ldr(WReg(reg_bd_loop.getIdx()), ptr(reg_na));
+        ldr(WReg(reg_ld_loop.getIdx()), ptr(reg_tmp));
+
+        if (brg_.zp_type_b != jit_int8_broadcast_t::none) {
+            asm_for(reg_bd_loop, reg_bd_loop, [&]() {
+                loop_k_zp(bdb, ldb, 0, 1);
+                add_imm(reg_aux_a1, reg_aux_a1,
+                        div_up(brg_.K, brg_.k_blk) * brg_.k_blk * brg_.bd_block,
+                        X_TMP_0);
+                add_imm(reg_zp_b, reg_zp_b, brg_.m_blk * brg_.dst_dt_sz,
+                        X_TMP_0);
+            });
+        }
+        if (brg_.zp_type_a != jit_int8_broadcast_t::none) {
+            asm_for(reg_ld_loop, reg_ld_loop, [&]() {
+                loop_k_zp(bdb, ldb, 1, 0);
+                add_imm(reg_zp_a, reg_zp_a,
+                        brg_.n_blk * brg_.ld_block * brg_.dst_dt_sz, X_TMP_0);
+                add_imm(reg_b, reg_b,
+                        (brg_.n_blk * brg_.ld_block)
+                                * div_up(brg_.K, brg_.k_blk) * brg_.k_blk,
+                        X_TMP_0);
+            });
         }
     }
 
     void zp_comp(int rdb, int bdb, int ldb, int is_a, int is_b) {
+        const ZReg zp_b_sum0 = ZReg(3);
+        const ZReg zp_b_sum1 = ZReg(4);
+        const ZReg zp_b_sum2 = ZReg(5);
+        const ZReg zp_b_sum3 = ZReg(6);
 
         dup(z0.b, 1);
         int rd, ld;
         if (brg_.zp_type_b != jit_int8_broadcast_t::none && is_b == 1) {
             mov(reg_tmp, reg_aux_a);
             for (rd = 0; rd < rdb; rd++) {
-                ld1b(z1.b, P_ALL_ONE / T_z, ptr(reg_tmp));
-                ld1b(z2.b, P_ALL_ONE / T_z, ptr(reg_tmp, 1, MUL_VL));
-                add_imm(reg_tmp, reg_tmp, brg_.k_blk * brg_.m_blk, X_TMP_0);
-                if (brg_.is_s8) {
-                    smmla(z3.s, z0.b, z1.b);
-                    smmla(z4.s, z0.b, z2.b);
+                if (simd_bytes(isa) == 16) {
+                    ld1b(z1.b, P_ALL_ONE / T_z, ptr(reg_tmp));
+                    if (brg_.is_s8) {
+                        smmla(zp_b_sum0.s, z0.b, z1.b);
+                    } else {
+                        ummla(zp_b_sum0.s, z0.b, z1.b);
+                    }
+                    ld1b(z1.b, P_ALL_ONE / T_z, ptr(reg_tmp, 1, MUL_VL));
+                    if (brg_.is_s8) {
+                        smmla(zp_b_sum1.s, z0.b, z1.b);
+                    } else {
+                        ummla(zp_b_sum1.s, z0.b, z1.b);
+                    }
+                    ld1b(z1.b, P_ALL_ONE / T_z, ptr(reg_tmp, 2, MUL_VL));
+                    if (brg_.is_s8) {
+                        smmla(zp_b_sum2.s, z0.b, z1.b);
+                    } else {
+                        ummla(zp_b_sum2.s, z0.b, z1.b);
+                    }
+                    ld1b(z1.b, P_ALL_ONE / T_z, ptr(reg_tmp, 3, MUL_VL));
+                    if (brg_.is_s8) {
+                        smmla(zp_b_sum3.s, z0.b, z1.b);
+                    } else {
+                        ummla(zp_b_sum3.s, z0.b, z1.b);
+                    }
                 } else {
-                    ummla(z3.s, z0.b, z1.b);
-                    ummla(z4.s, z0.b, z2.b);
+                    ld1b(z1.b, P_ALL_ONE / T_z, ptr(reg_tmp));
+                    ld1b(z2.b, P_ALL_ONE / T_z, ptr(reg_tmp, 1, MUL_VL));
+                    if (brg_.is_s8) {
+                        smmla(zp_b_sum0.s, z0.b, z1.b);
+                        smmla(zp_b_sum1.s, z0.b, z2.b);
+                    } else {
+                        ummla(zp_b_sum0.s, z0.b, z1.b);
+                        ummla(zp_b_sum1.s, z0.b, z2.b);
+                    }
                 }
+                add_imm(reg_tmp, reg_tmp, brg_.k_blk * brg_.m_blk, X_TMP_0);
             }
         }
         if ((brg_.zp_type_a != jit_int8_broadcast_t::none) && is_a == 1) {
@@ -552,26 +645,33 @@ struct jit_int8_matmul_kernel_t : public jit_generator_t {
     }
 
     void config() {
-        int m, pred_st = 0, pred_ld = 0, sv_len = 8, pred_b = 8;
-        n_blks = div_up(brg_.n_tail, 8);
+        const int vlen_bytes = simd_bytes(isa);
+        const int sv_len = vlen_bytes / brg_.dst_dt_sz;
+        int m, pred_st = 0, pred_ld = 0, pred_b = sv_len;
+        const int n_full = brg_.n_blk * brg_.ld_block;
+        const int n_cols = brg_.is_n_tail ? brg_.n_tail : n_full;
+        n_blks = div_up(n_cols, sv_len);
         k_full_blks = brg_.K / (brg_.k_blk * brg_.rd_block);
         m = brg_.K % (brg_.k_blk * brg_.rd_block);
         k_tail_blk = m / brg_.k_blk;
         k_residual_blk = m % brg_.k_blk;
-        ldb = (brg_.is_n_tail) ? div_up(brg_.n_tail, 4) : brg_.ld_block;
+        ldb = (brg_.is_n_tail) ? div_up(brg_.n_tail, brg_.n_blk)
+                               : brg_.ld_block;
         bdb = (brg_.is_m_tail) ? div_up(brg_.m_tail, 2) : brg_.bd_block / 2;
         rdb = (brg_.is_k_tail) ? div_up(brg_.k_tail, brg_.k_blk) : 4;
 
-        int pred_zp_b_tl = (brg_.n_tail % 8 == 0) ? 8 : brg_.n_tail % 8;
-        set_preg(prd_8.b, 8, X_TMP_0, X_TMP_1);
+        const int pred_zp_b_tl
+                = (n_cols % sv_len == 0) ? sv_len : n_cols % sv_len;
+        set_preg(prd_8.b, sv_len, X_TMP_0, X_TMP_1);
         set_preg(prd_zp_b_tl.b, pred_zp_b_tl, X_TMP_0, X_TMP_1);
 
         if (brg_.is_n_tail) {
-            pred_b = (brg_.n_tail % 8 == 0) ? sv_len : (brg_.n_tail % 8);
+            pred_b = (brg_.n_tail % sv_len == 0) ? sv_len
+                                                 : (brg_.n_tail % sv_len);
             if (brg_.n_tail % brg_.n_blk == 0) {
                 pred_st = (brg_.n_tail % (brg_.n_blk * 2) == 0) ? sv_len
                                                                 : sv_len / 2;
-                pred_ld = sv_len * brg_.dst_dt_sz;
+                pred_ld = vlen_bytes;
             } else {
                 pred_ld = (brg_.n_tail % brg_.n_blk) * brg_.k_blk;
                 pred_st = (ldb % 2 == 0)
@@ -607,9 +707,22 @@ struct jit_int8_matmul_kernel_t : public jit_generator_t {
         }
 
         postamble();
+        if (!eltwise_injectors_.empty()) {
+            for (int i = 0; i < (int)eltwise_injectors_.size(); i++) {
+                eltwise_injectors_[i]->prepare_table();
+            }
+        }
     }
 
-    jit_int8_matmul_kernel_t(const brg_int8_t &k) : brg_(k) {}
+    jit_int8_matmul_kernel_t(
+            const brg_int8_t &k, const dnnl::impl::post_ops_t &eltwise = {})
+        : brg_(k) {
+        for (auto &e : eltwise.entry_) {
+            eltwise_injectors_.emplace_back(utils::make_unique<
+                    jit_uni_eltwise_injector_t<to_vla_sve(isa)>>(
+                    this, e.eltwise));
+        }
+    }
     ~jit_int8_matmul_kernel_t() override = default;
 
 private:
@@ -621,9 +734,12 @@ private:
     int k_tail_blk;
     int k_residual_blk;
     int n_blks;
+    std::vector<std::unique_ptr<jit_uni_eltwise_injector_t<to_vla_sve(isa)>>>
+            eltwise_injectors_;
 };
 
-status_t jit_int8_matmul_t::pd_t::init(engine_t *engine) {
+template <cpu_isa_t isa>
+status_t jit_int8_matmul_t<isa>::pd_t::init(engine_t *engine) {
 
     const auto src_type = src_md(0)->data_type;
     const auto wei_type = weights_md(0)->data_type;
@@ -668,7 +784,7 @@ status_t jit_int8_matmul_t::pd_t::init(engine_t *engine) {
 
         if (is_src_scl && is_wei_scl && wei_scl_msk > 0) {
             // This case requires scratchpad.
-            if (N() == DNNL_RUNTIME_DIM_VAL) ok = false;
+            if (is_runtime_value(N())) ok = false;
         }
         return ok;
     };
@@ -744,13 +860,23 @@ status_t jit_int8_matmul_t::pd_t::init(engine_t *engine) {
     VDISPATCH_MATMUL(check_attr_scales(), VERBOSE_UNSUPPORTED_SCALES_CFG);
 
     bool no_post_ops = attr()->post_ops_.has_default_values();
+
+    auto with_eltwise = [this]() -> bool {
+        // we only support eltwise post-op
+        for (auto &e : this->attr()->post_ops_.entry_) {
+            if (e.kind != primitive_kind::eltwise) return false;
+        }
+        return true;
+    };
+
     const bool problem_dt_correct
             = (is_s8 || is_u8 || is_u8_s8) && utils::everyone_is(f32, dst_type);
 
     VDISPATCH_MATMUL(problem_dt_correct, VERBOSE_UNSUPPORTED_DT);
-    VDISPATCH_MATMUL(no_post_ops, VERBOSE_UNSUPPORTED_ATTR);
+    VDISPATCH_MATMUL(no_post_ops || with_eltwise(), VERBOSE_UNSUPPORTED_ATTR);
     VDISPATCH_MATMUL(formats_ok(), VERBOSE_UNSUPPORTED_TAG);
-    VDISPATCH_MATMUL(get_sve_length() == 32, VERBOSE_UNSUPPORTED_ISA);
+    VDISPATCH_MATMUL(mayiuse(sve) && utils::one_of(simd_bytes(isa), 16UL, 32UL),
+            VERBOSE_UNSUPPORTED_ISA);
 
     auto is_src_any = src_d.format_kind() == format_kind::any;
     auto is_dst_any = dst_d.format_kind() == format_kind::any;
@@ -761,35 +887,55 @@ status_t jit_int8_matmul_t::pd_t::init(engine_t *engine) {
     brg_.N = helper.N();
     brg_.B = batch();
 
+    brg_.n_blk = simd_bytes(isa) / brg_.k_blk;
+
     int num_threads = dnnl_get_current_num_threads();
 
-    if (brg_.N <= 8)
+    if (brg_.N <= brg_.n_blk * 2)
         brg_.ld_block = 2;
-    else if (brg_.N <= 16)
+    else if (brg_.N <= brg_.n_blk * 4)
         brg_.ld_block = 4;
     else
         brg_.ld_block = 6;
     m_block_sz = 32;
-    switch (brg_.ld_block) {
-        case 2: {
-            n_block_sz = 16;
-            break;
+    const int micro_n = brg_.n_blk * brg_.ld_block;
+    n_block_sz = (brg_.ld_block == 6) ? micro_n : 2 * micro_n;
+
+    // micro_n is small for 128 bit.
+    // so N tiles can get too tiny and we spend time in OpenMP overhead.
+    // try a coarser N tile (4x/2x/1x) and pick the first that keeps
+    // total work more than num_threads.
+    if (simd_bytes(isa) == 16 && brg_.ld_block == 6) {
+        // pick the largest N size that still gives enough work.
+        int best_n_block_sz = micro_n;
+        const int num_m_tiles = div_up(brg_.M, m_block_sz);
+        // when M is only a few blocks, starting at 4x can reduce N-parallelism.
+        const bool mid_m = (brg_.M > m_block_sz) && (brg_.M <= 4 * m_block_sz);
+        const bool small_m = num_m_tiles <= 4;
+
+        const int preferred_factor = (mid_m || small_m) ? 2 : 4;
+        for (int f = preferred_factor; f >= 1; f /= 2) {
+            const int temp_n_block_sz = f * micro_n;
+            const int num_n_tiles = div_up(brg_.N, temp_n_block_sz);
+            const int work = (int)brg_.B * num_m_tiles * num_n_tiles;
+            if (work >= num_threads) {
+                best_n_block_sz = temp_n_block_sz;
+                break;
+            }
         }
-        case 4: {
-            n_block_sz = 32;
-            break;
+        n_block_sz = std::min<int>(brg_.N, best_n_block_sz);
+        // keep the coarsened tile but align it to micro_n so that the last tile
+        // is correctly handled by the tail kernel when needed.
+        if (n_block_sz % micro_n != 0) {
+            n_block_sz = div_up(n_block_sz, micro_n) * micro_n;
         }
-        case 6: {
-            n_block_sz = 24;
-            break;
-        }
-        default: return status::unimplemented;
     }
 
     int num_a_blocks = div_up(brg_.M, m_block_sz);
     int num_b_blocks = div_up(brg_.N, n_block_sz);
     mm_parallel_work = brg_.B * num_a_blocks * num_b_blocks;
-    if (mm_parallel_work < num_threads && n_block_sz == 32) n_block_sz = 16;
+    if (mm_parallel_work < num_threads && brg_.ld_block == 4)
+        n_block_sz = micro_n;
     num_b_blocks = div_up(brg_.N, n_block_sz);
     mm_parallel_work = brg_.B * num_a_blocks * num_b_blocks;
 
@@ -797,20 +943,32 @@ status_t jit_int8_matmul_t::pd_t::init(engine_t *engine) {
     auto b_tag_3d = format_tag::abc;
     auto b_tag_4d = format_tag::abcd;
 
-    switch (brg_.ld_block) {
-        case 2: {
+    switch (micro_n) {
+        case 4: {
+            b_tag_2d = format_tag::BA4b8a;
+            b_tag_3d = format_tag::aCB4c8b;
+            b_tag_4d = format_tag::abDC4d8c;
+            break;
+        }
+        case 8: {
             b_tag_2d = format_tag::BA8b8a;
             b_tag_3d = format_tag::aCB8c8b;
             b_tag_4d = format_tag::abDC8d8c;
             break;
         }
-        case 4: {
+        case 12: {
+            b_tag_2d = format_tag::BA12b8a;
+            b_tag_3d = format_tag::aCB12c8b;
+            b_tag_4d = format_tag::abDC12d8c;
+            break;
+        }
+        case 16: {
             b_tag_2d = format_tag::BA16b8a;
             b_tag_3d = format_tag::aCB16c8b;
             b_tag_4d = format_tag::abDC16d8c;
             break;
         }
-        case 6: {
+        case 24: {
             b_tag_2d = format_tag::BA24b8a;
             b_tag_3d = format_tag::aCB24c8b;
             b_tag_4d = format_tag::abDC24d8c;
@@ -938,7 +1096,8 @@ status_t jit_int8_matmul_t::pd_t::init(engine_t *engine) {
     return status::success;
 }
 
-status_t jit_int8_matmul_t::init(engine_t *engine) {
+template <cpu_isa_t isa>
+status_t jit_int8_matmul_t<isa>::init(engine_t *engine) {
 
     const auto &b1 = pd()->get_b();
     const auto &d1 = pd()->get_d();
@@ -959,6 +1118,7 @@ status_t jit_int8_matmul_t::init(engine_t *engine) {
     b.M = b1.M;
     b.K = b1.K;
     b.N = b1.N;
+    b.n_blk = b1.n_blk;
     b.na = b1.na;
     b.nb = b1.nb;
     b.m_tail = b1.m_tail;
@@ -980,6 +1140,9 @@ status_t jit_int8_matmul_t::init(engine_t *engine) {
     b.b_reo = b1.b_reo;
     b.ld_block = b1.ld_block;
 
+    const bool has_eltwise
+            = pd()->attr()->post_ops_.find(primitive_kind_t::dnnl_eltwise) >= 0;
+
     for (int z = 0; z < 2; z++)
         for (int m = 0; m < 2; m++)
             for (int n = 0; n < 2; n++)
@@ -990,32 +1153,45 @@ status_t jit_int8_matmul_t::init(engine_t *engine) {
                     b.is_k_tail = k;
                     b.is_n_tail = n;
                     b.is_zp_cal = z;
-                    int8_kernels_[idx]
-                            = std::unique_ptr<jit_int8_matmul_kernel_t> {
-                                    new jit_int8_matmul_kernel_t(b)};
+
+                    if (has_eltwise) {
+                        int8_kernels_[idx] = std::unique_ptr<
+                                jit_int8_matmul_kernel_t<isa>> {
+                                new jit_int8_matmul_kernel_t<isa>(
+                                        b, pd()->attr()->post_ops_)};
+                    } else {
+                        int8_kernels_[idx] = std::unique_ptr<
+                                jit_int8_matmul_kernel_t<isa>> {
+                                new jit_int8_matmul_kernel_t<isa>(b)};
+                    }
+
                     if (!int8_kernels_[idx]) return status::runtime_error;
+
                     CHECK(int8_kernels_[idx]->create_kernel());
                 }
 
     d.reorder_a = 1;
     d.reorder_b = 0;
     reo_ker_a_ = std::unique_ptr<jit_int8_matmul_utils_kernel_t> {
-            new jit_int8_matmul_utils_kernel_t(d)};
+            new jit_int8_matmul_utils_kernel_t(d, isa)};
     CHECK(reo_ker_a_->create_kernel());
 
     d.reorder_b = 1;
     d.reorder_a = 0;
     reo_ker_b_ = std::unique_ptr<jit_int8_matmul_utils_kernel_t> {
-            new jit_int8_matmul_utils_kernel_t(d)};
+            new jit_int8_matmul_utils_kernel_t(d, isa)};
     CHECK(reo_ker_b_->create_kernel());
 
     return status::success;
 }
 
-jit_int8_matmul_t::jit_int8_matmul_t(const pd_t *apd) : primitive_t(apd) {}
-jit_int8_matmul_t::~jit_int8_matmul_t() = default;
+template <cpu_isa_t isa>
+jit_int8_matmul_t<isa>::jit_int8_matmul_t(const pd_t *apd) : primitive_t(apd) {}
+template <cpu_isa_t isa>
+jit_int8_matmul_t<isa>::~jit_int8_matmul_t() = default;
 
-status_t jit_int8_matmul_t::execute(const exec_ctx_t &ctx) const {
+template <cpu_isa_t isa>
+status_t jit_int8_matmul_t<isa>::execute(const exec_ctx_t &ctx) const {
     const auto *weights_b = CTX_IN_MEM(const float *, DNNL_ARG_WEIGHTS);
     const auto *src_b = CTX_IN_MEM(const float *, DNNL_ARG_SRC);
     auto dst = CTX_OUT_MEM(float *, DNNL_ARG_DST);
@@ -1035,7 +1211,7 @@ status_t jit_int8_matmul_t::execute(const exec_ctx_t &ctx) const {
     const auto &b = pd()->get_b();
     const auto &d = pd()->get_d();
 
-    auto &scratchpad = ctx.get_scratchpad_grantor();
+    const auto &scratchpad = ctx.get_scratchpad_grantor();
 
     int num_threads = dnnl_get_current_num_threads();
     char *src = scratchpad.template get<char>(key_brgemm_primitive_buffer_a);
@@ -1063,9 +1239,13 @@ status_t jit_int8_matmul_t::execute(const exec_ctx_t &ctx) const {
         int k_blks = div_up(K, b.k_blk);
         int parallel_work = B * m_blks * k_blks;
         int blk_per_bt = m_blks * k_blks;
-        int nt = std::min(pd()->mm_parallel_work, num_threads);
         auto tmp_src = src_b;
-
+        // If parallel_work == 1, we limit num threads to 1 as parallel(1, ...)
+        // does not create a parallel section. We do not limit number of threads
+        // for case 1 < parallel_work_amount_ < dnnl_get_max_threads() to avoid
+        // potential overhead on spawning different number of OMP threads from
+        // layer to layer.
+        int nt = parallel_work > 1 ? num_threads : 1;
         parallel(nt, [&](const int ithr, const int nthr) {
             int start {0}, end {0};
             balance211(parallel_work, nt, ithr, start, end);
@@ -1169,12 +1349,10 @@ status_t jit_int8_matmul_t::execute(const exec_ctx_t &ctx) const {
         int n_blks = div_up(N, d.n_blk);
         int parallel_work = B * n_blks * k_blks;
         int blk_per_bt = n_blks * k_blks;
-        int nt = std::min(pd()->mm_parallel_work, num_threads);
-
+        int nt = parallel_work > 1 ? num_threads : 1;
         parallel(nt, [&](const int ithr, const int nthr) {
             int start {0}, end {0};
             balance211(parallel_work, nt, ithr, start, end);
-
             int bt = start / blk_per_bt;
             int bs = start % blk_per_bt;
             int nobl = end - start;
@@ -1271,10 +1449,10 @@ status_t jit_int8_matmul_t::execute(const exec_ctx_t &ctx) const {
         });
     };
 
-    auto kernel_execute = [&](int idx, int na, int nb, int m_blk_adr,
-                                  int n_blk_adr, int dst_adr, int bias_addr,
-                                  int scl_addr, int zp_ptr_a_adr,
-                                  int zp_ptr_b_adr, int zp_b_buf) {
+    auto kernel_execute
+            = [&](int idx, int na, int nb, int m_blk_adr, int n_blk_adr,
+                      int dst_adr, int bias_addr, int scl_addr,
+                      int zp_ptr_a_adr, int zp_ptr_b_adr, int zp_b_buf) {
         call_params_t p;
         p.na = &na;
         p.nb = &nb;
@@ -1286,7 +1464,7 @@ status_t jit_int8_matmul_t::execute(const exec_ctx_t &ctx) const {
         p.dst_scales = dst_scales;
         p.src_zero_point = src_zero_points;
         if (b.is_zp_b_int8)
-            p.wei_zero_point_buf = (int8_t *)wei_zero_points + zp_b_buf;
+            p.wei_zero_point_buf = (const int8_t *)wei_zero_points;
         else
             p.wei_zero_point = wei_zero_points;
         p.dst_zero_point = dst_zero_points;
@@ -1303,7 +1481,7 @@ status_t jit_int8_matmul_t::execute(const exec_ctx_t &ctx) const {
         int num_b_blocks = div_up(N, (b.n_blk * b.ld_block));
         int ktail = (b.k_tail == 0) ? 0 : 1;
         int parallel_work = B * num_a_blocks;
-        int nt = std::min(num_threads, pd()->mm_parallel_work);
+        int nt = parallel_work > 1 ? num_threads : 1;
         if (b.zp_type_b != jit_int8_broadcast_t::none)
             parallel(nt, [&](const int ithr, const int nthr) {
                 int start {0}, end {0};
@@ -1346,6 +1524,7 @@ status_t jit_int8_matmul_t::execute(const exec_ctx_t &ctx) const {
             });
 
         parallel_work = B * num_b_blocks;
+        nt = parallel_work > 1 ? num_threads : 1;
         if (b.zp_type_a != jit_int8_broadcast_t::none)
             parallel(nt, [&](const int ithr, const int nthr) {
                 int start {0}, end {0};
@@ -1417,8 +1596,7 @@ status_t jit_int8_matmul_t::execute(const exec_ctx_t &ctx) const {
     num_b_blocks = div_up(N, n_block_sz);
     int ktail = (b.k_tail == 0) ? 0 : 1;
     int parallel_work = pd()->mm_parallel_work;
-    int nt = std::min(num_threads, parallel_work);
-
+    int nt = parallel_work > 1 ? num_threads : 1;
     parallel(nt, [&](const int ithr, const int nthr) {
         int start {0}, end {0};
         balance211(parallel_work, nt, ithr, start, end);
@@ -1543,6 +1721,8 @@ status_t jit_int8_matmul_t::execute(const exec_ctx_t &ctx) const {
 
     return status::success;
 }
+
+template struct jit_int8_matmul_t<sve>;
 
 } // namespace matmul
 } // namespace aarch64

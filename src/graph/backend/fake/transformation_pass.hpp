@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2025 Intel Corporation
+* Copyright 2021 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -61,9 +61,7 @@ public:
         pu.match(agraph, pgraph, matched_op_list);
         if (!matched_op_list.empty()) {
             // temporary solution here for showing which pattern matched
-            if (getenv_int_user("GRAPH_DUMP", 0) > 0
-                    || utils::check_verbose_string_user(
-                            "GRAPH_DUMP", "pattern")) {
+            if (utils::get_graph_dump_mode(graph_dump_mode_t::pattern)) {
                 verbose_printf(
                         "graph,info,pattern,hit,%s\n", get_pass_name().c_str());
             }
@@ -76,17 +74,10 @@ public:
     }
 };
 
-#define DECLARE_PASS_EX(bname, pname, counter) \
-    static auto _registered_pass_##pname##_##bname##_##counter##_
-
-#define DECLARE_PASS(bname, pname, counter) \
-    DECLARE_PASS_EX(bname, pname, counter)
-
 #define FAKE_BACKEND_REGISTER_TRANSFORMATION_PASS( \
         backend_name, pass_class_name) \
-    DECLARE_PASS(backend_name, pass_class_name, __COUNTER__) \
-            = registry.register_pass(#backend_name, #pass_class_name, \
-                    &transformation_pass_t::create)
+    registry.register_pass( \
+            #backend_name, #pass_class_name, &transformation_pass_t::create)
 
 #define FAKE_BACKEND_REGISTER_PASSES_DEF_BEGIN(passes_class_) \
     inline void register_##passes_class_( \

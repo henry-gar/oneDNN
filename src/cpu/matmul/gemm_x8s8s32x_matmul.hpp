@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2023 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -62,7 +62,7 @@ struct gemm_x8s8s32x_matmul_t : public primitive_t {
 
             // mb value is calculated based on work-sharing using
             // balance211 in execute()
-            dim_t mb = DNNL_RUNTIME_DIM_VAL;
+            auto mb = runtime_value_for<dim_t>();
             if (!has_runtime_dims && ((batch * M) % nthr == 0)) {
                 const dim_t m_per_thr = nstl::max<dim_t>(1, (batch * M) / nthr);
                 if (m_per_thr >= M && m_per_thr % M == 0) {

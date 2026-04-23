@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2024 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -30,7 +30,7 @@ public:
     using value_type = size_t;
     value_type id() const { return id_; }
 
-    id_t() : id_(++counter) {};
+    id_t() : id_(++counter) {}
 
 protected:
     static std::atomic<value_type> counter;

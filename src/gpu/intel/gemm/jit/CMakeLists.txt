@@ -1,5 +1,5 @@
 #===============================================================================
-# Copyright 2024-2025 Intel Corporation
+# Copyright 2024 Intel Corporation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,7 +19,27 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "IntelLLVM" OR CMAKE_CXX_COMPILER_ID MATCHES "
     append(CMAKE_CXX_FLAGS " -Wno-implicit-int-conversion")
 endif()
 
-set(DIRS "generator;generator/pieces;generator_dsl;selector")
+# Use oneDNN names for ALL to ensure string replacement functions correctly
+set(GPUS ${DNNL_ENABLE_PRIMITIVE_GPU_ISA})
+string(REPLACE "ALL" "XELP;XEHP;XEHPG;XEHPC;XE2;XE3;XE3P" GPUS "${GPUS}")
+string(REPLACE "XELP" "12LP" GPUS "${GPUS}")
+string(REPLACE "XEHPG" "12p7" GPUS "${GPUS}")
+string(REPLACE "XEHPC" "12p8" GPUS "${GPUS}")
+string(REPLACE "XEHP" "12HP" GPUS "${GPUS}")
+string(REPLACE "XE2" "Xe2" GPUS "${GPUS}")
+string(REPLACE "XE3" "Xe3" GPUS "${GPUS}")
+string(REPLACE "XE3P" "Xe3P" GPUS "${GPUS}")
+
+set(ALL_GPUS "12LP;12HP;12p7;12p8;Xe2;Xe3;Xe3P")
+foreach(GPU ${GPUS})
+    if(NOT ${GPU} IN_LIST ALL_GPUS)
+        message(FATAL_ERROR "Unknown GPU architecture: ${GPU}")
+    endif()
+    string(TOUPPER "${GPU}" GPU)
+    add_definitions_with_host_compiler("-DGEMMSTONE_BUILD_${GPU}")
+endforeach()
+
+set(DIRS "dsl;generator;generator/pieces;generator_dsl;selector")
 
 file(GLOB SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/*.hpp
@@ -44,7 +64,7 @@ if(DPCPP_HOST_COMPILER_KIND STREQUAL "DEFAULT")
      )
 
     if (DNNL_ENABLE_PRIMITIVE_GPU_ISA STREQUAL "ALL")
-        set(DNNL_GPU_ISA_LIST "XELP;XEHP;XEHPG;XEHPC;XE2;XE3")
+        set(DNNL_GPU_ISA_LIST "XELP;XEHP;XEHPG;XEHPC;XE2;XE3;XE3P")
     else()
         foreach(isa ${DNNL_ENABLE_PRIMITIVE_GPU_ISA})
             string(TOUPPER ${isa} ISA)
@@ -53,11 +73,11 @@ if(DPCPP_HOST_COMPILER_KIND STREQUAL "DEFAULT")
     endif()
 
     foreach(isa ${DNNL_GPU_ISA_LIST})
-        set(GENERATOR_LIB generator${isa})
-        add_library(${GENERATOR_LIB} OBJECT ${GENERATOR_SOURCES})
-        target_compile_definitions(${GENERATOR_LIB} PRIVATE DNNL_GPU_ISA_${isa})
-        set_property(GLOBAL APPEND PROPERTY DNNL_LIB_DEPS
-                        $<TARGET_OBJECTS:${GENERATOR_LIB}>)
+            set(GENERATOR_LIB generator${isa})
+            add_library(${GENERATOR_LIB} OBJECT ${GENERATOR_SOURCES})
+            target_compile_definitions(${GENERATOR_LIB} PRIVATE DNNL_GPU_ISA_${isa})
+            set_property(GLOBAL APPEND PROPERTY DNNL_LIB_DEPS
+                            $<TARGET_OBJECTS:${GENERATOR_LIB}>)
     endforeach()
 endif()
 
@@ -66,7 +86,7 @@ add_library(${OBJ_LIB} OBJECT ${SOURCES})
 set_property(GLOBAL APPEND PROPERTY DNNL_LIB_DEPS
     $<TARGET_OBJECTS:${OBJ_LIB}>)
 
-include_directories_with_host_compiler_before(${OBJ_LIB} ${ONEDNN_GEMMSTONE_DIR} ${ONEDNN_GEMMSTONE_DIR}/include/gemmstone)
+include_directories_with_host_compiler_before(${OBJ_LIB} ${ONEDNN_GEMMSTONE_DIR})
 
 if(CMAKE_COMPILER_IS_GNUCC)
     # Workaround for LTO bug in GCC 10, 11, 12 (possibly other versions)

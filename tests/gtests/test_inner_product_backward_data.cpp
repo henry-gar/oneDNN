@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2016-2025 Intel Corporation
+* Copyright 2016 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -32,9 +32,12 @@ template <typename data_t>
 void compute_ref_inner_product_bwd_data(int ndims,
         const test_inner_product_descr_t &ipd, const memory &diff_dst,
         const memory &weights, const memory &diff_src) {
-    auto diff_dst_data = map_memory<data_t>(diff_dst);
-    auto weights_data = map_memory<data_t>(weights);
-    auto diff_src_data = map_memory<data_t>(diff_src);
+    auto diff_dst_mapped = map_memory<data_t>(diff_dst);
+    data_t *diff_dst_data = diff_dst_mapped;
+    auto weights_mapped = map_memory<data_t>(weights);
+    data_t *weights_data = weights_mapped;
+    auto diff_src_mapped = map_memory<data_t>(diff_src);
+    data_t *diff_src_data = diff_src_mapped;
 
     const memory::desc diff_dst_d = diff_dst.get_desc();
     const memory::desc weights_d = weights.get_desc();
@@ -47,7 +50,7 @@ void compute_ref_inner_product_bwd_data(int ndims,
     if (ndims == 5) has_spatial = has_spatial || ipd.kd > 1;
     auto padded_ic = diff_src_d.get_padded_dims()[1];
 
-    dnnl::impl::parallel_nd(ipd.mb, ipd.ic, [&](memory::dim n, memory::dim ic) {
+    dnnl::impl::parallel_nd(ipd.mb, ipd.ic, [=](memory::dim n, memory::dim ic) {
         if (has_spatial) {
             for_(memory::dim kd = 0; kd < ipd.kd; ++kd)
             for_(memory::dim kh = 0; kh < ipd.kh; ++kh)
@@ -78,6 +81,8 @@ void compute_ref_inner_product_bwd_data(int ndims,
             }
         }
     });
+
+    synchronize_threadpool(diff_dst.get_engine().get_kind());
 }
 
 struct inprod_test_params_t {
@@ -216,11 +221,11 @@ protected:
         ASSERT_EQ(ip_primitive_desc.get_prop_kind(), prop_kind::backward_data);
 
         EXPECT_ANY_THROW(inner_product_backward_data(ip_primitive_desc, {}));
-        inner_product_backward_data(ip_primitive_desc)
-                .execute(strm,
-                        {{DNNL_ARG_DIFF_DST, ip_diff_dst},
-                                {DNNL_ARG_WEIGHTS, ip_weights},
-                                {DNNL_ARG_DIFF_SRC, ip_diff_src}});
+        inner_product_backward_data prim(ip_primitive_desc);
+        prim.execute(strm,
+                {{DNNL_ARG_DIFF_DST, ip_diff_dst},
+                        {DNNL_ARG_WEIGHTS, ip_weights},
+                        {DNNL_ARG_DIFF_SRC, ip_diff_src}});
         strm.wait();
 
         compute_ref_inner_product_bwd_data<data_t>(
@@ -235,11 +240,17 @@ using inner_product_test_float = inner_product_test_bwd_data_t<float>;
 using inprod_test_params_float = inprod_test_params_t;
 
 #define EXPAND_SIZES_3D(...) \
-    5, { __VA_ARGS__ }
+    5, { \
+        __VA_ARGS__ \
+    }
 #define EXPAND_SIZES_2D(mb, ic, oc, kh, kw) \
-    4, { mb, ic, oc, 1, kh, kw }
+    4, { \
+        mb, ic, oc, 1, kh, kw \
+    }
 #define EXPAND_SIZES_1D(mb, ic, oc, kw) \
-    3, { mb, ic, oc, 1, 1, kw }
+    3, { \
+        mb, ic, oc, 1, 1, kw \
+    }
 
 TEST_P(inner_product_test_float, TestsInnerProduct) {}
 

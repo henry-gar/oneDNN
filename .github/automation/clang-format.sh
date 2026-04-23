@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 #===============================================================================
-# Copyright 2019-2020 Intel Corporation
+# Copyright 2019 Intel Corporation
 # Copyright 2025 Arm Ltd. and affiliates
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,7 +17,7 @@
 # limitations under the License.
 #===============================================================================
 
-CLANG_FORMAT=clang-format-11
+CLANG_FORMAT=clang-format-18
 
 echo "Checking ${CLANG_FORMAT}"
 if ! ${CLANG_FORMAT} --version; then

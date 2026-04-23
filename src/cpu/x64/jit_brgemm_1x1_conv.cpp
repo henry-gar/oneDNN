@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2025 Intel Corporation
+* Copyright 2021 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -158,7 +158,8 @@ status_t brgemm_1x1_convolution_fwd_t<isa>::pd_t::init(engine_t *engine) {
 
     brgemm_convolution_utils::set_amx_wsp_per_thread(jcp_);
     auto scratchpad = scratchpad_registry().registrar();
-    brgemm_convolution_utils::init_scratchpad(scratchpad, jcp_);
+    CHECK(brgemm_convolution_utils::init_scratchpad(
+            scratchpad, jcp_, *src_md(), *weights_md(), *dst_md()));
 
     return status::success;
 }
@@ -441,7 +442,7 @@ void brgemm_1x1_convolution_fwd_t<isa>::exec_ker(
     const bool is_ic_tail = jcp.is_reduced_rtus
             ? is_last_os
             : (icc == pd()->ic_chunks_ - 1
-                    && ((jcp.ic - ic) % jcp.ic_block != 0));
+                      && ((jcp.ic - ic) % jcp.ic_block != 0));
 
     // Using blk_off to offset batch is motivated input\output striding aligment
     // See `blk_off` definition.
@@ -498,9 +499,9 @@ void brgemm_1x1_convolution_fwd_t<isa>::exec_ker(
 
         for (int k = 0; k < n_ic_blocks; k++) {
             const size_t ic_off = jcp.is_reduced_rtus
-                    ? (brgemm_is_ic_tail
-                                    ? jcp.ic_without_padding - jcp.rtus_ic_size
-                                    : 0)
+                    ? (brgemm_is_ic_tail ? jcp.ic_without_padding
+                                              - jcp.rtus_ic_size
+                                         : 0)
                     : (ic_block_s + k) * jcp.ic_block;
             const size_t src_ic = ic_off;
             const auto wei_ic = ic + ic_off;
@@ -580,7 +581,8 @@ void brgemm_1x1_convolution_fwd_t<isa>::execute_os_blocking(
     const int os_chunks = div_up(jcp.nb_os, jcp.nb_os_blocking);
     const int work_amount = jcp.mb * jcp.ngroups * jcp.nb_oc * os_chunks;
 
-    parallel(pd()->jcp_.nthr, [&](const int ithr, const int nthr) {
+    parallel(pd()->jcp_.nthr,
+            [= COMPAT_THIS_CAPTURE](const int ithr, const int nthr) {
         if (ithr >= work_amount) return;
         brgemm_batch_element_t *const brg_batch
                 = brg_batch_global + (size_t)ithr * jcp.adjusted_batch_size;
@@ -673,7 +675,8 @@ void brgemm_1x1_convolution_fwd_t<isa>::execute_full_spatial(
     const bool is_amx = brgemm_convolution_utils::is_amx(isa);
     const int work_amount
             = jcp.mb * jcp.ngroups * jcp.nb_oc * OD * OH * jcp.nb_ow;
-    parallel(pd()->jcp_.nthr, [&](const int ithr, const int nthr) {
+    parallel(pd()->jcp_.nthr,
+            [= COMPAT_THIS_CAPTURE](const int ithr, const int nthr) {
         if (ithr >= work_amount) return;
         brgemm_batch_element_t *const brg_batch
                 = brg_batch_global + (size_t)ithr * jcp.adjusted_batch_size;
@@ -730,7 +733,7 @@ status_t brgemm_1x1_convolution_fwd_t<isa>::execute_forward_all(
 
     brgemm_exec_ctx_t brgemm_ctx(ctx, pd());
 
-    const memory_tracking::grantor_t scratchpad = ctx.get_scratchpad_grantor();
+    const auto &scratchpad = ctx.get_scratchpad_grantor();
 
     const auto &jcp = pd()->jcp_;
     const memory_desc_wrapper weights_d(pd()->weights_md(0));
@@ -763,7 +766,7 @@ status_t brgemm_1x1_convolution_fwd_t<isa>::execute_forward_all(
     brgemm_batch_element_t *const brg_batch_global
             = (jcp.brg_type != brgemm_strd)
             ? scratchpad.template get<brgemm_batch_element_t>(
-                    key_brgemm_primitive_batch)
+                      key_brgemm_primitive_batch)
             : nullptr;
     char *const c_buffer_global = (jcp.use_buffer)
             ? scratchpad.template get<char>(key_brgemm_primitive_buffer)
@@ -802,8 +805,8 @@ template struct brgemm_1x1_convolution_fwd_t<avx512_core_bf16>;
 template struct brgemm_1x1_convolution_fwd_t<avx512_core_fp16>;
 template struct brgemm_1x1_convolution_fwd_t<avx512_core_amx>;
 template struct brgemm_1x1_convolution_fwd_t<avx512_core_amx_fp16>;
-template struct brgemm_1x1_convolution_fwd_t<avx10_2_512>;
-template struct brgemm_1x1_convolution_fwd_t<avx10_2_512_amx_2>;
+template struct brgemm_1x1_convolution_fwd_t<avx10_2>;
+template struct brgemm_1x1_convolution_fwd_t<avx10_2_amx_2>;
 
 } // namespace x64
 } // namespace cpu

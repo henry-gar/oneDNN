@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -17,9 +17,12 @@
 /// @example cross_engine_reorder.cpp
 /// > Annotated version: @ref cross_engine_reorder_cpp
 
-/// @page cross_engine_reorder_cpp Reorder between CPU and GPU engines
-/// This C++ API example demonstrates programming flow when reordering memory
+/// @page cross_engine_reorder_cpp_brief
+/// @brief This C++ API example demonstrates programming flow when reordering memory
 /// between CPU and GPU engines.
+
+/// @page cross_engine_reorder_cpp Reorder between CPU and GPU engines
+/// \copybrief cross_engine_reorder_cpp_brief
 ///
 /// > Example code: @ref cross_engine_reorder.cpp
 ///

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -30,16 +30,18 @@ static status_t init_conf_common(
     const memory_desc_wrapper src_mdw(pd->invariant_src_md());
     const memory_desc_wrapper dst_mdw(pd->invariant_dst_md());
 
+    conf.require_stateless_addressing = pd->has_large_buffers();
+
     auto is_c_dense = [](const memory_desc_wrapper &mdw) {
         return mdw.blocking_desc().strides[1] == 1;
     };
     auto is_c_blocked_by
             = [](const memory_desc_wrapper &mdw, const int blockSize) {
-                  auto &blk = mdw.blocking_desc();
-                  if (blk.inner_nblks == 0) return false;
-                  return (blk.inner_idxs[blk.inner_nblks - 1] == 1)
-                          && (blk.inner_blks[blk.inner_nblks - 1] == blockSize);
-              };
+        auto &blk = mdw.blocking_desc();
+        if (blk.inner_nblks == 0) return false;
+        return (blk.inner_idxs[blk.inner_nblks - 1] == 1)
+                && (blk.inner_blks[blk.inner_nblks - 1] == blockSize);
+    };
 
     VDISPATCH_POOLING_IC(is_c_blocked_by(src_mdw, 16)
                     || is_c_blocked_by(src_mdw, 32) || is_c_dense(src_mdw),
@@ -74,6 +76,16 @@ static status_t init_conf_common(
     dim_t c_padded = utils::rnd_up(conf.c_padded, conf.sub_group_size);
 
     if (c_block_size >= 16 && n_block_size >= 16) {
+        // Workaround: OCL compiler on XE3P incorrectly compiles
+        // read_vect_c_block when USE_MB_C_BLOCK and u8 data type.
+        auto is_xe3p = utils::downcast<intel::engine_t *>(engine)
+                               ->device_info()
+                               ->gpu_arch()
+                >= compute::gpu_arch_t::xe3p;
+        VDISPATCH_POOLING_IC(!(is_xe3p && src_mdw.data_type() == data_type::u8),
+                "%s," VERBOSE_IMPL_HEURISTIC_FAIL, pd->info(engine),
+                "workaround xe3p compiler bug: u8 with mb_c_block");
+
         c_padded = utils::rnd_up(conf.c_padded, c_block_size);
         conf.use_mb_c_block = true;
         conf.vect_dt_n = 8;
@@ -174,13 +186,14 @@ static status_t init_conf_common(
     conf.dispatch.generate();
 
     return status::success;
-};
+}
 
 static status_t init_kernel_ctx_common(compute::kernel_ctx_t &kernel_ctx,
         const conf_t &conf, const offsets_t &off, const post_ops_t &post_ops,
         const memory_desc_t *dst_md) {
     using namespace dnnl::impl::alg_kind;
     kernel_ctx.set_data_type(conf.src_dt);
+    kernel_ctx.require_stateless_addressing(conf.require_stateless_addressing);
 
     kernel_ctx.define_int("NDIMS", conf.ndims);
     if (conf.num_batches > 1) {

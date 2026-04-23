@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -31,7 +31,7 @@ using namespace ngen;
 /* CommonStrategy member functions */
 CommonStrategy::CommonStrategy(HW hw, int stepping) : raHW(hw), emulate(hw, stepping)
 {
-    fused = one_of(hw, HW::Gen12LP, HW::XeHP, HW::XeHPG);
+    fused = one_of(hw, {HW::Gen12LP, HW::XeHP, HW::XeHPG});
     systolicAvailable = (hw >= HW::XeHP);
 }
 
@@ -43,6 +43,7 @@ void CommonStrategy::preflight(HW hw, const CommonProblem &problem)
     bool emulateNeedsAcc = emulate.emulate64 || emulate.emulateDWxDW || emulate.emulate64_mul;
     if (moveR0 == MoveR0::Acc && emulateNeedsAcc)
         moveR0 = MoveR0::None;
+    if (hw >= HW::Xe3p) moveR0 = MoveR0::None;
 
     spf &= !fused;
 }
@@ -208,6 +209,8 @@ void GEMMStrategy::preflight(HW hw, const GEMMProblem &problem)
 
     checkBeta1 |= C.atomic && !problem.beta1();
 
+    GRFs = std::min(GRFs, GRF::maxRegs(hw));
+
     // Fixed systolic kernel handling.
     if (fixedSystolic) {
         if (wg[LoopM] == 0) wg[LoopM] = 4;
@@ -234,6 +237,9 @@ void GEMMStrategy::preflight(HW hw, const GEMMProblem &problem)
     //                         64-bit emulation > r0 header storage.
     if (AccumulatorRegister::count(hw, GRFs, problem.Tc.real().ngen()) == 0)
         kChain = 1;
+    // Using acc and mad not working on xe3p
+    if (!systolic && !dotVL && hw == HW::Xe3p)
+        kChain = 1;
     cAccumulators &= (kChain == 1);
 
     bool emulateNeedsAcc = emulate.emulate64 || emulate.emulateDWxDW;
@@ -250,8 +256,8 @@ void GEMMStrategy::preflight(HW hw, const GEMMProblem &problem)
     checkAdd32 &= (A.base.isStateless() || B.base.isStateless() || problem.quantized2DA() || problem.quantized2DB());
     checkAdd32 &= !(A.address2D && B.address2D && (!prefetchA || A_prefetch.address2D) && (!prefetchB || B_prefetch.address2D));
 
-    int opCount = outerProductCount(hw, problem, *this);
-    int minOPCount = minOuterProductCount(hw, problem, *this);
+    int opCount = outerProductCount(problem, *this);
+    int minOPCount = minOuterProductCount(problem, *this);
     int ukAlign = opCount;
 
     if (kParallelLocal)
@@ -284,7 +290,7 @@ void GEMMStrategy::preflight(HW hw, const GEMMProblem &problem)
 
     // Systolic handling.
     if (systolic) {
-        auto params = systolicParams(hw, problem, *this);
+        auto params = systolicParams(problem);
 
         ukAlign = lcm(ukAlign, params.ksys);
         auto tileX = params.osys;
@@ -324,7 +330,7 @@ void GEMMStrategy::preflight(HW hw, const GEMMProblem &problem)
     }
 
     if (dpasw) {
-        auto params = systolicParams(hw, problem, *this);
+        auto params = systolicParams(problem);
         if (globalCM) {
             if (!fusedM()) stub();
             B.dpasw = true;
@@ -477,7 +483,7 @@ void GEMMStrategy::preflight(HW hw, const GEMMProblem &problem)
 
     kPadding = align_up(kPadding, kAlign(problem));
 
-    if (fixedWG(problem) && (!kParallelLocal || wgPadFactor > 1))
+    if (fixedWG(problem) && (!kParallelLocal || fixedWGK()))
         activeThreads = wg[LoopM] * wg[LoopN] * wg[LoopK] * (splitCopy ? 2 : 1);
 
     CommonStrategy::preflight(hw, problem);
@@ -487,7 +493,7 @@ void GEMMStrategy::preflight(HW hw, const GEMMProblem &problem)
 bool GEMMStrategy::minimize(HW hw, const GEMMProblem &problem)
 {
     bool better = false;
-    auto minOPCount = minOuterProductCount(hw, problem, *this);
+    auto minOPCount = minOuterProductCount(problem, *this);
     auto ka_load_best_min = std::max<int>({1, 4 / problem.Ta, minOPCount});
     auto kb_load_best_min = std::max<int>({1, 4 / problem.Tb, minOPCount});
 
@@ -593,6 +599,7 @@ void MatrixAddressingStrategy::preflight(HW hw)
 void MatrixAddressingStrategy::forceA64()
 {
     base = AddressBase::createA64(true);
+    padded = false;
     if (accessType == AccessType::ChannelScattered && !newDP)
         accessType = AccessType::Scattered;
 }
@@ -622,7 +629,7 @@ void downgradeBPFAccess(const GEMMProblem &problem, GEMMStrategy &strategy)
 
 void GEMMStrategy::trimKChain(HW hw, int k, const GEMMProblem &problem)
 {
-    int minOPCount = minOuterProductCount(hw, problem, *this);
+    int minOPCount = minOuterProductCount(problem, *this);
     kChain = gcd(kChain, k / minOPCount);
 }
 

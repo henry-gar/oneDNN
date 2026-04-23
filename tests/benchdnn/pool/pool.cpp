@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 * Copyright 2022-2023 Arm Ltd. and affiliates
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
@@ -217,8 +217,8 @@ void setup_cmp(compare::compare_t &cmp, const prb_t *prb, data_kind_t kind,
     // and `kind` by value to avoid using dangling references.
     const auto pooling_add_check =
             [&, prb](const compare::compare_t::driver_check_func_args_t &args) {
-                return cuda_check_correctness(prb, args);
-            };
+        return cuda_check_correctness(prb, args);
+    };
     cmp.set_driver_check_function(pooling_add_check);
 }
 
@@ -242,7 +242,7 @@ std::vector<int> supported_exec_args(dir_t dir) {
     return (dir & FLAG_FWD)            ? exec_fwd_args
             : (driver_name == "graph") ? exec_bwd_args_graph
                                        : exec_bwd_args;
-};
+}
 
 void binary_po_fill_cfg(std::unordered_map<int, fill_cfg_t> &fill_cfg_map,
         int exec_arg, const dnn_mem_t &mem, const attr_t &attr) {
@@ -393,7 +393,7 @@ int doit(const std::vector<benchdnn_dnnl_wrapper_t<dnnl_primitive_t>> &v_prim,
     args_t args(mem_map), ref_args(ref_mem_map);
 
     if (bench_mode != bench_mode_t::init)
-        SAFE(execute_and_wait(v_prim[0], args, res), WARN);
+        SAFE(run_execution(v_prim[0], args, res), WARN);
 
     check_correctness(prb, get_kinds_to_check(prb, FLAG_FWD), args, ref_args,
             setup_cmp, res, FLAG_FWD);
@@ -412,7 +412,7 @@ int doit(const std::vector<benchdnn_dnnl_wrapper_t<dnnl_primitive_t>> &v_prim,
         args = args_t(mem_map);
         ref_args = args_t(ref_mem_map);
 
-        SAFE(execute_and_wait(v_prim[1], args, res), WARN);
+        SAFE(run_execution(v_prim[1], args, res), WARN);
 
         check_correctness(prb, get_kinds_to_check(prb, FLAG_BWD), args,
                 ref_args, setup_cmp, res, FLAG_BWD);

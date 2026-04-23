@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -184,7 +184,7 @@ public:
 
     /// @brief Returns memory size (in bytes) of this tensor
     /// @return The size
-    size_t get_size() const { return num_bytes_; };
+    size_t get_size() const { return num_bytes_; }
 
     /// @brief Returns the current graph tensor
     /// @return The graph tensor

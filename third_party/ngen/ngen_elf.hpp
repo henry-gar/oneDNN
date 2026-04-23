@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -36,6 +36,7 @@ public:
     explicit ELFCodeGenerator(Product product_, DebugConfig debugConfig = {})  : BinaryCodeGenerator<hw>(product_, debugConfig) {}
     explicit ELFCodeGenerator(int stepping_ = 0, DebugConfig debugConfig = {}) : BinaryCodeGenerator<hw>(stepping_, debugConfig) {}
     explicit ELFCodeGenerator(DebugConfig debugConfig) : ELFCodeGenerator(0, debugConfig) {}
+    ELFCodeGenerator(ELFCodeGenerator &&) = default;
 
     const NEOInterfaceHandler &getInterface()                            { return interface_; }
     void setInterface(NEOInterfaceHandler i)                             { interface_ = std::move(i); }
@@ -67,6 +68,8 @@ public:
     void requireWalkOrder(int o1, int o2)                                { interface_.requireWalkOrder(o1, o2); }
     void requireWalkOrder(int o1, int o2, int o3)                        { interface_.requireWalkOrder(o1, o2, o3); }
     void requireWorkgroup(size_t x, size_t y = 1, size_t z = 1)          { interface_.requireWorkgroup(x, y, z); }
+
+    void setEfficient64Bit(bool def = true)                              { BinaryCodeGenerator<hw>::setEfficient64Bit(def); interface_.setEfficient64Bit(def); }
 
     void finalizeInterface()                                             { interface_.finalize(); }
 
@@ -582,7 +585,8 @@ template <typename... Targs> NGEN_NAMESPACE::Subregister getGroupID(Targs&&... a
 void prologue() { NGEN_NAMESPACE::ELFCodeGenerator<hw>::prologue(); } \
 void epilogue(const NGEN_NAMESPACE::RegData &r0_info = NGEN_NAMESPACE::RegData()) { NGEN_NAMESPACE::ELFCodeGenerator<hw>::epilogue(r0_info); }
 
-#define NGEN_FORWARD_SCOPE_ELF_EXTRA(scope)
+#define NGEN_FORWARD_SCOPE_ELF_EXTRA(scope) \
+template <typename... Targs> void setEfficient64Bit(Targs&&... args) { scope::setEfficient64Bit(std::forward<Targs>(args)...); }
 
 #define NGEN_FORWARD_SCOPE_ELF_EXTRA2(scope)
 

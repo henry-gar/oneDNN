@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2017-2025 Intel Corporation
+* Copyright 2017 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <climits>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -31,6 +32,7 @@
 #include "common.hpp"
 #include "oneapi/dnnl/dnnl_types.h"
 #include "utils/data_kind.hpp"
+#include "utils/dims.hpp"
 #include "utils/wrapper.hpp"
 
 namespace tag {
@@ -72,36 +74,53 @@ struct attr_t {
         PER_DIM_3, // ... dims[3] point.
         PER_TENSOR, // ... point in the tensor.
         HOST_SCALAR, // same as COMMON, but uses host-side scalar memory
+        MX, // uses {1, ..., 32} groups and dynamic_mx formula
+        DYNAMIC_FP, // uses {1, ..., 16} groups and dynamic_fp formula
         POLICY_TOTAL // guard
+    };
+
+    enum class mask_input_t {
+        none,
+        mask,
+        policy,
     };
 
     static policy_t str2policy(const std::string &str);
     static const char *policy2str(policy_t policy);
-    static int get_default_mask(policy_t policy, int ndims);
     static int policy2mask(int arg, policy_t policy, int ndims = -1,
             dnnl_primitive_kind_t prim_kind = dnnl_undefined_primitive,
             bool has_groups = false);
+    static dnnl_quantization_mode_t policy2quantization_mode(policy_t policy);
 
     struct zero_points_t {
         struct entry_t {
-            entry_t(policy_t apolicy = COMMON, int avalue = 0,
+            entry_t(policy_t apolicy = POLICY_TOTAL, int avalue = 0,
                     dnnl_data_type_t adt = dnnl_s32,
                     const std::vector<dnnl_dim_t> &agroups = {})
-                : policy(apolicy), value(avalue), dt(adt), groups(agroups) {}
+                : policy(apolicy)
+                , value(avalue)
+                , dt(adt)
+                , groups(agroups)
+                , mask_input(policy == POLICY_TOTAL ? mask_input_t::none
+                                                    : mask_input_t::policy) {}
 
             int from_str(const std::string &s);
 
-            bool is_def() const {
-                return policy == COMMON && value == 0 && dt == dnnl_s32
-                        && groups.empty();
-            }
+            bool is_def() const { return mask_input == mask_input_t::none; }
 
             bool is_host_scalar() const { return policy == HOST_SCALAR; }
+            bool has_single_element() const {
+                if (mask_input == mask_input_t::mask) return mask == 0;
+                assert(mask_input == mask_input_t::policy);
+                return policy == policy_t::COMMON || policy == HOST_SCALAR;
+            }
 
-            policy_t policy = COMMON;
+            policy_t policy = POLICY_TOTAL;
             int value = 0;
             dnnl_data_type_t dt = dnnl_s32;
             std::vector<dnnl_dim_t> groups;
+            int64_t mask = INT_MIN;
+            mask_input_t mask_input = mask_input_t::none;
         };
 
         int from_str(const std::string &s);
@@ -145,30 +164,31 @@ struct attr_t {
 
         int get_mask(int arg,
                 dnnl_primitive_kind_t prim_kind = dnnl_undefined_primitive,
-                int ndims = -1, bool has_groups = false) const {
-            const auto &e = get(arg);
-            return attr_t::policy2mask(
-                    arg, e.policy, ndims, prim_kind, has_groups);
-        }
+                int ndims = -1, bool has_groups = false) const;
 
         std::map<int, entry_t> points;
     };
 
     struct precomputed_reductions_t {
         struct entry_t {
-            entry_t(policy_t apolicy = COMMON, dnnl_data_type_t adt = dnnl_s32,
+            entry_t(policy_t apolicy = POLICY_TOTAL,
+                    dnnl_data_type_t adt = dnnl_s32,
                     const std::vector<dnnl_dim_t> &agroups = {})
-                : policy(apolicy), dt(adt), groups(agroups) {}
+                : policy(apolicy)
+                , dt(adt)
+                , groups(agroups)
+                , mask_input(policy == POLICY_TOTAL ? mask_input_t::none
+                                                    : mask_input_t::policy) {}
 
             int from_str(const std::string &s);
 
-            bool is_def() const {
-                return policy == COMMON && dt == dnnl_s32 && groups.empty();
-            }
+            bool is_def() const { return mask_input == mask_input_t::none; }
 
-            policy_t policy = COMMON;
+            policy_t policy = POLICY_TOTAL;
             dnnl_data_type_t dt = dnnl_s32;
             std::vector<dnnl_dim_t> groups;
+            int64_t mask = INT_MIN;
+            mask_input_t mask_input = mask_input_t::none;
         };
 
         int from_str(const std::string &s);
@@ -200,35 +220,45 @@ struct attr_t {
 
         int get_mask(int arg,
                 dnnl_primitive_kind_t prim_kind = dnnl_undefined_primitive,
-                int ndims = -1, bool has_groups = false) const {
-            const auto &e = get(arg);
-            return attr_t::policy2mask(
-                    arg, e.policy, ndims, prim_kind, has_groups);
-        }
+                int ndims = -1, bool has_groups = false) const;
 
         std::map<int, entry_t> entries;
     };
 
     struct arg_scales_t {
         struct entry_t {
-            entry_t(policy_t apolicy = COMMON, float ascale = 1.f,
+            entry_t(policy_t apolicy = POLICY_TOTAL, float ascale = 1.f,
                     dnnl_data_type_t adt = dnnl_f32,
                     const std::vector<dnnl_dim_t> &agroups = {})
-                : policy(apolicy), scale(ascale), dt(adt), groups(agroups) {}
+                : policy(apolicy)
+                , scale(ascale)
+                , dt(adt)
+                , groups(agroups)
+                , mask_input(policy == POLICY_TOTAL ? mask_input_t::none
+                                                    : mask_input_t::policy) {}
 
             int from_str(const std::string &s);
 
-            bool is_def() const {
-                return policy == COMMON && scale == 1.f && dt == dnnl_f32
-                        && groups.empty();
-            }
+            bool is_def() const { return mask_input == mask_input_t::none; }
 
             bool is_host_scalar() const { return policy == HOST_SCALAR; }
+            bool is_dynamic() const {
+                return policy == MX || policy == DYNAMIC_FP;
+            }
+            bool is_mx() const { return policy == MX; }
+            bool is_dynamic_fp() const { return policy == DYNAMIC_FP; }
+            bool has_single_element() const {
+                if (mask_input == mask_input_t::mask) return mask == 0;
+                assert(mask_input == mask_input_t::policy);
+                return policy == policy_t::COMMON || policy == HOST_SCALAR;
+            }
 
-            policy_t policy = COMMON;
+            policy_t policy = POLICY_TOTAL;
             float scale = 1.f;
             dnnl_data_type_t dt = dnnl_f32;
             std::vector<dnnl_dim_t> groups;
+            int64_t mask = INT_MIN;
+            mask_input_t mask_input = mask_input_t::none;
         };
 
         void set(int arg, const entry_t &scale) { scales[arg] = scale; }
@@ -240,11 +270,7 @@ struct attr_t {
 
         int get_mask(int arg,
                 dnnl_primitive_kind_t prim_kind = dnnl_undefined_primitive,
-                int ndims = -1, bool has_groups = false) const {
-            const auto &e = get(arg);
-            return attr_t::policy2mask(
-                    arg, e.policy, ndims, prim_kind, has_groups);
-        }
+                int ndims = -1, bool has_groups = false) const;
 
         bool is_def(int arg) const {
             return scales.empty() || get(arg).is_def();
@@ -385,29 +411,26 @@ struct attr_t {
                 dnnl_data_type_t dst_dt = dnnl_f32;
             } convolution;
             struct binary_t {
-                enum class mask_input_t {
-                    none,
-                    mask,
-                    policy,
-                };
-
                 dnnl_alg_kind_t alg = dnnl_alg_kind_undef;
                 dnnl_data_type_t src1_dt = dnnl_data_type_undef;
-                policy_t policy = policy_t::COMMON;
-                int64_t mask = -1;
+                policy_t policy = policy_t::POLICY_TOTAL;
+                int64_t mask = INT_MIN;
                 mask_input_t mask_input = mask_input_t::none;
                 std::string tag = tag::any;
+                dims_t strides;
 
                 // For the src2 tensor when the algorithm takes ternary inputs
                 dnnl_data_type_t src2_dt = dnnl_data_type_undef;
-                policy_t src2_policy = policy_t::COMMON;
-                int64_t src2_mask = -1;
+                policy_t src2_policy = policy_t::POLICY_TOTAL;
+                int64_t src2_mask = INT_MIN;
                 mask_input_t src2_mask_input = mask_input_t::none;
                 std::string src2_tag = tag::any;
-
+                dims_t strides2;
             } binary;
             struct {
-                policy_t policy = policy_t::COMMON;
+                policy_t policy = policy_t::POLICY_TOTAL;
+                int64_t mask = INT_MIN;
+                mask_input_t mask_input = mask_input_t::none;
             } prelu;
 
             bool is_sum_kind() const;
@@ -429,12 +452,16 @@ struct attr_t {
         int binary_index() const;
         int prelu_index() const;
 
-        // ndims must be provided for primitives that have po mask that depends
-        // on the ndims. Currently this includes only lnorm with binary post-op
-        // with policy PER_OC.
-        // Some primitives might have a special handling for a policy provided.
-        // For such primitives prim_kind must be set so get_po_masks(prb->ndims) generates
-        // a correct mask. Currently this behavior depends on policy2mask().
+        // Note: this function is used only in reference compute paths.
+        //
+        // Note: `ndims` must be provided for primitives that have post-ops mask
+        // that depends on them. Currently, it affects only lnorm with binary
+        // post-op with policy PER_OC.
+        //
+        // Note: some primitives might need a special handling for a given
+        // policy. For such primitives `prim_kind` must be set to generate a
+        // correct mask value. Currently, this behavior depends on
+        // `policy2mask(...)` implementation.
         std::vector<std::pair<int, int>> get_po_masks(int ndims,
                 dnnl_primitive_kind_t prim_kind
                 = dnnl_undefined_primitive) const;
@@ -474,9 +501,14 @@ struct attr_t {
 
     struct dropout_t {
         float p = 0.f;
-        uint32_t seed = 0;
+        int64_t seed = 0;
+        int64_t offset = 0;
+        bool use_host_scalars = false;
         std::string tag = tag::any;
+
         bool is_def() const { return p == 0.f; }
+
+        bool has_output_mask() const { return tag != tag::undef; }
     };
 
     attr_t()
@@ -573,6 +605,26 @@ struct sparse_options_t {
             = dnnl_sparse_encoding_undef;
     static constexpr float def_sparsity = 0.9f;
 
+#if DNNL_EXPERIMENTAL_GROUPED_MEMORY
+    // Buffer indices for multi-handle grouped memory
+    static constexpr int grouped_values_idx = 0;
+    static constexpr int grouped_offsets_idx = 1;
+
+    struct grouped_data_t {
+        int variable_dim_idx
+                = -1; // index of the dimension with variable size (0 for M)
+        dnnl_dim_t group_count = 0; // total number of grouped blocks
+        std::vector<dnnl_dim_t>
+                group_sizes; // sizes for each group along the variable dimension
+        dnnl_dim_t max_variable_dim = 0; // optional dispatch hint (0 = unused)
+
+        bool is_def() const {
+            return variable_dim_idx == -1 && group_count == 0
+                    && group_sizes.empty();
+        }
+    };
+#endif
+
     sparse_options_t() = default;
     sparse_options_t(int arg, dnnl_sparse_encoding_t encoding, float sparsity) {
         add(arg, encoding, sparsity);
@@ -581,6 +633,38 @@ struct sparse_options_t {
     void add(int arg, dnnl_sparse_encoding_t encoding, float sparsity) {
         options_.insert({arg, {encoding, sparsity}});
     }
+#if DNNL_EXPERIMENTAL_GROUPED_MEMORY
+    void set_grouped(int arg, int var_dim_idx, dnnl_dim_t count,
+            const std::vector<dnnl_dim_t> &sizes, dnnl_dim_t max_var_dim = 0) {
+        add(arg, dnnl_grouped, 0.0f);
+        grouped_data_t gd;
+        gd.variable_dim_idx = var_dim_idx;
+        gd.group_count = count;
+        gd.group_sizes = sizes;
+        gd.max_variable_dim = max_var_dim;
+        grouped_data_[arg] = gd;
+    }
+
+    int get_variable_dim_idx(int arg = DNNL_ARG_SRC) const {
+        const auto it = grouped_data_.find(arg);
+        return it == grouped_data_.end() ? -1 : it->second.variable_dim_idx;
+    }
+    // Get group count - the count is the same across all grouped arguments
+    dnnl_dim_t get_group_count() const {
+        if (grouped_data_.empty()) return 0;
+        return grouped_data_.begin()->second.group_count;
+    }
+    const std::vector<dnnl_dim_t> &get_group_sizes(
+            int arg = DNNL_ARG_SRC) const {
+        static const std::vector<dnnl_dim_t> empty;
+        const auto it = grouped_data_.find(arg);
+        return it == grouped_data_.end() ? empty : it->second.group_sizes;
+    }
+    dnnl_dim_t get_max_variable_dim() const {
+        if (grouped_data_.empty()) return 0;
+        return grouped_data_.begin()->second.max_variable_dim;
+    }
+#endif
 
     dnnl_sparse_encoding_t get_encoding(int arg) const {
         if (options_.count(arg) == 0) return dnnl_sparse_encoding_undef;
@@ -633,6 +717,9 @@ struct sparse_options_t {
 
 private:
     std::unordered_map<int, std::pair<dnnl_sparse_encoding_t, float>> options_;
+#if DNNL_EXPERIMENTAL_GROUPED_MEMORY
+    std::unordered_map<int, grouped_data_t> grouped_data_;
+#endif
 };
 
 std::ostream &operator<<(
@@ -662,9 +749,9 @@ struct attr_args_t {
 
     attr_args_t() = default;
 
-    void prepare_quant(const attr_t &attr, int arg, int mask = -1) {
+    void prepare_quant(const attr_t &attr, int arg, int mask = INT_MIN) {
         entries.insert(std::make_pair(arg, mask));
-    };
+    }
 
     int prepare_post_ops_mds(const attr_t &attr, int ndims,
             const dnnl_dims_t prb_dims,
@@ -695,7 +782,7 @@ struct attr_args_t {
         }
     }
 
-    static constexpr int undefined_mask = -1;
+    static constexpr int undefined_mask = INT_MIN;
 
 private:
     std::map<int, int /* mask*/> entries;
@@ -742,8 +829,8 @@ float compute_eltwise_bwd(attr_t::post_ops_t::kind_t kind, float d_dst,
         float src, float alpha, float beta);
 float compute_binary(
         attr_t::post_ops_t::kind_t kind, float src0, float src1, bool src2);
-void maybe_dropout(const attr_t &attr, float &val, int64_t offset,
-        const dnn_mem_t &dropout);
+void maybe_dropout(const attr_t &attr, float &val, int64_t idx,
+        const dnn_mem_t &dropout_mask);
 void maybe_round(const attr_t &attr, int arg, float &val, int64_t offset,
         dnnl_data_type_t dst_dt);
 void maybe_post_ops(const attr_t &attr, float &val, float sum_val,

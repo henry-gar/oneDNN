@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -13,7 +13,9 @@
 * See the License for the specific language governing permissions and
 * limitations under the License.
 *******************************************************************************/
+
 #include "common/c_types_map.hpp"
+#include "common/compiler_workarounds.hpp"
 #include "common/dnnl_thread.hpp"
 #include "common/type_helpers.hpp"
 
@@ -53,8 +55,15 @@ status_t ref_group_normalization_fwd_t::execute(const exec_ctx_t &ctx) const {
     auto dst = CTX_OUT_CLEAN_MEM(void *, DNNL_ARG_DST, status);
     CHECK(status);
 
-    DEFINE_ARG_SCALES_BUFFER(src_scales, DNNL_ARG_SRC);
-    DEFINE_ARG_SCALES_BUFFER(dst_scales, DNNL_ARG_DST);
+    const float *src_scales
+            = CTX_IN_MEM(const float *, DNNL_ARG_ATTR_SCALES | DNNL_ARG_SRC);
+    const float *dst_scales
+            = CTX_IN_MEM(const float *, DNNL_ARG_ATTR_SCALES | DNNL_ARG_DST);
+
+    const bool with_src_scales
+            = !pd()->attr()->scales_.has_default_values(DNNL_ARG_SRC);
+    const bool with_dst_scales
+            = !pd()->attr()->scales_.has_default_values(DNNL_ARG_DST);
 
     const auto ndims = src_d.ndims();
     const auto N = pd()->MB();
@@ -83,9 +92,9 @@ status_t ref_group_normalization_fwd_t::execute(const exec_ctx_t &ctx) const {
     }
 
     const auto C_PER_G = C / G;
-    auto get_c_start = [&C_PER_G](int64_t g) { return g * C_PER_G; };
+    auto get_c_start = [C_PER_G](int64_t g) { return g * C_PER_G; };
 
-    parallel_nd(N, G, [&](dim_t n, dim_t g) {
+    parallel_nd(N, G, [= COMPAT_THIS_CAPTURE](dim_t n, dim_t g) {
         size_t stat_off = n * G + g;
         float v_mean = calculate_stats ? 0 : mean[stat_off];
         float v_variance = calculate_stats ? 0 : variance[stat_off];
@@ -126,7 +135,7 @@ status_t ref_group_normalization_fwd_t::execute(const exec_ctx_t &ctx) const {
 
                 float s = io::load_float_value(src_d.data_type(), src, s_off);
                 float val = sm * (s - v_mean) + sv;
-                val *= src_scales[0];
+                if (with_src_scales) val *= src_scales[0];
 
                 // post-ops
                 ref_post_ops_t::args_t args;
@@ -135,7 +144,7 @@ status_t ref_group_normalization_fwd_t::execute(const exec_ctx_t &ctx) const {
                         + h * W + w;
                 args.dst_md = pd()->dst_md();
                 ref_post_ops->execute(val, args);
-                val *= dst_scales[0];
+                if (with_dst_scales) val /= dst_scales[0];
                 io::store_float_value(dst_d.data_type(), val, dst, d_off);
             }
         }
@@ -202,10 +211,10 @@ status_t ref_group_normalization_bwd_t::execute(const exec_ctx_t &ctx) const {
 
     const auto C_PER_G = C / G;
     const auto CSP = C_PER_G * D * H * W; // Elements per group
-    auto get_c_start = [&C_PER_G](int64_t g) { return g * C_PER_G; };
+    auto get_c_start = [C_PER_G](int64_t g) { return g * C_PER_G; };
 
     // See benchdnn's ref path for explaining comments.
-    parallel_nd(C, [&](dim_t c) {
+    parallel_nd(C, [=](dim_t c) {
         dim_t g = c / C_PER_G;
 
         float diff_gamma = 0.0f;
@@ -234,7 +243,7 @@ status_t ref_group_normalization_bwd_t::execute(const exec_ctx_t &ctx) const {
         if (diff_shift) diff_shift[diff_ss_d.off(c)] = diff_beta;
     });
 
-    parallel_nd(N, G, [&](dim_t n, dim_t g) {
+    parallel_nd(N, G, [=](dim_t n, dim_t g) {
         size_t stat_off = n * G + g;
         float v_mean = mean[stat_off];
         float v_variance = variance[stat_off];

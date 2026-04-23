@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -75,10 +75,10 @@ lnorm_reusable_vectorized(__global SRC_DATA_T *src, __global float *mean,
 
     if (USE_SCALE)
         scale = GWS_GET_BUFFER_POS(SS, gws_params, scale)
-                + ((greads - 1) * SG_STRIDE);
+                - get_sub_group_local_id() + ((greads - 1) * SG_STRIDE);
     if (USE_SHIFT)
         shift = GWS_GET_BUFFER_POS(SS, gws_params, shift)
-                + ((greads - 1) * SG_STRIDE);
+                - get_sub_group_local_id() + ((greads - 1) * SG_STRIDE);
 
     /// Normalize layer
     FLT_ACC_DATA_T sqrt_variance = rsqrt(local_variance + eps);

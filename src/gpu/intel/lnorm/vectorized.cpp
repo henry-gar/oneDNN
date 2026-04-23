@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -32,7 +32,7 @@ bool mayiuse_sg(const int sg_size, impl::engine_t *engine) {
     auto *intel_engine = utils::downcast<engine_t *>(engine);
     return intel_engine->mayiuse_sub_group(sg_size)
             && intel_engine->mayiuse_block_reads_writes_with_sub_group(sg_size);
-};
+}
 
 bool is_fused_kernel_applicable(conf_t &conf, const pd_t *pd,
         impl::engine_t *engine, bool large_grf_mode) {
@@ -46,7 +46,8 @@ bool is_fused_kernel_applicable(conf_t &conf, const pd_t *pd,
     const int max_ss = utils::div_up(eu_count, max_eus_per_wg);
     const size_t max_wg_size
             = intel_engine->device_info()->max_wg_size(large_grf_mode);
-    const size_t max_slm_size = device_info_t::max_slm_size(gpu_arch);
+    const size_t max_slm_size = device_info_t::max_slm_size(
+            intel_engine->device_info()->gpu_product());
 
     // Plain layout only
     const bool is_plain = src_mdw.matches_one_of_tag(ab, abc)
@@ -69,7 +70,7 @@ bool is_fused_kernel_applicable(conf_t &conf, const pd_t *pd,
 
     // Setup norm axis blocking
     // Limit values experimentally selected, based on PVC perf data.
-    auto get_ss_utilization = [](const int num_wgs, const int max_ss) {
+    auto get_ss_utilization = [](const dim_t num_wgs, const int max_ss) {
         return (float)num_wgs / max_ss;
     };
     int min_num_c_blocks = 2;
@@ -98,14 +99,16 @@ bool is_fused_kernel_applicable(conf_t &conf, const pd_t *pd,
 
     // Setup across axis blocking
     // based on number of blocks, number of threads, slm buffer and wg size
-    auto get_wg_size = [&](const int num_n_blocks) {
-        return conf.sub_group_size
-                * nstl::max(num_n_blocks, conf.num_norm_blocks_fused);
+    auto get_wg_size = [&](const dim_t num_n_blocks) {
+        const dim_t num_norm_blocks_fused
+                = static_cast<dim_t>(conf.num_norm_blocks_fused);
+        return static_cast<dim_t>(conf.sub_group_size)
+                * nstl::max(num_n_blocks, num_norm_blocks_fused);
     };
-    auto get_num_thrs = [&](const int num_n_blocks) {
+    auto get_num_thrs = [&](const dim_t num_n_blocks) {
         return num_n_blocks * conf.num_norm_blocks_fused;
     };
-    auto get_slm_size = [&](const int num_n_blocks) {
+    auto get_slm_size = [&](const dim_t num_n_blocks) {
         const size_t scale_shift_size
                 = 2 * num_n_blocks * conf.norm_block_fused * sizeof(float);
         const size_t dd_gamma_size = conf.calculate_stats
@@ -114,7 +117,7 @@ bool is_fused_kernel_applicable(conf_t &conf, const pd_t *pd,
                 : 0;
         return scale_shift_size + dd_gamma_size;
     };
-    auto get_num_blocks = [&](const int n_block) {
+    auto get_num_blocks = [&](const int n_block) -> dim_t {
         return utils::div_up(conf.across_axis, n_block);
     };
     // Limit values experimentally selected, based on PVC perf data.
@@ -125,7 +128,7 @@ bool is_fused_kernel_applicable(conf_t &conf, const pd_t *pd,
         int block = min_n_block;
         int best_block = block;
         while (block <= max_n_block) {
-            const int n_blocks = get_num_blocks(block);
+            const dim_t n_blocks = get_num_blocks(block);
             if ((size_t)get_wg_size(n_blocks) <= max_wg_size
                     && get_slm_size(n_blocks) <= max_slm_size
                     && get_num_thrs(n_blocks) >= min_num_thrs) {
@@ -137,7 +140,7 @@ bool is_fused_kernel_applicable(conf_t &conf, const pd_t *pd,
         }
         return best_block;
     }();
-    conf.num_across_blocks = get_num_blocks(best_n_block);
+    conf.num_across_blocks = into<int>(get_num_blocks(best_n_block));
     conf.across_block = best_n_block;
 
     // Setup dispatching
@@ -190,9 +193,10 @@ static status_t init_conf_common(
     dim_idx_t ndims = into<dim_idx_t>(src_mdw.ndims());
 
     conf.src_dt = src_mdw.data_type();
+    conf.require_stateless_addressing = pd->has_large_buffers();
     conf.ndims = ndims;
-    conf.norm_axis = into<dim_idx_t>(pd->norm_axis());
-    conf.across_axis = into<dim_idx_t>(pd->across_axis());
+    conf.norm_axis = pd->norm_axis();
+    conf.across_axis = pd->across_axis();
     conf.use_scale = pd->use_scale();
     conf.use_shift = pd->use_shift();
     conf.calculate_stats = !pd->stats_are_src();
@@ -262,17 +266,17 @@ static status_t init_conf_common(
 
     if (gpu_arch >= gpu_arch_t::xe_hpc) {
         if (conf.is_fwd) {
-            const int nthr = conf.across_axis;
+            const int nthr = into<int>(conf.across_axis);
             const int nthr_on_ss
                     = nstl::min(threads_per_eu, nstl::max(1, nthr / eu_count));
-            const int src_buff_KB
+            const dim_t src_buff_KB
                     = nthr_on_ss * conf.norm_axis * sizeof(float) / 1024;
             int buff_size_limit = 128;
             if (conf.src_dt == data_type::f16
                     || conf.src_dt == data_type::bf16) {
                 buff_size_limit *= 2;
             }
-            VDISPATCH_LNORM_IC(src_buff_KB <= buff_size_limit,
+            VDISPATCH_LNORM_IC(src_buff_KB <= into<dim_t>(buff_size_limit),
                     "buffer size limit exceeded");
         } else {
             VDISPATCH_LNORM_IC(conf.across_axis >= 4, VERBOSE_BAD_AXIS);
@@ -311,7 +315,7 @@ static status_t init_conf_common(
 
         // Splitting normalized dimension into parts increases HW utilization
         // and can improve performance for some kinds of short shapes
-        const int num_wgs = conf.across_axis;
+        const int num_wgs = into<int>(conf.across_axis);
         auto get_ss_utilization = [](const int num_wgs, const int max_ss) {
             return (float)num_wgs / max_ss;
         };
@@ -334,7 +338,7 @@ static status_t init_conf_common(
             return best_num < min_num_blocks ? 1 : best_num;
         }();
         conf.num_norm_blocks = best_num_blocks;
-        conf.norm_block = conf.norm_axis / best_num_blocks;
+        conf.norm_block = into<int>(conf.norm_axis / best_num_blocks);
         assert(conf.norm_axis % conf.norm_block == 0);
         assert(conf.norm_block % (conf.sub_group_size * conf.vect_dt_n) == 0);
 
@@ -472,18 +476,19 @@ static status_t init_kernel_ctx_common(
         kernel_ctx_t &kernel_ctx, const conf_t &conf) {
     kernel_ctx.set_data_type(conf.src_dt);
     def_data_type(kernel_ctx, conf.weights_data_type, "WEI");
+    kernel_ctx.require_stateless_addressing(conf.require_stateless_addressing);
 
     // Since FWD kernel aggressively uses GRF (allocates a private buffer for
     // SRC chunk), large GRF mode decreases number/probability of register
     // spills.
     if (conf.is_fwd) kernel_ctx.add_option("-cl-intel-256-GRF-per-thread");
 
-    kernel_ctx.define_int("C", conf.norm_axis);
-    kernel_ctx.define_int("N", conf.across_axis);
+    kernel_ctx.define_int("C", into<int>(conf.norm_axis));
+    kernel_ctx.define_int("N", into<int>(conf.across_axis));
     kernel_ctx.define_int("USE_FUSED", conf.use_fused);
     kernel_ctx.define_int("NORM_BLOCK", conf.norm_block);
     kernel_ctx.define_int("NUM_NORM_BLOCKS", conf.num_norm_blocks);
-    kernel_ctx.define_int("NORM_BLOCK_FUSED", conf.norm_block_fused);
+    kernel_ctx.define_int("NORM_BLOCK_FUSED", into<int>(conf.norm_block_fused));
     kernel_ctx.define_int("NUM_NORM_BLOCKS_FUSED", conf.num_norm_blocks_fused);
     kernel_ctx.define_int("ACROSS_BLOCK", conf.across_block);
     kernel_ctx.define_int("NUM_ACROSS_BLOCKS", conf.num_across_blocks);

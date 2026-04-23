@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -68,7 +68,7 @@ ref_partition_t::ref_partition_t(const deserialized_graph_t &dg,
     for (const auto &out : outs) {
         partition_out_ids_.emplace_back(out.get_id());
     }
-};
+}
 
 int ref_partition_t::init_ref(
         const std::vector<size_t> &graph_in_ports, res_t *res) {
@@ -80,6 +80,9 @@ int ref_partition_t::init_ref(
     for (const auto &par_op_ref : partition_ops_ref_) {
         // res should be independent from op to op
         res->state = UNTESTED;
+
+        // End op doesn't need to create ref primitive
+        if (par_op_ref.get().kind_ == "End") continue;
 
         auto ref_prim = ::std::make_shared<ref_primitive_t>(par_op_ref.get());
 
@@ -201,6 +204,8 @@ int ref_partition_t::init_graph_mem(
 void ref_partition_t::exec_ops(res_t *res) {
     for (const auto &par_op_ref : partition_ops_ref_) {
         const auto &op = par_op_ref.get();
+        // skip End op's execution
+        if (op.kind_ == "End") continue;
         // displace data if needed, before executing the ref_prim
         for (size_t i = 0; i < op.in_lts_.size(); i++) {
             size_t lt_id = op.in_lts_[i].id_;
@@ -273,27 +278,17 @@ void ref_partition_t::exec_ops(res_t *res) {
                 && (!has_child_op(op, &child_op)
                         || child_op->kind_ == "ReduceSum");
 
-        // For gated-MLP, it is complicated - the Swish op is decomposed into
-        // Sigmoid and Multiply which has inputs from MatMul0 and Sigmoid. Its
-        // output is passed to another Multiply which is the target for the
-        // reorder, both input and output (since its input is down-converted
-        // by MatMul0, and its output would be a down-converted output of
-        // MatMul1). The variable below carefully checks which Multiply it is
-        // there - Swish's one or not.
-        const bool is_child_multiply
+        // gMLP can have two Multiply ops - one as a part of SwigLU, the other
+        // is a Gate-Up connection, which is a target of reorder through a
+        // potential TypeCast after it.
+        const bool is_multiply_in_gmlp_pattern
                 = ref_prim->get_kind() == dnnl::graph::op::kind::Multiply
-                && has_parent_op(op, /* check_all_in_lts */ true);
-        bool is_multiply_in_gated_mlp_pattern = false;
-        if (is_child_multiply && op.in_lts_.size() == 2) {
-            const auto &parent0 = get_parent_op(op.in_lts_[0].id_)->kind_;
-            const auto &parent1 = get_parent_op(op.in_lts_[1].id_)->kind_;
-            is_multiply_in_gated_mlp_pattern
-                    = (parent0 == "MatMul" && parent1 == "Multiply")
-                    || (parent0 == "Multiply" && parent1 == "MatMul");
-        }
+                && dg_->get_recognized_pattern()
+                        == graph_recognized_pattern_t::gmlp
+                && has_child_op(op, &child_op) && child_op->kind_ == "MatMul";
 
         if (is_softmax_in_sdpa_pattern || is_matmul_in_sdpa_bwd_pattern
-                || is_multiply_in_gated_mlp_pattern) {
+                || is_multiply_in_gmlp_pattern) {
             for (size_t i = 0; i < op.in_lts_.size(); i++) {
                 const auto dt = ref_prim->get_lt_dt(op.in_lts_[i].id_);
                 // There's no need to reorder data for f32 tensors.
@@ -301,7 +296,7 @@ void ref_partition_t::exec_ops(res_t *res) {
 
                 // MLP pattern requires reorder only for an input coming from
                 // MatMul0 directly, not from Swish.
-                if (is_multiply_in_gated_mlp_pattern) {
+                if (is_multiply_in_gmlp_pattern) {
                     const auto parent_op = get_parent_op(op.in_lts_[i].id_);
                     if (!parent_op) continue;
                     if (parent_op->kind_ != "MatMul") continue;
@@ -325,7 +320,7 @@ void ref_partition_t::exec_ops(res_t *res) {
         // A data type to where transform the data will also be provided by the
         // same function since there are corner cases.
         if (is_softmax_in_sdpa_pattern || is_matmul_in_sdpa_bwd_pattern
-                || is_multiply_in_gated_mlp_pattern) {
+                || is_multiply_in_gmlp_pattern) {
             for (size_t i = 0; i < op.out_lts_.size(); i++) {
                 dnnl_data_type_t dt = dnnl_data_type_undef;
                 if (!need_unfusable_output_crop(op, i, dt)) continue;
@@ -352,6 +347,8 @@ int ref_partition_t::check_partition_correctness(
     for (const auto &op : partition_ops_ref_) {
         size_t op_id = op.get().id_;
         const auto &op_kind = op.get().kind_;
+        // End op's correctness check is performed during its producer.
+        if (op_kind == "End") continue;
         const auto &ref_prim = ref_prims_.at(op_id);
 
         // if there is eltwise post-ops or binary div post-ops (GPU test), need
@@ -419,8 +416,6 @@ int ref_partition_t::check_partition_correctness(
                 res->reason = skip_reason::case_not_supported;
                 return OK;
             }
-            BENCHDNN_PRINT(
-                    2, "Op failed: {(%zu) %s}\n", op_id, op_kind.c_str());
             return FAIL;
         }
 
@@ -535,10 +530,10 @@ bool ref_partition_t::need_unfusable_output_crop(const deserialized_op_t &op,
 bool ref_partition_t::is_output_op(const deserialized_op_t &op) const {
     return std::any_of(op.out_lts_.begin(), op.out_lts_.end(),
             [this](const deserialized_lt_t &lt) {
-                return std::find(partition_out_ids_.begin(),
-                               partition_out_ids_.end(), lt.id_)
-                        != partition_out_ids_.end();
-            });
+        return std::find(partition_out_ids_.begin(), partition_out_ids_.end(),
+                       lt.id_)
+                != partition_out_ids_.end();
+    });
 }
 
 // check the partition memory footprint of the graph path
@@ -654,18 +649,18 @@ std::vector<size_t> ref_partition_t::get_in_out_lt_ids(
     std::vector<size_t> in_out_lt_ids;
     std::for_each(op.in_lts_.begin(), op.in_lts_.end(),
             [&in_out_lt_ids, this](const deserialized_lt_t &lt) {
-                if (std::find(partition_in_ids_.begin(),
-                            partition_in_ids_.end(), lt.id_)
-                        != partition_in_ids_.end())
-                    in_out_lt_ids.emplace_back(lt.id_);
-            });
+        if (std::find(
+                    partition_in_ids_.begin(), partition_in_ids_.end(), lt.id_)
+                != partition_in_ids_.end())
+            in_out_lt_ids.emplace_back(lt.id_);
+    });
     std::for_each(op.out_lts_.begin(), op.out_lts_.end(),
             [&in_out_lt_ids, this](const deserialized_lt_t &lt) {
-                if (std::find(partition_out_ids_.begin(),
-                            partition_out_ids_.end(), lt.id_)
-                        != partition_out_ids_.end())
-                    in_out_lt_ids.emplace_back(lt.id_);
-            });
+        if (std::find(partition_out_ids_.begin(), partition_out_ids_.end(),
+                    lt.id_)
+                != partition_out_ids_.end())
+            in_out_lt_ids.emplace_back(lt.id_);
+    });
     return in_out_lt_ids;
 }
 

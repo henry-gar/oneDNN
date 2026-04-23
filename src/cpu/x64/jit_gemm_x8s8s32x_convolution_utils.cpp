@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -168,10 +168,10 @@ jit_pp_ker_t::jit_pp_ker_t(
     , zp_pad_comp_helper_(jit_gemm_convolution_utils::padding_exists(jcp)
                               && jcp.zp.src_exists
                       ? utils::make_unique<
-                              jit_gemm_x8s8s32x_zp_pad_comp_helper_t>(this,
-                              jcp_, reg_zp_pad_comp_, reg_zp_pad_comp_temp_,
-                              reg_should_apply_src_pad_comp_,
-                              pd->src_md()->ndims)
+                                jit_gemm_x8s8s32x_zp_pad_comp_helper_t>(this,
+                                jcp_, reg_zp_pad_comp_, reg_zp_pad_comp_temp_,
+                                reg_should_apply_src_pad_comp_,
+                                pd->src_md()->ndims)
                       : nullptr)
 
 {
@@ -302,9 +302,9 @@ void jit_pp_ker_t::append_zp_src_comp(size_t offset, int idx, bool apply_mask) {
     if (zp_pad_comp_helper_)
         zp_pad_comp_helper_->zp_src_comp_pad_operation(
                 [&](const Xbyak::Reg64 &reg_zp_pad_comp) {
-                    vpaddd(vreg_dst_masked, vreg_dst,
-                            ptr[reg_zp_pad_comp + zp_src_comp_offset]);
-                });
+            vpaddd(vreg_dst_masked, vreg_dst,
+                    ptr[reg_zp_pad_comp + zp_src_comp_offset]);
+        });
 }
 
 void jit_pp_ker_t::apply_postops(
@@ -477,8 +477,8 @@ void jit_pp_ker_t::generate() {
     };
 
     // Advance all pointers by an immediate
-    const auto advance_ptrs_imm = [&](const size_t offset,
-                                          const size_t binary_offset) {
+    const auto advance_ptrs_imm
+            = [&](const size_t offset, const size_t binary_offset) {
         add(reg_dst_, offset * dst_data_type_size_);
         add(reg_acc_, offset * sizeof(acc_data_t));
         if (jcp_.scale_idx_mult) {
@@ -492,15 +492,15 @@ void jit_pp_ker_t::generate() {
             if (zp_pad_comp_helper_) {
                 zp_pad_comp_helper_->zp_src_comp_pad_operation(
                         [&](const Xbyak::Reg64 &reg_zp_pad_comp) {
-                            add(reg_zp_pad_comp, offset * sizeof(int32_t));
-                        });
+                    add(reg_zp_pad_comp, offset * sizeof(int32_t));
+                });
             }
         }
     };
 
     // Advance all pointers by a value stored in a register
-    const auto advance_ptrs_reg = [&](const Reg64 offset,
-                                          const Reg64 binary_offset) {
+    const auto advance_ptrs_reg
+            = [&](const Reg64 offset, const Reg64 binary_offset) {
         lea(reg_dst_, ptr[reg_dst_ + offset * dst_data_type_size_]);
         lea(reg_acc_, ptr[reg_acc_ + offset * sizeof(acc_data_t)]);
         if (jcp_.scale_idx_mult) {
@@ -517,10 +517,9 @@ void jit_pp_ker_t::generate() {
             if (zp_pad_comp_helper_)
                 zp_pad_comp_helper_->zp_src_comp_pad_operation(
                         [&](const Xbyak::Reg64 &reg_zp_pad_comp) {
-                            lea(reg_zp_pad_comp,
-                                    ptr[reg_zp_pad_comp
-                                            + offset * sizeof(int32_t)]);
-                        });
+                    lea(reg_zp_pad_comp,
+                            ptr[reg_zp_pad_comp + offset * sizeof(int32_t)]);
+                });
         }
     };
 

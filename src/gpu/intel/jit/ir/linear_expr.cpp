@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -17,7 +17,7 @@
 #include "gpu/intel/jit/ir/linear_expr.hpp"
 
 #include "common/math_utils.hpp"
-#include "gpu/intel/jit/pass/simplify.hpp"
+#include "gemmstone/../../dsl/ir/pass/simplify.hpp"
 
 namespace dnnl {
 namespace impl {
@@ -290,7 +290,7 @@ public:
         return oss.str();
     }
 
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
     static expr_t div(const expr_t &e, int64_t factor) {
         linear_coef_t coef(e);
@@ -324,7 +324,7 @@ private:
 
 int64_t linear_max_pow2_divisor_impl(const expr_t &e) {
     const int64_t large_pow2 = (1 << 20);
-    if (is_zero(e)) return large_pow2;
+    if (e.is(0)) return large_pow2;
     if (e.is<const_var_t>()) return 1;
     if (e.is<var_t>()) return 1;
     if (auto *imm = e.as_ptr<int_imm_t>())
@@ -381,12 +381,12 @@ expr_t simplify_linear_mod_reduce(const expr_t &e, int64_t factor) {
         auto b = simplify_linear_mod_reduce(op->b, factor);
         switch (op->op_kind) {
             case op_kind_t::_add:
-                if (is_zero(a)) return b;
-                if (is_zero(b)) return a;
+                if (a.is(0)) return b;
+                if (b.is(0)) return a;
                 return simplify_rewrite(a + b);
             case op_kind_t::_mul:
-                if (is_zero(a)) return 0;
-                if (is_zero(b)) return 0;
+                if (a.is(0)) return 0;
+                if (b.is(0)) return 0;
                 return simplify_rewrite(a * b);
             default: break;
         }
@@ -456,7 +456,7 @@ void split_to_linear(const expr_t &expr, const std::vector<expr_t> &idxs,
     expr_t start_shift = 0;
     for (size_t i = 0; i < idxs.size(); i++) {
         init = split_to_linear_impl(init, idxs[i], incs[i]);
-        if (is_zero(start[i])) continue;
+        if (start[i].is(0)) continue;
         start_shift += start[i] * incs[i];
     }
     init = init.as<linear_t>().to_expr() + start_shift;

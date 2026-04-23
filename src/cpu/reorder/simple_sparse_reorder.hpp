@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -114,7 +114,7 @@ struct simple_sparse_reorder_impl_t<SIMPLE_SPARSE_REORDER_TEMPL_CALL,
         auto output_bitmask = CTX_OUT_MEM(uint64_t *, DNNL_ARG_TO, 2);
 
         engine_t *engine = ctx.stream()->engine();
-        const auto scratchpad = ctx.get_scratchpad_grantor();
+        const auto &scratchpad = ctx.get_scratchpad_grantor();
         auto wspace_mem_storage = scratchpad.get_memory_storage(
                 memory_tracking::names::key_reorder_space);
 
@@ -128,9 +128,11 @@ struct simple_sparse_reorder_impl_t<SIMPLE_SPARSE_REORDER_TEMPL_CALL,
         r_args[DNNL_ARG_DST] = {wspace_mem.get(), false};
         exec_ctx_t r_ctx(ctx, std::move(r_args));
 
-        nested_scratchpad_t ns(
-                ctx, memory_tracking::names::key_nested, reorder);
-        r_ctx.set_scratchpad_grantor(ns.grantor());
+        auto *nested_grantor
+                = create_nested_grantor(ctx.get_scratchpad_grantor(),
+                        memory_tracking::names::key_nested,
+                        reorder->pd()->scratchpad_registry());
+        r_ctx.set_scratchpad_grantor(nested_grantor);
         reorder->execute(r_ctx);
 
         auto *wspace = scratchpad.template get<data_t<type_o>>(
@@ -149,7 +151,7 @@ struct simple_sparse_reorder_impl_t<SIMPLE_SPARSE_REORDER_TEMPL_CALL,
         // Fill output_bitmask and move non-zero elements to the begining of the
         // blocks. Also, remember number of non-zero elements per-block to
         // calculate output_offsets later.
-        parallel_nd(nblks, [&](dim_t b) {
+        parallel_nd(nblks, [=](dim_t b) {
             dim_t nnz_per_blk = 0;
             for (dim_t i = 0; i < blk_sz / bitmask_step; i++) {
                 uint64_t &bm = output_bitmask[b * blk_sz / bitmask_step + i];
@@ -167,7 +169,7 @@ struct simple_sparse_reorder_impl_t<SIMPLE_SPARSE_REORDER_TEMPL_CALL,
 
         // Calculate output_offsets using previously computed number of non-zero
         // elements in each block.
-        parallel_nd(nblks, [&](dim_t b) {
+        parallel_nd(nblks, [=](dim_t b) {
             dim_t off = 0;
             if (b != 0) {
                 for (dim_t i = 0; i < b; i++) {
@@ -180,7 +182,7 @@ struct simple_sparse_reorder_impl_t<SIMPLE_SPARSE_REORDER_TEMPL_CALL,
         // Use the calculated output_offsets and number of non-zero elements
         // per block to copy the non-zero elements that we moved to the
         // begining of the blocks to output_values.
-        parallel_nd(nblks, [&](dim_t b) {
+        parallel_nd(nblks, [=](dim_t b) {
             const auto nnz_per_blk = nnz_per_blocks[b];
             const auto blk_off = output_offsets[b];
             for (dim_t i = 0; i < nnz_per_blk; i++) {

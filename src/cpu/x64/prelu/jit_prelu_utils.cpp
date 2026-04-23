@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -80,8 +80,8 @@ int get_n_vregs(const cpu_isa_t &isa) noexcept {
 bool is_s8u8(const std::set<data_type_t> &tensor_data_types) noexcept {
     return std::any_of(tensor_data_types.cbegin(), tensor_data_types.cend(),
             [](const data_type_t &dt) {
-                return utils::one_of(dt, data_type::s8, data_type::u8);
-            });
+        return utils::one_of(dt, data_type::s8, data_type::u8);
+    });
 }
 
 int get_simd_w(const std::set<data_type_t> &tensor_data_types) noexcept {

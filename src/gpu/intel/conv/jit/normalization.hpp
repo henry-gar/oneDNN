@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -42,7 +42,7 @@ public:
         , prb_(prb)
         , zp_dst_(zp_dst) {}
 
-    view_t create_view(const type_t &type, uint32_t mask) const override {
+    view_t create_view(const dsl::type_t &type, uint32_t mask) const override {
         return intel::jit::post_op_view_mapper_t::create_view(
                 type, normalize_mask(mask));
     }

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -309,9 +309,9 @@ void rnn_linear_fwd(const prb_t &prb, const args_t &args,
         cell_scratchpad_[i] = NAN;
     }
 
-    auto process_direction = [&](rnn_iter_direction_t iter_dir,
-                                     rnn_layer_direction_t lay_dir,
-                                     int64_t dir_val, rnn_action_t action) {
+    auto process_direction
+            = [&](rnn_iter_direction_t iter_dir, rnn_layer_direction_t lay_dir,
+                      int64_t dir_val, rnn_action_t action) {
         // we first need to copy the initial src_layer and src_iter{,_c} into
         // ws to simplify the logic of the code
         BENCHDNN_PRINT(80,

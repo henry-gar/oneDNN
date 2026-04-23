@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -62,7 +62,7 @@ public:
     static size_t coef_count(model_kind_t kind);
 
     std::string str() const;
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
 private:
     model_kind_t kind_;
@@ -79,7 +79,7 @@ public:
     void stringify(std::ostream &out) const;
     void parse(std::istream &in);
     std::string str() const;
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
 private:
     float time(model_kind_t kind, const problem_t &prb,

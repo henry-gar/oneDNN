@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -28,7 +28,7 @@ jit_avx512_common_lrn_kernel_fwd_nhwc_t<
         d_type>::jit_avx512_common_lrn_kernel_fwd_nhwc_t(unsigned C,
         prop_kind_t prop_kind, float alpha, float beta, float k, int local_size)
     : jit_avx512_common_lrn_kernel_fwd_t<d_type>(
-            prop_kind, alpha, beta, k, local_size, jit_name())
+              prop_kind, alpha, beta, k, local_size, jit_name())
     , tmp_mask_prev_ {[this]() {
         std::vector<int> v(this->local_size_ / 2);
         std::iota(v.begin(), v.end(), this->zc_ + 2);
@@ -219,13 +219,13 @@ void jit_avx512_common_lrn_kernel_fwd_nhwc_t<d_type>::load_compute_data(
     static constexpr int mask_shift = sizeof(int32_t);
     const auto load_shifted_padded_with_zeros
             = [&](int dstIdx, int srcIdx, int maskTmpIdx, int offset) {
-                  this->uni_vpxor(this->zreg(0, dstIdx), this->zreg(0, dstIdx),
-                          this->zreg(0, dstIdx));
-                  this->load_data(this->zreg(0, maskTmpIdx),
-                          this->EVEX_compress_addr(this->mask_, offset), true);
-                  this->vpermt2ps(this->zreg(0, dstIdx),
-                          this->zreg(0, maskTmpIdx), this->zreg(0, srcIdx));
-              };
+        this->uni_vpxor(this->zreg(0, dstIdx), this->zreg(0, dstIdx),
+                this->zreg(0, dstIdx));
+        this->load_data(this->zreg(0, maskTmpIdx),
+                this->EVEX_compress_addr(this->mask_, offset), true);
+        this->vpermt2ps(this->zreg(0, dstIdx), this->zreg(0, maskTmpIdx),
+                this->zreg(0, srcIdx));
+    };
 
     if (tail_proc == tail_mode::CurrentTail) {
         this->load_data(this->zreg(0, this->zc_),

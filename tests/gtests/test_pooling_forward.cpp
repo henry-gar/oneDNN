@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2016-2025 Intel Corporation
+* Copyright 2016 Intel Corporation
 * Copyright 2022-2023 Arm Ltd. and affiliates
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
@@ -94,11 +94,14 @@ bool generic_check_format_tags(memory::format_tag format) {
 template <typename data_t>
 void check_pool_fwd(const pool_test_params_t &p, const memory &src,
         const memory &dst, const memory &ws) {
-    auto src_data = map_memory<data_t>(src);
-    auto dst_data = map_memory<data_t>(dst);
-    auto ws_data_ptr = map_memory<unsigned char>(ws);
+    auto src_mapped = map_memory<data_t>(src);
+    data_t *src_data = src_mapped;
+    auto dst_mapped = map_memory<data_t>(dst);
+    data_t *dst_data = dst_mapped;
+    auto ws_mapped = map_memory<unsigned char>(ws);
+    unsigned char *ws_data_ptr = ws_mapped;
 
-    auto ws_data = [&](size_t idx) -> int {
+    auto ws_data = [=](size_t idx) -> int {
         auto w = (const unsigned char *)ws_data_ptr;
         if (w == nullptr) return -1;
         if (ws.get_desc().get_data_type() == dnnl_u8)
@@ -111,10 +114,6 @@ void check_pool_fwd(const pool_test_params_t &p, const memory &src,
     const memory::desc dst_d = dst.get_desc();
     const memory::desc ws_d = ws.get_desc();
 
-    const dnnl::impl::memory_desc_wrapper src_mdw(src_d.get());
-    const dnnl::impl::memory_desc_wrapper dst_mdw(dst_d.get());
-    const dnnl::impl::memory_desc_wrapper ws_mdw(ws_d.get());
-
     auto pd = p.test_pd;
     size_t padded_c = src_d.get_padded_dims()[1];
 
@@ -122,96 +121,94 @@ void check_pool_fwd(const pool_test_params_t &p, const memory &src,
     const bool is_miopen_gpu = is_amd_gpu(get_test_engine());
 
     dnnl::impl::parallel_nd(pd.mb, pd.c, pd.od, pd.oh, pd.ow,
-            [&](memory::dim n, memory::dim c, memory::dim od, memory::dim oh,
+            [=](memory::dim n, memory::dim c, memory::dim od, memory::dim oh,
                     memory::dim ow) {
-                if (is_current_test_failed()) return;
+        if (is_current_test_failed()) return;
 
-                memory::dim oidx = n * padded_c * pd.od * pd.oh * pd.ow
-                        + c * pd.od * pd.oh * pd.ow + od * pd.oh * pd.ow
-                        + oh * pd.ow + ow;
-                data_t out = dst_data[dst_mdw.off_l(oidx, true)];
-                int out_index = -1;
-                if (p.aalgorithm == algorithm::pooling_max
-                        && p.aprop_kind == prop_kind::forward_training) {
-                    out_index = ws_data(ws_mdw.off_l(oidx, true));
-                }
-                // match implementation for pooling_max: padding
-                // is done with lowest value and not zero, it
-                // affects the case when kernel slips into
-                // the padding area entirely
-                typename acc_t<data_t>::type acc_ref
-                        = (p.aalgorithm == algorithm::pooling_max)
-                        ? std::numeric_limits<data_t>::lowest()
-                        : data_t(0);
-                int out_ref_index = 0;
-                bool is_initialized = false;
-                int num_summands = 0;
+        const dnnl::impl::memory_desc_wrapper src_mdw(src_d.get());
+        const dnnl::impl::memory_desc_wrapper dst_mdw(dst_d.get());
+        const dnnl::impl::memory_desc_wrapper ws_mdw(ws_d.get());
 
-                for_(memory::dim kd = 0; kd < pd.kd; ++kd)
-                for_(memory::dim kh = 0; kh < pd.kh; ++kh)
-                for (memory::dim kw = 0; kw < pd.kw; ++kw) {
-                    const memory::dim id
-                            = od * pd.strd - pd.padf + kd * (pd.dd + 1);
-                    const memory::dim ih
-                            = oh * pd.strh - pd.padt + kh * (pd.dh + 1);
-                    const memory::dim iw
-                            = ow * pd.strw - pd.padl + kw * (pd.dw + 1);
+        memory::dim oidx = n * padded_c * pd.od * pd.oh * pd.ow
+                + c * pd.od * pd.oh * pd.ow + od * pd.oh * pd.ow + oh * pd.ow
+                + ow;
+        data_t out = dst_data[dst_mdw.off_l(oidx, true)];
+        int out_index = -1;
+        if (p.aalgorithm == algorithm::pooling_max
+                && p.aprop_kind == prop_kind::forward_training) {
+            out_index = ws_data(ws_mdw.off_l(oidx, true));
+        }
+        // match implementation for pooling_max: padding
+        // is done with lowest value and not zero, it
+        // affects the case when kernel slips into
+        // the padding area entirely
+        typename acc_t<data_t>::type acc_ref
+                = (p.aalgorithm == algorithm::pooling_max)
+                ? std::numeric_limits<data_t>::lowest()
+                : data_t(0);
+        int out_ref_index = 0;
+        bool is_initialized = false;
+        int num_summands = 0;
 
-                    if (id < 0 || id >= pd.id) continue;
-                    if (ih < 0 || ih >= pd.ih) continue;
-                    if (iw < 0 || iw >= pd.iw) continue;
+        for_(memory::dim kd = 0; kd < pd.kd; ++kd)
+        for_(memory::dim kh = 0; kh < pd.kh; ++kh)
+        for (memory::dim kw = 0; kw < pd.kw; ++kw) {
+            const memory::dim id = od * pd.strd - pd.padf + kd * (pd.dd + 1);
+            const memory::dim ih = oh * pd.strh - pd.padt + kh * (pd.dh + 1);
+            const memory::dim iw = ow * pd.strw - pd.padl + kw * (pd.dw + 1);
 
-                    size_t iidx = (size_t)n * padded_c * pd.id * pd.ih * pd.iw
-                            + (size_t)c * pd.id * pd.ih * pd.iw
-                            + (size_t)id * pd.ih * pd.iw + (size_t)ih * pd.iw
-                            + iw;
+            if (id < 0 || id >= pd.id) continue;
+            if (ih < 0 || ih >= pd.ih) continue;
+            if (iw < 0 || iw >= pd.iw) continue;
 
-                    data_t d = src_data[src_mdw.off_l(iidx, true)];
-                    if (p.aalgorithm == algorithm::pooling_max) {
-                        if (!is_initialized) {
-                            acc_ref = d;
-                            out_ref_index = (int)(kd * pd.kw * pd.kh
-                                    + kh * pd.kw + kw);
-                            is_initialized = true;
-                        } else {
-                            if (acc_ref < d) {
-                                acc_ref = d;
-                                out_ref_index = (int)(kd * pd.kw * pd.kh
-                                        + kh * pd.kw + kw);
-                            }
-                        }
-                    } else if (p.aalgorithm
-                                    == algorithm::pooling_avg_include_padding
-                            || p.aalgorithm
-                                    == algorithm::pooling_avg_exclude_padding) {
-                        acc_ref += d;
-                        num_summands++;
+            size_t iidx = (size_t)n * padded_c * pd.id * pd.ih * pd.iw
+                    + (size_t)c * pd.id * pd.ih * pd.iw
+                    + (size_t)id * pd.ih * pd.iw + (size_t)ih * pd.iw + iw;
+
+            data_t d = src_data[src_mdw.off_l(iidx, true)];
+            if (p.aalgorithm == algorithm::pooling_max) {
+                if (!is_initialized) {
+                    acc_ref = d;
+                    out_ref_index = (int)(kd * pd.kw * pd.kh + kh * pd.kw + kw);
+                    is_initialized = true;
+                } else {
+                    if (acc_ref < d) {
+                        acc_ref = d;
+                        out_ref_index
+                                = (int)(kd * pd.kw * pd.kh + kh * pd.kw + kw);
                     }
                 }
+            } else if (p.aalgorithm == algorithm::pooling_avg_include_padding
+                    || p.aalgorithm == algorithm::pooling_avg_exclude_padding) {
+                acc_ref += d;
+                num_summands++;
+            }
+        }
 
-                if (p.aalgorithm == algorithm::pooling_avg_include_padding) {
-                    num_summands = pd.kw * pd.kh * pd.kd;
-                }
+        if (p.aalgorithm == algorithm::pooling_avg_include_padding) {
+            num_summands = pd.kw * pd.kh * pd.kd;
+        }
 
-                if ((p.aalgorithm == algorithm::pooling_avg_include_padding
-                            || p.aalgorithm
-                                    == algorithm::pooling_avg_exclude_padding)
-                        && num_summands) {
-                    acc_ref = out_round<data_t>((float)acc_ref / num_summands);
-                }
+        if ((p.aalgorithm == algorithm::pooling_avg_include_padding
+                    || p.aalgorithm == algorithm::pooling_avg_exclude_padding)
+                && num_summands) {
+            acc_ref = out_round<data_t>((float)acc_ref / num_summands);
+        }
 
-                const data_t out_ref = (data_t)acc_ref;
-                ASSERT_NEAR(out, out_ref, 1e-6);
-                // The workspace layout is different when the cuDNN backend is used
-                // and therefore this check must be skipped
-                if ((p.aalgorithm == algorithm::pooling_max
-                            && p.aprop_kind == prop_kind::forward_training)
-                        && ((!is_cudnn_gpu) && (!is_miopen_gpu))) {
-                    ASSERT_EQ(out_index, out_ref_index)
-                            << " n = " << n << " c = " << c << " od = " << od
-                            << " oh = " << oh << " ow = " << ow;
-                }
-            });
+        const data_t out_ref = (data_t)acc_ref;
+        ASSERT_NEAR(out, out_ref, 1e-6);
+        // The workspace layout is different when the cuDNN backend is used
+        // and therefore this check must be skipped
+        if ((p.aalgorithm == algorithm::pooling_max
+                    && p.aprop_kind == prop_kind::forward_training)
+                && ((!is_cudnn_gpu) && (!is_miopen_gpu))) {
+            ASSERT_EQ(out_index, out_ref_index)
+                    << " n = " << n << " c = " << c << " od = " << od
+                    << " oh = " << oh << " ow = " << ow;
+        }
+    });
+
+    synchronize_threadpool(dst.get_engine().get_kind());
 }
 
 template <typename data_t>
@@ -282,14 +279,14 @@ protected:
         test_pool_desc_t pd = p.test_pd;
         auto p_src_desc = (p.ndims == 5)
                 ? create_md({pd.mb, pd.c, pd.id, pd.ih, pd.iw}, data_type,
-                        p.src_format)
+                          p.src_format)
                 : create_md(
-                        {pd.mb, pd.c, pd.ih, pd.iw}, data_type, p.src_format);
+                          {pd.mb, pd.c, pd.ih, pd.iw}, data_type, p.src_format);
         auto p_dst_desc = (p.ndims == 5)
                 ? create_md({pd.mb, pd.c, pd.od, pd.oh, pd.ow}, data_type,
-                        p.dst_format)
+                          p.dst_format)
                 : create_md(
-                        {pd.mb, pd.c, pd.oh, pd.ow}, data_type, p.dst_format);
+                          {pd.mb, pd.c, pd.oh, pd.ow}, data_type, p.dst_format);
 
         if (p.ndims == 5) {
             strides = memory::dims({pd.strd, pd.strh, pd.strw});
@@ -355,10 +352,10 @@ protected:
         check_zero_tail<data_t>(1, p_dst);
 
         EXPECT_ANY_THROW(pooling_forward(pool_prim_desc, {}));
-        pooling_forward(pool_prim_desc)
-                .execute(strm,
-                        {{DNNL_ARG_SRC, p_src}, {DNNL_ARG_DST, p_dst},
-                                {DNNL_ARG_WORKSPACE, workspace}});
+        pooling_forward prim(pool_prim_desc);
+        prim.execute(strm,
+                {{DNNL_ARG_SRC, p_src}, {DNNL_ARG_DST, p_dst},
+                        {DNNL_ARG_WORKSPACE, workspace}});
 
         strm.wait();
         check_pool_fwd<data_t>(p, p_src, p_dst, workspace);
@@ -374,7 +371,9 @@ using pool_test_params_float = pool_test_params_t;
 
 // sizes with explicit opposite side paddings
 #define EXPAND_SIZES_3D_XPADD(...) \
-    5, { __VA_ARGS__ }
+    5, { \
+        __VA_ARGS__ \
+    }
 
 #define EXPAND_SIZES_3D(mb, ic, id, ih, iw, od, oh, ow, kd, kh, kw, dd, dh, \
         dw, padf, padt, padl, strd, strh, strw) \

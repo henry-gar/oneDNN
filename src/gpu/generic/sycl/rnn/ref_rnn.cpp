@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2024 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -178,7 +178,7 @@ status_t create_matmul_pd(impl::engine_t *engine,
         }
     }
     return status::unimplemented;
-};
+}
 
 status_t ref_rnn_fwd_t::pd_t::init(impl::engine_t *engine) {
     using namespace prop_kind;
@@ -545,7 +545,7 @@ bool ref_rnn_common_base_t::create_nested_matmul(impl::engine_t *engine,
             == status::success;
     prim = pair.first;
     return gemm_ok;
-};
+}
 
 status_t ref_rnn_fwd_t::init_(impl::engine_t *engine) {
     using namespace rnn_utils;
@@ -658,20 +658,23 @@ status_t ref_rnn_fwd_t::matmul_primitive(impl::engine_t *engine,
     matmul_args[DNNL_ARG_DST] = memory_arg_t {arg3.get(), false};
 
     exec_ctx_t matmul_ctx(ctx, std::move(matmul_args));
-    std::unique_ptr<nested_scratchpad_t> ns;
+    const auto init_matmul_nested_scratchpad
+            = [&](const std::shared_ptr<impl::primitive_t> &matmul, int key) {
+        auto *nested_grantor
+                = create_nested_grantor(ctx.get_scratchpad_grantor(), key,
+                        matmul->pd()->scratchpad_registry());
+        matmul_ctx.set_scratchpad_grantor(nested_grantor);
+    };
 
     switch (matmul_kind) {
         case matmul_iter_fwd:
-            ns = utils::make_unique<nested_scratchpad_t>(ctx,
-                    rnn_utils::scratch_t::key_gemm_iter_fwd, matmul_iter_fwd_);
-            matmul_ctx.set_scratchpad_grantor(ns->grantor());
+            init_matmul_nested_scratchpad(
+                    matmul_iter_fwd_, rnn_utils::scratch_t::key_gemm_iter_fwd);
             CHECK(matmul_iter_fwd_->execute(matmul_ctx));
             break;
         case matmul_layer_fwd:
-            ns = utils::make_unique<nested_scratchpad_t>(ctx,
-                    rnn_utils::scratch_t::key_gemm_layer_fwd,
-                    matmul_layer_fwd_);
-            matmul_ctx.set_scratchpad_grantor(ns->grantor());
+            init_matmul_nested_scratchpad(matmul_layer_fwd_,
+                    rnn_utils::scratch_t::key_gemm_layer_fwd);
             CHECK(matmul_layer_fwd_->execute(matmul_ctx));
             break;
         default: assert(!"unknown matmul_kind"); return status::runtime_error;
@@ -717,33 +720,33 @@ status_t ref_rnn_bwd_t::matmul_primitive(impl::engine_t *engine,
 
     exec_ctx_t matmul_ctx(ctx, std::move(matmul_args));
 
-    std::unique_ptr<nested_scratchpad_t> ns;
+    const auto init_matmul_nested_scratchpad
+            = [&](const std::shared_ptr<impl::primitive_t> &matmul, int key) {
+        auto *nested_grantor
+                = create_nested_grantor(ctx.get_scratchpad_grantor(), key,
+                        matmul->pd()->scratchpad_registry());
+        matmul_ctx.set_scratchpad_grantor(nested_grantor);
+    };
 
     switch (matmul_kind) {
         case matmul_iter_bwd:
-            ns = utils::make_unique<nested_scratchpad_t>(ctx,
-                    rnn_utils::scratch_t::key_gemm_iter_bwd, matmul_layer_bwd_);
-            matmul_ctx.set_scratchpad_grantor(ns->grantor());
+            init_matmul_nested_scratchpad(
+                    matmul_iter_bwd_, rnn_utils::scratch_t::key_gemm_iter_bwd);
             CHECK(matmul_iter_bwd_->execute(matmul_ctx));
             break;
         case matmul_layer_bwd:
-            ns = utils::make_unique<nested_scratchpad_t>(ctx,
-                    rnn_utils::scratch_t::key_gemm_layer_bwd, matmul_iter_bwd_);
-            matmul_ctx.set_scratchpad_grantor(ns->grantor());
+            init_matmul_nested_scratchpad(matmul_layer_bwd_,
+                    rnn_utils::scratch_t::key_gemm_layer_bwd);
             CHECK(matmul_layer_bwd_->execute(matmul_ctx));
             break;
         case matmul_diff_wei_iter:
-            ns = utils::make_unique<nested_scratchpad_t>(ctx,
-                    rnn_utils::scratch_t::key_gemm_diff_wei_iter,
-                    matmul_diff_wei_iter_);
-            matmul_ctx.set_scratchpad_grantor(ns->grantor());
+            init_matmul_nested_scratchpad(matmul_diff_wei_iter_,
+                    rnn_utils::scratch_t::key_gemm_diff_wei_iter);
             CHECK(matmul_diff_wei_iter_->execute(matmul_ctx));
             break;
         case matmul_diff_wei_layer:
-            ns = utils::make_unique<nested_scratchpad_t>(ctx,
-                    rnn_utils::scratch_t::key_gemm_diff_wei_layer,
-                    matmul_diff_wei_layer_);
-            matmul_ctx.set_scratchpad_grantor(ns->grantor());
+            init_matmul_nested_scratchpad(matmul_diff_wei_layer_,
+                    rnn_utils::scratch_t::key_gemm_diff_wei_layer);
             CHECK(matmul_diff_wei_layer_->execute(matmul_ctx));
             break;
 
@@ -815,10 +818,10 @@ status_t ref_rnn_common_base_t::launch_copy(bool fwd, const exec_ctx_t &ctx,
     parallel_for(ctx, cpy_kernel, [&](::sycl::handler &cgh) {
         auto src_mem_arg = input
                 ? utils::downcast<const xpu::sycl::memory_storage_base_t *>(
-                        &input)
+                          &input)
                           ->get_in_memory_arg(ctx.stream(), cgh)
                 : xpu::sycl::memory_storage_base_t::empty_in_memory_arg(
-                        ctx.stream(), cgh);
+                          ctx.stream(), cgh);
         auto dst_mem_arg
                 = utils::downcast<const xpu::sycl::memory_storage_base_t *>(
                         &output)
@@ -1139,7 +1142,7 @@ status_t ref_rnn_fwd_t::execute_(const exec_ctx_t &ctx) const {
             *cpy_ctx.cpy_out_iter));
 
     return status::success;
-};
+}
 
 status_t ref_rnn_bwd_t::execute_(const exec_ctx_t &ctx) const {
 
@@ -1185,7 +1188,7 @@ status_t ref_rnn_bwd_t::execute_(const exec_ctx_t &ctx) const {
             scratch.diff_states(), *cpy_ctx.cpy_out_iter));
 
     return status::success;
-};
+}
 
 } // namespace sycl
 } // namespace generic

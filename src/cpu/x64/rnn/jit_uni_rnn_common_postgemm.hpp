@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -46,12 +46,6 @@ struct jit_uni_rnn_postgemm_t : public jit_generator_t {
         , cstate_dt_size_(types::data_type_size(rnn.src_iter_c_dt))
         , is_avx512(mayiuse(avx512_core))
         , is_avx2(mayiuse(avx2))
-        , dscale_off_addr(0)
-        , dshift_off_addr(0)
-        , ymm_perm_mask_addr(0)
-        , zmm_perm_mask_addr(0)
-        , zero_addr(0)
-        , u8_saturation_addr(0)
         , weights_scales_reg(r13)
         , qtable(r14)
         // implementations avoids to preserve Vmm(0) because of potential
@@ -71,7 +65,7 @@ struct jit_uni_rnn_postgemm_t : public jit_generator_t {
 
     ~jit_uni_rnn_postgemm_t() override { delete bf16_emu_; }
 
-    bool is_projection() const { return projection_; };
+    bool is_projection() const { return projection_; }
 
     virtual status_t init(data_type_t src_data_t) {
         // no need to check as bf16 is guarded for avx512 and above in rnn primtive
@@ -431,7 +425,7 @@ protected:
     void init_regs(size_t vlen, size_t tail_elements = 0) {
         assert(pd_->weights_md()->data_type != data_type::s8);
         return init_regs(nullptr, vlen, tail_elements);
-    };
+    }
 
     void init_table(size_t vlen) {
         if (pd_->weights_md()->data_type != data_type::s8) return;

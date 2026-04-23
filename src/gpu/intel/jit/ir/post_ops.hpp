@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2025 Intel Corporation
+* Copyright 2021 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -22,8 +22,8 @@
 
 #include "gpu/intel/jit/ir/eltwise.hpp"
 #include "gpu/intel/jit/ir/gemm_schedule.hpp"
-#include "gpu/intel/jit/ir/ir.hpp"
 #include "gpu/intel/jit/ir/kernel_info.hpp"
+#include "gpu/intel/jit/ir/legacy.hpp"
 #include "gpu/intel/jit/ir/tensor.hpp"
 
 namespace dnnl {
@@ -49,13 +49,13 @@ public:
     int common_src_zero_point = 0;
     int common_wei_zero_point = 0;
     int common_dst_zero_point = 0;
-    type_t src_zp_type = type_t::s32();
-    type_t wei_zp_type = type_t::s32();
-    type_t dst_zp_type = type_t::s32();
+    dsl::type_t src_zp_type = dsl::type_t::s32();
+    dsl::type_t wei_zp_type = dsl::type_t::s32();
+    dsl::type_t dst_zp_type = dsl::type_t::s32();
 
     zero_points_config_t(const primitive_desc_t *pd = nullptr)
         : do_src_compensation(pd
-                && !pd->attr()->zero_points_.has_default_values(DNNL_ARG_SRC))
+                  && !pd->attr()->zero_points_.has_default_values(DNNL_ARG_SRC))
         , do_wei_compensation(pd
                   && !pd->attr()->zero_points_.has_default_values(
                           DNNL_ARG_WEIGHTS))
@@ -167,7 +167,7 @@ public:
         , compute_expr_(compute_expr)
         , do_convert_(do_convert) {
         if (op_var_.is_empty())
-            op_var_ = var_t::make(type_t::f32(), make_op_var_name(buf));
+            op_var_ = var_t::make(dsl::type_t::f32(), make_op_var_name(buf));
     }
 
     bool is_input() const { return is_input_; }
@@ -197,7 +197,7 @@ public:
         return ret;
     }
 
-    void retype(const type_t &new_type) { view_ = view_.retype(new_type); }
+    void retype(const dsl::type_t &new_type) { view_ = view_.retype(new_type); }
 
     void require_masked_update() { needs_masked_update_ = true; }
 
@@ -234,9 +234,10 @@ public:
     post_op_view_mapper_t(const view_t &cp_view) : cp_view_(cp_view) {}
     virtual ~post_op_view_mapper_t() = default;
 
-    const view_t &cp_view() const { return cp_view_; };
+    const view_t &cp_view() const { return cp_view_; }
 
-    virtual view_t create_view(const type_t &type, uint32_t rhs_mask) const {
+    virtual view_t create_view(
+            const dsl::type_t &type, uint32_t rhs_mask) const {
         std::vector<dim_t> rhs_dims = cp_view_.vdims().values();
         uint32_t bound_check_mask = 0;
         for (int i = 0; i < int(rhs_dims.size()); i++) {
@@ -256,12 +257,12 @@ public:
     }
 
     virtual view_t create_src_zp_view(uint32_t mask) const {
-        return create_view(type_t::s32(), mask);
+        return create_view(dsl::type_t::s32(), mask);
     }
 
     virtual view_t try_create_bias_view(uint32_t mask) const { return {}; }
 
-    virtual bool is_spurious_spatial(const pvar_t &dim) const { return false; };
+    virtual bool is_spurious_spatial(const pvar_t &dim) const { return false; }
     virtual bool need_to_restore_zero_padding() const { return false; }
     virtual bool use_dst_in_sum_post_op() const { return true; }
     virtual bool can_use_scales() const { return true; }
@@ -305,7 +306,9 @@ public:
         if (contains_object(rhs_, op_var)) return true;
         if (eltwise_.is<eltwise_t>()) {
             auto &eltwise_func = eltwise_.as<eltwise_t>();
-            if (eltwise_func.alg_kind == alg_kind::eltwise_stochastic_round)
+            if (utils::one_of(eltwise_func.alg_kind,
+                        alg_kind::eltwise_stochastic_round,
+                        alg_kind::eltwise_mx_scale))
                 if (contains_object(eltwise_func.seed, op_var)) return true;
         }
         return false;
@@ -381,6 +384,13 @@ private:
             const bool do_convert = true,
             const expr_t &compute_expr = expr_t()) {
         return add_tensor(/*is_input=*/true, /*is_output=*/false, view, buf,
+                expr_t(), compute_expr, do_convert);
+    }
+
+    const expr_t &add_output_tensor(const view_t &view, const expr_t &buf,
+            const bool do_convert = true,
+            const expr_t &compute_expr = expr_t()) {
+        return add_tensor(/*is_input=*/false, /*is_output=*/true, view, buf,
                 expr_t(), compute_expr, do_convert);
     }
 

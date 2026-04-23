@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -17,10 +17,13 @@
 /// @example layer_normalization.cpp
 /// > Annotated version: @ref layer_normalization_example_cpp
 
+/// @page layer_normalization_example_cpp_brief
+/// @brief This C++ API example demonstrates how to create and execute a
+/// [Layer normalization](@ref dev_guide_layer_normalization) primitive in forward
+/// propagation mode.
+
 /// @page layer_normalization_example_cpp Layer Normalization Primitive Example
-/// This C++ API example demonstrates how to create and execute a
-/// [Layer normalization](@ref dev_guide_layer_normalization) primitive in
-/// forward propagation mode.
+/// \copybrief layer_normalization_example_cpp_brief
 ///
 /// Key optimizations included in this example:
 /// - In-place primitive execution;

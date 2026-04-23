@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2024 Intel Corporation
+* Copyright 2020 Intel Corporation
 * Copyright 2020 Codeplay Software Limited
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
@@ -154,7 +154,8 @@ struct cudnn_inner_product_impl_base_t {
 
     virtual void execute(cudnnHandle_t /*handle*/,
             cublasHandle_t /*cublas_handle*/,
-            const std::vector<void *> & /*args*/) const = 0;
+            const std::vector<void *> & /*args*/) const
+            = 0;
 
     virtual ~cudnn_inner_product_impl_base_t() {
         for (int i = 0; i < NUM_IO; ++i) {

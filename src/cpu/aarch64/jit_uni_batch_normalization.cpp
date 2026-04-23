@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2022 Intel Corporation
+* Copyright 2020 Intel Corporation
 * Copyright 2020-2024 FUJITSU LIMITED
 * Copyright 2025 Arm Ltd. and affiliates
 *
@@ -727,26 +727,23 @@ struct jit_bnorm_t : public jit_generator_t {
         {
             add(X_TMP_0, reg_rbuf1, reg_coff);
             uni_ldr(TReg(0), X_TMP_0);
-            spat_loop(
-                    spat_size, unroll_blocks, unroll_regs,
+            spat_loop(spat_size, unroll_blocks, unroll_regs,
                     [=](size_t base_reg) {
-                        TReg v = TReg(base_reg * 2);
-                        if (base_reg) uni_eor(v, v, v);
-                    },
-                    [=](size_t base_reg, size_t i) {
-                        TRegS v0 = TRegS(base_reg * 2 + 0);
-                        TReg v1 = TReg(base_reg * 2 + 1);
-                        size_t offt = i * vlen_spat_data_;
-                        add(X_TMP_0, reg_src, reg_soff);
-                        if (offt) add_imm(X_TMP_0, X_TMP_0, offt, X_TMP_1);
-                        uni_load_spat_data(v1, X_TMP_0);
-                        fadd(v0, v0, v1.s);
-                    },
-                    [=](size_t base_reg) {
-                        TRegS b = TRegS(0);
-                        TRegS v = TRegS(base_reg * 2);
-                        if (base_reg) fadd(b, b, v);
-                    });
+                TReg v = TReg(base_reg * 2);
+                if (base_reg) uni_eor(v, v, v);
+            }, [=](size_t base_reg, size_t i) {
+                TRegS v0 = TRegS(base_reg * 2 + 0);
+                TReg v1 = TReg(base_reg * 2 + 1);
+                size_t offt = i * vlen_spat_data_;
+                add(X_TMP_0, reg_src, reg_soff);
+                if (offt) add_imm(X_TMP_0, X_TMP_0, offt, X_TMP_1);
+                uni_load_spat_data(v1, X_TMP_0);
+                fadd(v0, v0, v1.s);
+            }, [=](size_t base_reg) {
+                TRegS b = TRegS(0);
+                TRegS v = TRegS(base_reg * 2);
+                if (base_reg) fadd(b, b, v);
+            });
             add(X_TMP_0, reg_rbuf1, reg_coff);
             uni_str(TReg(0), X_TMP_0);
 
@@ -980,28 +977,25 @@ struct jit_bnorm_t : public jit_generator_t {
             uni_load_maybe_tail(vmean, mean_ptr());
             add(X_TMP_0, reg_rbuf1, reg_coff);
             uni_ldr(TReg(0), X_TMP_0);
-            spat_loop(
-                    spat_size, unroll_blocks, unroll_regs,
+            spat_loop(spat_size, unroll_blocks, unroll_regs,
                     [=](size_t base_reg) {
-                        TReg v = TReg(3 * base_reg);
-                        if (base_reg > 0) uni_eor(v, v, v);
-                    },
-                    [=](size_t base_reg, size_t i) {
-                        TRegS v = TRegS(3 * base_reg);
-                        TRegS vtmp0 = TRegS(3 * base_reg + 1);
-                        TRegS vtmp1 = TRegS(3 * base_reg + 2);
-                        size_t offt = i * vlen_spat_data_;
-                        add(X_TMP_0, reg_src, reg_soff);
-                        if (offt) add_imm(X_TMP_0, X_TMP_0, offt, X_TMP_1);
-                        uni_load_spat_data(TReg(IDX(vtmp0)), X_TMP_0);
-                        fsub(vtmp1, vmean.s, vtmp0);
-                        uni_fmla(v, vtmp1, vtmp1);
-                    },
-                    [=](size_t base_reg) {
-                        TRegS b = TRegS(0);
-                        TRegS v = TRegS(base_reg * 3);
-                        if (base_reg) fadd(b, b, v);
-                    });
+                TReg v = TReg(3 * base_reg);
+                if (base_reg > 0) uni_eor(v, v, v);
+            }, [=](size_t base_reg, size_t i) {
+                TRegS v = TRegS(3 * base_reg);
+                TRegS vtmp0 = TRegS(3 * base_reg + 1);
+                TRegS vtmp1 = TRegS(3 * base_reg + 2);
+                size_t offt = i * vlen_spat_data_;
+                add(X_TMP_0, reg_src, reg_soff);
+                if (offt) add_imm(X_TMP_0, X_TMP_0, offt, X_TMP_1);
+                uni_load_spat_data(TReg(IDX(vtmp0)), X_TMP_0);
+                fsub(vtmp1, vmean.s, vtmp0);
+                uni_fmla(v, vtmp1, vtmp1);
+            }, [=](size_t base_reg) {
+                TRegS b = TRegS(0);
+                TRegS v = TRegS(base_reg * 3);
+                if (base_reg) fadd(b, b, v);
+            });
             add(X_TMP_0, reg_rbuf1, reg_coff);
             uni_str(TReg(0), X_TMP_0);
             add_imm(reg_coff, reg_coff, vlen, X_TMP_0);
@@ -1179,9 +1173,7 @@ struct jit_bnorm_t : public jit_generator_t {
                 }
                 if (isa == sve_256 || isa == sve_512)
                     fdiv(ZRegS(1), P_ALL_ONE / T_m, ZRegS(vchan_size.getIdx()));
-                else {
-                    fdiv(VReg4S(1), VReg4S(1), VReg4S(IDX(vchan_size)));
-                }
+                else { fdiv(VReg4S(1), VReg4S(1), VReg4S(IDX(vchan_size))); }
                 uni_store_maybe_tail(var_ptr(), TReg(1));
                 if (isa == sve_256 || isa == sve_512)
                     add_imm(reg_coff, reg_coff, vlen, X_TMP_0);
@@ -1395,50 +1387,46 @@ struct jit_bnorm_t : public jit_generator_t {
             uni_ldr(TReg(0), X_TMP_0);
             add(X_TMP_0, reg_rbuf2, reg_coff);
             uni_ldr(TReg(1), X_TMP_0);
-            spat_loop(
-                    spat_size, 1, 1,
-                    [=](size_t base_reg) {
-                        if (base_reg > 0) {
-                            for (int i = 0; i < 2; i++) {
-                                TReg v(base_reg * 5 + i);
-                                uni_eor(v, v, v);
-                            }
-                        }
-                    },
-                    [=](size_t base_reg, size_t i) {
-                        TReg o0 = TReg(base_reg * 5 + 0);
-                        TReg o1 = TReg(base_reg * 5 + 1);
-                        TReg t1 = TReg(base_reg * 5 + 2);
-                        TReg t2 = TReg(base_reg * 5 + 3);
-                        TReg t3 = TReg(base_reg * 5 + 4);
-                        size_t offt = i * vlen_spat_data_;
-                        add(X_TMP_0, reg_src, reg_soff);
-                        if (offt) add_imm(X_TMP_0, X_TMP_0, offt, X_TMP_1);
-                        uni_load_spat_data(t1, X_TMP_0);
-                        add(X_TMP_0, reg_diff_dst, reg_soff);
-                        if (offt) add_imm(X_TMP_0, X_TMP_0, offt, X_TMP_1);
-                        uni_load_spat_data(t2, X_TMP_0);
-                        if (with_relu) {
-                            assert(isa == sve_256 || isa == sve_512);
-                            bwd_process_relu(ZRegS(t2.getIdx()), offt);
-                        }
-                        fsub(t3.s, vmean.s, t1.s);
-                        if (isa == asimd) {
-                            fmul(t3.s, t3.s, t2.s);
-                            uni_fsub(o0.s, o0.s, t3.s);
-                        } else {
-                            uni_fmls(o0.s, t3.s, t2.s);
-                        }
-                        fadd(o1.s, o1.s, t2.s);
-                    },
-                    [=](size_t base_reg) {
-                        TReg b0 = TReg(0);
-                        TReg b1 = TReg(1);
-                        if (base_reg) {
-                            fadd(b0.s, b0.s, TRegS(base_reg * 5 + 0));
-                            fadd(b1.s, b1.s, TRegS(base_reg * 5 + 1));
-                        }
-                    });
+            spat_loop(spat_size, 1, 1, [=](size_t base_reg) {
+                if (base_reg > 0) {
+                    for (int i = 0; i < 2; i++) {
+                        TReg v(base_reg * 5 + i);
+                        uni_eor(v, v, v);
+                    }
+                }
+            }, [=](size_t base_reg, size_t i) {
+                TReg o0 = TReg(base_reg * 5 + 0);
+                TReg o1 = TReg(base_reg * 5 + 1);
+                TReg t1 = TReg(base_reg * 5 + 2);
+                TReg t2 = TReg(base_reg * 5 + 3);
+                TReg t3 = TReg(base_reg * 5 + 4);
+                size_t offt = i * vlen_spat_data_;
+                add(X_TMP_0, reg_src, reg_soff);
+                if (offt) add_imm(X_TMP_0, X_TMP_0, offt, X_TMP_1);
+                uni_load_spat_data(t1, X_TMP_0);
+                add(X_TMP_0, reg_diff_dst, reg_soff);
+                if (offt) add_imm(X_TMP_0, X_TMP_0, offt, X_TMP_1);
+                uni_load_spat_data(t2, X_TMP_0);
+                if (with_relu) {
+                    assert(isa == sve_256 || isa == sve_512);
+                    bwd_process_relu(ZRegS(t2.getIdx()), offt);
+                }
+                fsub(t3.s, vmean.s, t1.s);
+                if (isa == asimd) {
+                    fmul(t3.s, t3.s, t2.s);
+                    uni_fsub(o0.s, o0.s, t3.s);
+                } else {
+                    uni_fmls(o0.s, t3.s, t2.s);
+                }
+                fadd(o1.s, o1.s, t2.s);
+            }, [=](size_t base_reg) {
+                TReg b0 = TReg(0);
+                TReg b1 = TReg(1);
+                if (base_reg) {
+                    fadd(b0.s, b0.s, TRegS(base_reg * 5 + 0));
+                    fadd(b1.s, b1.s, TRegS(base_reg * 5 + 1));
+                }
+            });
             add(X_TMP_0, reg_rbuf1, reg_coff);
             uni_str(TReg(0), X_TMP_0);
             add(X_TMP_0, reg_rbuf2, reg_coff);
@@ -2366,17 +2354,18 @@ status_t jit_uni_batch_normalization_fwd_t<isa>::execute(
     auto scale = CTX_IN_MEM(const acc_data_t *, DNNL_ARG_SCALE);
     auto shift = CTX_IN_MEM(const acc_data_t *, DNNL_ARG_SHIFT);
 
-    auto mean = pd()->stats_is_src() ? const_cast<acc_data_t *>(
-                        CTX_IN_MEM(const acc_data_t *, DNNL_ARG_MEAN))
-                                     : CTX_OUT_MEM(acc_data_t *, DNNL_ARG_MEAN);
+    auto mean = pd()->stats_is_src()
+            ? const_cast<acc_data_t *>(
+                      CTX_IN_MEM(const acc_data_t *, DNNL_ARG_MEAN))
+            : CTX_OUT_MEM(acc_data_t *, DNNL_ARG_MEAN);
     auto var = pd()->stats_is_src()
             ? const_cast<acc_data_t *>(
-                    CTX_IN_MEM(const acc_data_t *, DNNL_ARG_VARIANCE))
+                      CTX_IN_MEM(const acc_data_t *, DNNL_ARG_VARIANCE))
             : CTX_OUT_MEM(acc_data_t *, DNNL_ARG_VARIANCE);
     auto dst = CTX_OUT_MEM(void *, DNNL_ARG_DST);
     auto ws = CTX_OUT_MEM(uint8_t *, DNNL_ARG_WORKSPACE);
 
-    auto scratchpad = ctx.get_scratchpad_grantor();
+    const auto &scratchpad = ctx.get_scratchpad_grantor();
 
     bnorm_driver_->init_barriers(scratchpad);
     const int nthr = pd()->nthr_;
@@ -2487,7 +2476,7 @@ status_t jit_uni_batch_normalization_bwd_t<isa>::execute(
     auto diff_scale = CTX_OUT_MEM(acc_data_t *, DNNL_ARG_DIFF_SCALE);
     auto diff_shift = CTX_OUT_MEM(acc_data_t *, DNNL_ARG_DIFF_SHIFT);
 
-    auto scratchpad = ctx.get_scratchpad_grantor();
+    const auto &scratchpad = ctx.get_scratchpad_grantor();
 
     bnorm_driver_->init_barriers(scratchpad);
     const int nthr = pd()->nthr_;

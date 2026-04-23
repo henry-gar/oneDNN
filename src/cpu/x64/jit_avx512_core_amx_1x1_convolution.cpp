@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -10,7 +10,7 @@
 * Unless required by applicable law or agreed to in writing, software
 * distributed under the License is distributed on an "AS IS" BASIS,
 * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-* See theb_ License for the specific language governing permissions and
+* See the License for the specific language governing permissions and
 * limitations under the License.
 *******************************************************************************/
 
@@ -42,9 +42,9 @@ using namespace nstl;
 #define md_blk_off(md, n, c, d, h, w) \
     (pd()->ndims() == 3 \
                     ? (md).blk_off((n), (c), (w)) \
-                    : (pd()->ndims() == 4 \
-                                    ? (md).blk_off((n), (c), (h), (w)) \
-                                    : (md).blk_off((n), (c), (d), (h), (w))))
+                    : (pd()->ndims() == 4 ? (md).blk_off((n), (c), (h), (w)) \
+                                          : (md).blk_off( \
+                                                    (n), (c), (d), (h), (w))))
 
 void jit_avx512_core_amx_1x1_convolution_fwd_t::prepare_padded_bias(
         const char *&bias, const memory_tracking::grantor_t &scratchpad) const {
@@ -112,9 +112,9 @@ status_t jit_avx512_core_amx_1x1_convolution_fwd_t::execute_forward(
             key_conv_amx_wsp_buffer);
     int32_t *wsp_tile = (is_ic_tail)
             ? ctx.get_scratchpad_grantor().template get<int32_t>(
-                    key_conv_amx_tile_buffer)
+                      key_conv_amx_tile_buffer)
             : nullptr;
-    auto tcfg = ctx.get_scratchpad_grantor().template get<char>(
+    auto global_tcfg = ctx.get_scratchpad_grantor().template get<char>(
             key_conv_amx_tilecfg);
 
     const size_t wei_oc_shift = static_cast<size_t>(
@@ -129,13 +129,14 @@ status_t jit_avx512_core_amx_1x1_convolution_fwd_t::execute_forward(
 
     const size_t work_amount
             = (size_t)jcp.mb * jcp.ngroups * os_chunks * oc_chunks;
-    kernel_->tile_configure(tcfg);
 
-    parallel(jcp.nthr, [&](const int ithr, const int nthr) {
+    parallel(jcp.nthr, [= COMPAT_THIS_CAPTURE](const int ithr, const int nthr) {
         size_t start {0}, end {0};
         balance211(work_amount, nthr, ithr, start, end);
 
         auto p = jit_conv_args_t();
+        char *const __restrict tcfg = global_tcfg + 2 * ithr * AMX_PALETTE_SIZE;
+        kernel_->tile_configure(tcfg);
         p.tile_cfg = tcfg;
         p.tile_cfg_tail = tcfg + 64;
 

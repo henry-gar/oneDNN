@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -400,8 +400,8 @@ private:
             }
             std::sort(loop_dims.begin(), loop_dims.end(),
                     [&](const loop_dim_t &a, const loop_dim_t &b) {
-                        return a.size > b.size;
-                    });
+                return a.size > b.size;
+            });
 
             // Do not filter out loops with disabled global reduction as all
             // loops must be present.
@@ -599,8 +599,8 @@ private:
     struct context_t {
         context_t(const blocking_t &blk, const config_t &cfg)
             : context_t(blk, cfg, to_gemm(blk.iter(), cfg.prb()),
-                    to_gemm(blk.loop(), cfg.prb()),
-                    to_gemm(blk.thread_group(), cfg.prb())) {}
+                      to_gemm(blk.loop(), cfg.prb()),
+                      to_gemm(blk.thread_group(), cfg.prb())) {}
 
         context_t(const blocking_t &blk, const config_t &cfg,
                 const tile_t &iter, const tile_t &loop, const tile_t &tg)
@@ -721,11 +721,11 @@ private:
         if (!is_enabled(check_kind_t::check_tg_size)) return true;
 
         auto &tg = ctx.blk.thread_group();
-        dim_t tg_size = 1;
-        dim_t max_tg = 1;
+        size_t tg_size = 1;
+        size_t max_tg = 1;
         for (auto &d : tg) {
             tg_size *= tg[d];
-            max_tg = std::max(tg[d], max_tg);
+            max_tg = std::max(tg[d], int64_t(max_tg));
         }
         if (max_tg > max_tg_dim_) return false;
         if (tg_size > max_tg_size_) return false;
@@ -765,8 +765,8 @@ private:
         auto &options = cfg_.options();
         dim_t tg_size = ctx.b_tg * ctx.m_tg * ctx.n_tg * ctx.k_tg;
         int max_slm_size = compute::device_info_t::max_slm_size_per_tg(
-                convert_ngen_arch_to_dnnl(cfg_.hw()), into<int>(tg_size),
-                options.regs() > 128);
+                into<int>(tg_size), options.regs() > 128,
+                to_gpu_product(cfg_.hw().product()));
         if (slm_size > max_slm_size) return false;
 
         return true;
@@ -969,7 +969,7 @@ private:
     const config_t &cfg_;
     const tile_t padded_shape_;
     const tile_t padded_gemm_shape_;
-    const int max_tg_size_ = 0;
+    const size_t max_tg_size_ = 0;
 
     uint64_t check_mask_ = 0;
     uint64_t optional_check_mask_ = 0;
@@ -1218,6 +1218,31 @@ void sort_by_model_scores(params_generator_t &params_gen, const config_t &cfg,
     }
     params_gen.sort(0, params_gen.configs(),
             [&](const blocking_params_t &p) { return -eff_scores.at(p.id()); });
+
+    // Heuristics when model tie is detected
+    auto &params_vec = params_gen.params_vec();
+    auto &p_best = params_vec[0];
+    for (auto &p_next : params_gen.params_vec()) {
+        if (&p_best == &p_next) continue;
+        if (eff_scores.at(p_best.id()) != eff_scores.at(p_next.id())) break;
+
+        if (cfg.prb().is_bwd_w && cfg.allow_global_reduction()) {
+            // As the model estimate is the same, prefer fewer atomic reductions
+            // to reduce contention on L3 cache lines
+            auto size = [&](const tile_t &loop, const tile_t &iter) {
+                return iter.get(pvars::mb) * iter.get(pvars::ow)
+                        * iter.get(pvars::oh) * iter.get(pvars::od)
+                        * loop.get(pvars::mb) * loop.get(pvars::ow)
+                        * loop.get(pvars::oh) * loop.get(pvars::od);
+            };
+            auto &b0 = p_best.blocking(), &b1 = p_next.blocking();
+            if (size(b0.loop(), b0.iter()) < size(b1.loop(), b1.iter())) {
+                std::swap(p_best, p_next);
+                continue;
+            }
+        }
+    }
+
 #ifdef DNNL_DEV_MODE
     using namespace ir_utils;
     std::vector<std::string> headers

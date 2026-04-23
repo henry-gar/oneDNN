@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -17,10 +17,13 @@
 /// @example lrn.cpp
 /// > Annotated version: @ref lrn_example_cpp
 
-/// @page lrn_example_cpp Local Response Normalization Primitive Example
-/// This C++ API demonstrates how to create and execute a
+/// @page lrn_example_cpp_brief
+/// @brief This C++ API demonstrates how to create and execute a
 /// [Local response normalization](@ref dev_guide_lrn) primitive in forward
 /// training propagation mode.
+
+/// @page lrn_example_cpp Local Response Normalization Primitive Example
+/// \copybrief lrn_example_cpp_brief
 ///
 /// @include lrn.cpp
 

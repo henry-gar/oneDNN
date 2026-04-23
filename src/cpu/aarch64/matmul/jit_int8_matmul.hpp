@@ -1,5 +1,6 @@
 /*******************************************************************************
 * Copyright 2025 FUJITSU LIMITED
+* Copyright 2025-2026 Arm Ltd. and affiliates
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -19,12 +20,8 @@
 
 #include "common/c_types_map.hpp"
 #include "common/primitive.hpp"
-#include "common/type_helpers.hpp"
-#include "common/utils.hpp"
 
-#include "cpu/platform.hpp"
-#include "cpu/primitive_attr_postops.hpp"
-
+#include "cpu/aarch64/cpu_isa_traits.hpp"
 #include "cpu/aarch64/matmul/jit_int8_kernel_types.hpp"
 #include "cpu/matmul/cpu_matmul_pd.hpp"
 
@@ -34,12 +31,13 @@ namespace cpu {
 namespace aarch64 {
 namespace matmul {
 
+template <cpu_isa_t isa>
 struct jit_int8_matmul_kernel_t;
 struct jit_int8_matmul_utils_kernel_t;
-
+template <cpu_isa_t isa>
 struct jit_int8_matmul_t : public primitive_t {
-    struct pd_t : public dnnl::impl::cpu::matmul::cpu_matmul_pd_t {
-        using ::dnnl::impl::cpu::matmul::cpu_matmul_pd_t::cpu_matmul_pd_t;
+    struct pd_t : public cpu::matmul::cpu_matmul_pd_t {
+        using cpu::matmul::cpu_matmul_pd_t::cpu_matmul_pd_t;
 
         DECLARE_COMMON_PD_T("jit:int8", jit_int8_matmul_t);
 
@@ -60,6 +58,9 @@ struct jit_int8_matmul_t : public primitive_t {
                               format_tag::BA24b8a, format_tag::aCB24c8b,
                               format_tag::abDC24d8c, format_tag::BA16b8a,
                               format_tag::aCB16c8b, format_tag::abDC16d8c,
+                              format_tag::BA12b8a, format_tag::aCB12c8b,
+                              format_tag::abDC12d8c, format_tag::BA4b8a,
+                              format_tag::aCB4c8b, format_tag::abDC4d8c,
                               format_tag::BA8b8a, format_tag::aCB8c8b,
                               format_tag::abDC8d8c)
                             != format_tag::undef
@@ -103,7 +104,7 @@ struct jit_int8_matmul_t : public primitive_t {
 
 private:
     const pd_t *pd() const { return (const pd_t *)primitive_t::pd().get(); }
-    std::unique_ptr<jit_int8_matmul_kernel_t> int8_kernels_[16];
+    std::unique_ptr<jit_int8_matmul_kernel_t<isa>> int8_kernels_[16];
     std::unique_ptr<jit_int8_matmul_utils_kernel_t> reo_ker_a_;
     std::unique_ptr<jit_int8_matmul_utils_kernel_t> reo_ker_b_;
 };

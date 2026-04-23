@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -77,13 +77,14 @@ const char *get_kernel_source(const char *name) {
 
     if (!name) return nullptr;
 
+    std::string kernel_name = name;
     // Missing kernels are expected as they may be included via header files to
     // enable better reuse between implementations.
-    gpu_assert(kernel_list.count(name) <= 1)
-            << "Found " << kernel_list.count(name) << " kernels with the name "
-            << name << ". Expected at most 1.";
+    gpu_assert(kernel_list.count(kernel_name) <= 1)
+            << "Found " << kernel_list.count(kernel_name)
+            << " kernels with the name " << name << ". Expected at most 1.";
 
-    auto r = kernel_list.find(name);
+    auto r = kernel_list.find(kernel_name);
     return r != kernel_list.end() ? r->second : nullptr;
 }
 
@@ -91,6 +92,9 @@ const char *get_kernel_header(const std::string &name) {
     static const std::unordered_map<std::string, const char *>
             kernel_header_list
             = { @KER_HEADER_LIST_ENTRIES@ };
+
+    // Used for OpenCL interoperability validation in C++ code
+    if (name == "dnnl_types.h") return "";
 
     gpu_assert(kernel_header_list.count(name) == 1)
             << "Found " << kernel_header_list.count(name)

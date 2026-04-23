@@ -20,7 +20,7 @@ name: "PR Linters"
 
 on:
   pull_request:
-    types: [opened, edited, synchronize, reopened]
+    types: [opened, synchronize, reopened]
 
 # Declare default permissions as read only.
 permissions: read-all
@@ -33,46 +33,50 @@ concurrency:
 jobs:
   pr-commits:
     name: Commit messages
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          persist-credentials: false
           fetch-depth: 0
       - name: Check commit messages
         run: python3 ./.github/automation/commit-msg-check.py "${{ github.event.pull_request.head.sha }}" "${{ github.event.pull_request.base.sha }}"
 
   pr-header-guards:
     name: Header guards
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          persist-credentials: false
           fetch-depth: 0
       - name: Check header guards
         run: ./scripts/fix_header_guards.py -v $(git diff --name-only "${{ github.event.pull_request.base.sha }}")
 
   pr-clang-format:
     name: Clang-Format
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          persist-credentials: false
           fetch-depth: 0
       - name: Install clang-format
-        run: sudo apt update && sudo apt install -y "clang-format-11"
+        run: sudo apt update && sudo apt install -y "clang-format-18"
       - name: Check code formatting
         run: .github/automation/clang-format.sh ${{ github.event.pull_request.base.sha }}
 
   pr-format-tags:
     name: Format tags consistency
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout oneDNN
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          persist-credentials: false
           path: source
 
       - name: Install clang
@@ -99,11 +103,42 @@ jobs:
           python ${{ github.workspace }}/source/scripts/generate_format_tags.py
           cd ${{ github.workspace }}/source/
           git diff | grep . && exit 1 || true
+ 
+  pr-check-license-header:
+    name: Copyright Check
+    runs-on: ubuntu-24.04
+    steps:
+      - name: "Checkout code"
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: "Run check"
+        uses: apache/skywalking-eyes/header@61275cc80d0798a405cb070f7d3a8aaf7cf2c2c1 # v0.8.0
+        with:
+          config: ".github/.licenserc.yml"
+          mode: "check"
+
+  other-lint:
+    name: Other linters
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Python linting
+        uses: oxsecurity/megalinter/flavors/python@8fbdead70d1409964ab3d5afa885e18ee85388bb # v9.4.0
+        id: pyl
+        env:
+          VALIDATE_ALL_CODEBASE: true
+          MEGALINTER_CONFIG: .github/python-linting.yml
 
   pr-status:
     name: Formatting
-    runs-on: ubuntu-latest
-    needs: [ pr-commits, pr-clang-format, pr-format-tags ]
+    runs-on: ubuntu-24.04
+    needs: [ pr-commits, pr-clang-format, pr-format-tags, pr-check-license-header ]
     steps:
       - name: Print success
         run: echo "Success"

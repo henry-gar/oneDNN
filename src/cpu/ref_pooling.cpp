@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2016-2025 Intel Corporation
+* Copyright 2016 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@
 #include <math.h>
 
 #include "common/c_types_map.hpp"
+#include "common/compiler_workarounds.hpp"
 #include "common/dnnl_thread.hpp"
 #include "common/nstl.hpp"
 #include "common/type_helpers.hpp"
@@ -43,13 +44,11 @@ static inline dim_t get_offset(const memory_desc_wrapper &mdw, dim_t n, dim_t c,
 
 using namespace nstl;
 
-template <data_type_t data_type, data_type_t acc_type>
-status_t ref_pooling_fwd_t<data_type, acc_type>::execute_forward(
-        const exec_ctx_t &ctx) const {
+status_t ref_pooling_fwd_t::execute_forward(const exec_ctx_t &ctx) const {
 
     status_t status = status::success;
-    auto src = CTX_IN_MEM(const data_t *, DNNL_ARG_SRC);
-    auto dst = CTX_OUT_CLEAN_MEM(data_t *, DNNL_ARG_DST, status);
+    auto src = CTX_IN_MEM(const void *, DNNL_ARG_SRC);
+    auto dst = CTX_OUT_CLEAN_MEM(void *, DNNL_ARG_DST, status);
     CHECK(status);
     auto ws = CTX_OUT_CLEAN_MEM(unsigned char *, DNNL_ARG_WORKSPACE, status);
     CHECK(status);
@@ -97,8 +96,8 @@ status_t ref_pooling_fwd_t<data_type, acc_type>::execute_forward(
         }
     };
 
-    auto ker_max = [=](float &d, dim_t mb, dim_t oc, dim_t od, dim_t oh,
-                           dim_t ow) {
+    auto ker_max
+            = [=](float &d, dim_t mb, dim_t oc, dim_t od, dim_t oh, dim_t ow) {
         set_ws(mb, oc, od, oh, ow, 0);
         for (dim_t kd = 0; kd < KD; ++kd) {
             const dim_t id = od * SD - padF + kd * (DD + 1);
@@ -111,7 +110,7 @@ status_t ref_pooling_fwd_t<data_type, acc_type>::execute_forward(
                     if (iw < 0 || iw >= IW) continue;
 
                     const auto off = get_offset(src_d, mb, oc, id, ih, iw);
-                    auto s = src[off];
+                    float s = io::load_float_value(src_d.data_type(), src, off);
                     if (s > d) {
                         d = s;
                         set_ws(mb, oc, od, oh, ow, (kd * KH + kh) * KW + kw);
@@ -121,8 +120,8 @@ status_t ref_pooling_fwd_t<data_type, acc_type>::execute_forward(
         }
     };
 
-    auto ker_avg = [=](float &d, dim_t mb, dim_t oc, dim_t od, dim_t oh,
-                           dim_t ow) {
+    auto ker_avg
+            = [=](float &d, dim_t mb, dim_t oc, dim_t od, dim_t oh, dim_t ow) {
         for (dim_t kd = 0; kd < KD; ++kd) {
             const dim_t id = od * SD - padF + kd * (DD + 1);
             if (id < 0 || id >= ID) continue;
@@ -134,7 +133,7 @@ status_t ref_pooling_fwd_t<data_type, acc_type>::execute_forward(
                     if (iw < 0 || iw >= IW) continue;
 
                     const auto off = get_offset(src_d, mb, oc, id, ih, iw);
-                    d += src[off];
+                    d += io::load_float_value(src_d.data_type(), src, off);
                 }
             }
         }
@@ -172,27 +171,28 @@ status_t ref_pooling_fwd_t<data_type, acc_type>::execute_forward(
     const bool is_max_pool = alg == alg_kind::pooling_max;
 
     float base_res
-            = is_max_pool ? (float)numeric_limits<data_t>::lowest() : 0.f;
+            = is_max_pool ? types::lowest_value<float>(dst_d.data_type()) : 0.f;
+
     using ker_t
             = std::function<void(float &, dim_t, dim_t, dim_t, dim_t, dim_t)>;
     ker_t kernel = is_max_pool ? (ker_t)ker_max : (ker_t)ker_avg;
 
     parallel_nd(MB, OC, OD, OH, OW,
-            [&](dim_t mb, dim_t oc, dim_t od, dim_t oh, dim_t ow) {
-                auto data_p_off = get_offset(dst_d, mb, oc, od, oh, ow);
-                auto data_l_off
-                        = (((mb * OC + oc) * OD + od) * OH + oh) * OW + ow;
-                float res = base_res;
-                kernel(res, mb, oc, od, oh, ow);
+            [= COMPAT_THIS_CAPTURE](
+                    dim_t mb, dim_t oc, dim_t od, dim_t oh, dim_t ow) {
+        auto data_p_off = get_offset(dst_d, mb, oc, od, oh, ow);
+        auto data_l_off = (((mb * OC + oc) * OD + od) * OH + oh) * OW + ow;
+        float res = base_res;
+        kernel(res, mb, oc, od, oh, ow);
 
-                ref_post_ops_t::args_t args;
-                args.ctx = &ctx;
-                args.l_offset = data_l_off;
-                args.dst_md = pd()->dst_md();
-                ref_post_ops->execute(res, args);
+        ref_post_ops_t::args_t args;
+        args.ctx = &ctx;
+        args.l_offset = data_l_off;
+        args.dst_md = pd()->dst_md();
+        ref_post_ops->execute(res, args);
 
-                dst[data_p_off] = cpu::q10n::saturate_and_round<data_t>(res);
-            });
+        io::store_float_value(dst_d.data_type(), res, dst, data_p_off);
+    });
 
     return status::success;
 }
@@ -209,7 +209,7 @@ status_t ref_pooling_bwd_t::execute(const exec_ctx_t &ctx) const {
     const memory_desc_wrapper diff_src_d(pd()->diff_src_md());
     const memory_desc_wrapper ws_d(pd()->workspace_md());
 
-    auto scratchpad = ctx.get_scratchpad_grantor();
+    const auto &scratchpad = ctx.get_scratchpad_grantor();
     float *cvt_src = scratchpad.template get<float>(
             memory_tracking::names::key_pool_src_bf16cvt);
     void *diff_src = (diff_src_d.data_type() != data_type::f32)
@@ -319,15 +319,15 @@ status_t ref_pooling_bwd_t::execute(const exec_ctx_t &ctx) const {
     };
 
     dim_t ow_start
-            = max(dim_t(0), utils::div_up(padL - ((KW - 1) * DW + KW) + 1, SW));
+            = utils::div_up(max(dim_t(0), padL - ((KW - 1) * DW + KW) + 1), SW);
     dim_t ow_end = min(OW, 1 + (padL + IW - 1) / SW);
 
     dim_t oh_start
-            = max(dim_t(0), utils::div_up(padT - ((KH - 1) * DH + KH) + 1, SH));
+            = utils::div_up(max(dim_t(0), padT - ((KH - 1) * DH + KH) + 1), SH);
     dim_t oh_end = min(OH, 1 + (padT + IH - 1) / SH);
 
     dim_t od_start
-            = max(dim_t(0), utils::div_up(padF - ((KD - 1) * DD + KD) + 1, SD));
+            = utils::div_up(max(dim_t(0), padF - ((KD - 1) * DD + KD) + 1), SD);
     dim_t od_end = min(OD, 1 + (padF + ID - 1) / SD);
 
     using ker_t = std::function<void(dim_t, dim_t, dim_t, dim_t, dim_t)>;
@@ -335,7 +335,7 @@ status_t ref_pooling_bwd_t::execute(const exec_ctx_t &ctx) const {
             = alg == alg_kind::pooling_max ? (ker_t)ker_max : (ker_t)ker_avg;
 
     const int nthr = pd()->nthr_;
-    parallel(nthr, [&](const int ithr, const int nthr) {
+    parallel(nthr, [=](const int ithr, const int nthr) {
         dim_t start = 0, end = 0;
         balance211(diff_src_d.nelems(true), nthr, ithr, start, end);
         if (start == end) return;
@@ -344,7 +344,7 @@ status_t ref_pooling_bwd_t::execute(const exec_ctx_t &ctx) const {
             io::store_float_value(data_type::f32, 0, diff_src, i);
     });
 
-    parallel_nd_ext(nthr, MB, OC, [&](int, int, dim_t mb, dim_t oc) {
+    parallel_nd_ext(nthr, MB, OC, [=](int, int, dim_t mb, dim_t oc) {
         for_(dim_t od = od_start; od < od_end; ++od)
         for_(dim_t oh = oh_start; oh < oh_end; ++oh)
         for (dim_t ow = ow_start; ow < ow_end; ++ow) {
@@ -353,7 +353,7 @@ status_t ref_pooling_bwd_t::execute(const exec_ctx_t &ctx) const {
     });
 
     if (diff_src_d.data_type() != data_type::f32) {
-        parallel(nthr, [&](const int ithr, const int nthr) {
+        parallel(nthr, [=](const int ithr, const int nthr) {
             dim_t start = 0, end = 0;
             balance211(diff_src_d.nelems(true), nthr, ithr, start, end);
             if (start == end) return;
@@ -370,15 +370,6 @@ status_t ref_pooling_bwd_t::execute(const exec_ctx_t &ctx) const {
 
     return status::success;
 }
-
-template struct ref_pooling_fwd_t<data_type::f32>;
-template struct ref_pooling_fwd_t<data_type::s32>;
-template struct ref_pooling_fwd_t<data_type::bf16, data_type::f32>;
-template struct ref_pooling_fwd_t<data_type::f16, data_type::f32>;
-template struct ref_pooling_fwd_t<data_type::f8_e5m2, data_type::f32>;
-template struct ref_pooling_fwd_t<data_type::f8_e4m3, data_type::f32>;
-template struct ref_pooling_fwd_t<data_type::s8, data_type::s32>;
-template struct ref_pooling_fwd_t<data_type::u8, data_type::s32>;
 
 } // namespace cpu
 } // namespace impl

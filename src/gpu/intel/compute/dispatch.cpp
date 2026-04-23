@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -89,7 +89,7 @@ compute::range_t get_optimal_lws(compute::range_t &gws,
         auto lws_i = (static_cast<size_t>(mapped_vec_dim_idx) == i
                              && gpu_arch >= gpu_arch_t::xe_hp)
                 ? match(optimal_vect_values, gws[i], rest_lws,
-                        utils::rnd_up_pow2(lws_min[i]))
+                          utils::rnd_up_pow2(lws_min[i]))
                 : match(optimal_lws_values, gws[i], rest_lws, lws_min[i]);
 
         lws_nd[i] *= lws_i;
@@ -129,8 +129,8 @@ dispatch_t::dispatch_t(const engine_t *engine, const memory_desc_t *md)
         std::sort(sorted_strides, sorted_strides + md->ndims,
                 [](const std::pair<int, dim_t> &a,
                         const std::pair<int, dim_t> &b) {
-                    return a.second < b.second;
-                });
+            return a.second < b.second;
+        });
         for (int i = 0; i < md->ndims; i++) {
             md_nesting_levels_[sorted_strides[i].first] = md->ndims - i - 1;
         }
@@ -141,8 +141,7 @@ std::string dispatch_t::str() const {
     ostringstream_t oss;
     for (dim_idx_t i = 0; i < ndims_; ++i) {
         auto &d = dims_[i];
-        oss << "    "
-            << "dim #" << i << " name: " << std::setw(10) << d.name
+        oss << "    " << "dim #" << i << " name: " << std::setw(10) << d.name
             << " size: " << std::setw(6) << d.size << " block: " << std::setw(4)
             << d.block << " nesting_level: " << std::setw(4) << d.nesting_level
             << " vsize: " << std::setw(4) << d.vector_size
@@ -275,8 +274,8 @@ void dispatch_t::generate(bool generate_lws) {
     // Keep order of elements with the same nesting level unchanged.
     std::stable_sort(dims_, dims_ + ndims_,
             [](const dim_info_t &a, const dim_info_t &b) {
-                return a.nesting_level > b.nesting_level;
-            });
+        return a.nesting_level > b.nesting_level;
+    });
 
     // XXX: Move dimensions with size = 1 to the end.
     for (int i = ndims_ - 2; i >= 0; --i) {

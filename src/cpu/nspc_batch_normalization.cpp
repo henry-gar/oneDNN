@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2018-2024 Intel Corporation
+* Copyright 2018 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -50,7 +50,7 @@ status_t nspc_batch_normalization_fwd_t<d_type>::execute_forward(
     const auto use_scale = pd()->use_scale();
     const auto use_shift = pd()->use_shift();
 
-    auto scratchpad = ctx.get_scratchpad_grantor();
+    const auto &scratchpad = ctx.get_scratchpad_grantor();
     auto tmp_mean = scratchpad.template get<acc_data_t>(key_bnorm_tmp_mean);
     auto tmp_var = scratchpad.template get<acc_data_t>(key_bnorm_tmp_var);
     auto *ws_reduce = scratchpad.template get<acc_data_t>(key_bnorm_reduction);
@@ -86,14 +86,10 @@ status_t nspc_batch_normalization_fwd_t<d_type>::execute_forward(
     const dim_t SP = pd()->H() * pd()->W() * pd()->D();
 
     const float eps = pd()->desc()->batch_norm_epsilon;
-    auto maybe_post_op = [&](acc_data_t res) {
-        if (with_relu) return math::relu_fwd(res, pd()->alpha());
-        return res;
-    };
     const int nthr = pd()->nthr_;
 
     if (calculate_stats) {
-        parallel(nthr, [&](const int ithr, const int nthr) {
+        parallel(nthr, [=](const int ithr, const int nthr) {
             dim_t N_s = 0, N_e = 0;
             balance211(N, nthr, ithr, N_s, N_e);
 
@@ -120,13 +116,13 @@ status_t nspc_batch_normalization_fwd_t<d_type>::execute_forward(
                 }
             }
         });
-        parallel_nd(C, [&](dim_t c) {
+        parallel_nd(C, [=](dim_t c) {
             mean[c] = 0;
             for (dim_t n = 0; n < nthr; n++)
                 mean[c] += ws_reduce[C * n + c];
             mean[c] /= SP * N;
         });
-        parallel(nthr, [&](const int ithr, const int nthr) {
+        parallel(nthr, [=](const int ithr, const int nthr) {
             dim_t N_s = 0, N_e = 0;
             balance211(N, nthr, ithr, N_s, N_e);
 
@@ -161,13 +157,13 @@ status_t nspc_batch_normalization_fwd_t<d_type>::execute_forward(
                 }
             }
         });
-        parallel_nd(C, [&](dim_t c) {
+        parallel_nd(C, [=](dim_t c) {
             variance[c] = 0;
             for (dim_t n = 0; n < nthr; n++)
                 variance[c] += ws_reduce[C * n + c];
             variance[c] /= SP * N;
         });
-        parallel(nthr, [&](const int ithr, const int nthr) {
+        parallel(nthr, [=](const int ithr, const int nthr) {
             acc_data_t *variance_loc = tmp_var + nstl::max(C, (dim_t)16) * ithr;
             if (ithr > 0 || save_stats) {
                 for (dim_t c = 0; c < C; c++)
@@ -176,7 +172,7 @@ status_t nspc_batch_normalization_fwd_t<d_type>::execute_forward(
         });
     }
 
-    parallel(nthr, [&](const int ithr, const int nthr) {
+    parallel(nthr, [= COMPAT_THIS_CAPTURE](const int ithr, const int nthr) {
         dim_t N_s = 0, N_e = 0;
         balance211(N, nthr, ithr, N_s, N_e);
 
@@ -226,7 +222,8 @@ status_t nspc_batch_normalization_fwd_t<d_type>::execute_forward(
                             if (is_training) ws[c_off] = 1;
                         }
                     }
-                    _dst[c] = maybe_post_op(bn_res);
+                    _dst[c] = with_relu ? math::relu_fwd(bn_res, pd()->alpha())
+                                        : bn_res;
                 }
                 if (utils::one_of(d_type, bf16, f16)) {
                     // convert dst from f32 to xf16
@@ -259,7 +256,7 @@ status_t nspc_batch_normalization_bwd_t<d_type>::execute_backward(
     auto diff_scale = CTX_OUT_MEM(acc_data_t *, DNNL_ARG_DIFF_SCALE);
     auto diff_shift = CTX_OUT_MEM(acc_data_t *, DNNL_ARG_DIFF_SHIFT);
 
-    auto scratchpad = ctx.get_scratchpad_grantor();
+    const auto &scratchpad = ctx.get_scratchpad_grantor();
     auto tmp_diff_ss
             = scratchpad.template get<acc_data_t>(key_bnorm_tmp_diff_ss);
 
@@ -290,7 +287,7 @@ status_t nspc_batch_normalization_bwd_t<d_type>::execute_backward(
     const dim_t nb_c_blk = (size_t)C / c_blk;
     const int nthr = pd()->nthr_;
 
-    parallel(nthr, [&](const int ithr, const int nthr) {
+    parallel(nthr, [=](const int ithr, const int nthr) {
         dim_t N_s = 0, N_e = 0;
         balance211(N, nthr, ithr, N_s, N_e);
 
@@ -335,7 +332,7 @@ status_t nspc_batch_normalization_bwd_t<d_type>::execute_backward(
         }
     });
 
-    parallel_nd(C, [&](dim_t c) {
+    parallel_nd(C, [=](dim_t c) {
         acc_data_t sqrt_variance
                 = static_cast<acc_data_t>(1.0f / sqrtf(variance[c] + eps));
         diff_gamma[c] = 0;
@@ -347,7 +344,7 @@ status_t nspc_batch_normalization_bwd_t<d_type>::execute_backward(
         diff_gamma[c] *= sqrt_variance;
     });
 
-    parallel(nthr, [&](const int ithr, const int nthr) {
+    parallel(nthr, [=](const int ithr, const int nthr) {
         dim_t N_s = 0, N_e = 0;
         balance211(N, nthr, ithr, N_s, N_e);
 

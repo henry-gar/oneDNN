@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2024-2025 Intel Corporation
+* Copyright 2024 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -28,6 +28,16 @@ namespace intel {
 namespace sycl {
 
 class engine_t;
+
+xpu::device_uuid_t get_device_uuid(const ::sycl::device &dev);
+
+status_t sycl_create_kernels_with_level_zero(
+        std::vector<std::unique_ptr<::sycl::kernel>> &sycl_kernels,
+        const std::vector<const char *> &kernel_names,
+        const gpu::intel::sycl::engine_t *sycl_engine,
+        const xpu::binary_t &binary);
+
+bool compare_ze_devices(const ::sycl::device &lhs, const ::sycl::device &rhs);
 
 ::sycl::nd_range<3> to_sycl_nd_range(
         const gpu::intel::compute::nd_range_t &range);

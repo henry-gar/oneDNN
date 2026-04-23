@@ -25,10 +25,13 @@ The backward propagation for the sum operation is simply an identity operation.
 When executed, the inputs and outputs should be mapped to an execution
 argument index as specified by the following table.
 
-| primitive input/output | execution argument index |
-|------------------------|--------------------------|
-| \src                   | DNNL_ARG_MULTIPLE_SRC    |
-| \dst                   | DNNL_ARG_DST             |
+| Argument     | Index                 | Type   |
+|--------------|-----------------------|--------|
+| \src         | DNNL_ARG_MULTIPLE_SRC | Input  |
+| \dst         | DNNL_ARG_DST          | Output |
+| [scratchpad] | DNNL_ARG_SCRATCHPAD   | Output |
+
+[scratchpad]: @ref dev_guide_attributes_scratchpad
 
 ## Implementation Details
 
@@ -88,4 +91,5 @@ meaning associated with any logical dimensions.
 
 ## Examples
 
-* @ref sum_example_cpp
+See @ref dev_guide_examples page for a complete list. Sum examples are listed in the
+[Tensor Operations](@ref examples_tensor_operations) section.

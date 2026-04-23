@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2025 Intel Corporation
+* Copyright 2021 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -27,9 +27,8 @@
 #define NGEN_NEO_INTERFACE
 #define NGEN_NO_OP_NAMES
 #define NGEN_WINDOWS_COMPAT
-#define NGEN_LINK_OPENCL
 
-#ifdef DNNL_DEV_MODE
+#if !defined(NDEBUG) || defined(DNNL_DEV_MODE)
 #define NGEN_ASM
 #endif
 

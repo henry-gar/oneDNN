@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2025 Intel Corporation
+* Copyright 2021 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -32,16 +32,9 @@ const std::vector<uint8_t> &cache_blob_id_t::get(
     auto engine_kind = engine->kind();
     auto runtime_kind = engine->runtime_kind();
 
-    if (engine_kind != engine_kind::gpu
-            || (engine_kind == engine_kind::gpu
-                    && runtime_kind != runtime_kind::ocl)) {
-        return sstream_.get_data();
-    }
+    if (!engine->is_cache_blob_supported()) { return sstream_.get_data(); }
 
     if (pd->kind() == primitive_kind::zero_pad) { return sstream_.get_data(); }
-
-    assert(engine->kind() == engine_kind::gpu
-            && engine->runtime_kind() == runtime_kind::ocl);
 
     const auto init_id = [&]() {
         serialize_desc(sstream_, pd->op_desc());
@@ -57,9 +50,6 @@ const std::vector<uint8_t> &cache_blob_id_t::get(
         }
 
         sstream_.append(engine_kind);
-        // TODO: blob object can probably be re-used for different runtimes
-        // if the engine kind is the same. Check this assumption when extending
-        // this API to DPCPP runtime.
         sstream_.append(runtime_kind);
 
         engine->serialize_device(sstream_);

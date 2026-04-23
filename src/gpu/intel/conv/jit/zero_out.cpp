@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2024-2025 Intel Corporation
+* Copyright 2024 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
 *******************************************************************************/
 
 #include "gpu/intel/conv/jit/zero_out.hpp"
+#include "gpu/intel/jit/ir/hw.hpp"
 
 namespace dnnl {
 namespace impl {
@@ -29,18 +30,20 @@ std::string zero_out_kernel_desc_t::kernel_name() const {
     return "zero_out";
 }
 
-kernel::options_t zero_out_kernel_desc_t::options(
+dsl::kernel::options_t zero_out_kernel_desc_t::options(
         const impl::engine_t *engine) const {
-    return kernel::options_t(make_ir_hw(engine), regs_, simd_);
+    auto ret = dsl::kernel::options_t(make_ir_hw(engine), regs_, simd_);
+    ret.set_require_dpas(dpas_);
+    return ret;
 }
 compute::range_t zero_out_kernel_desc_t::local_range() const {
     return compute::range_t(into<size_t>(simd_));
 }
 
 void zero_out_kernel_desc_t::init_kernel_iface(
-        kernel::iface_t &kernel_iface) const {
-    kernel_iface.register_arg("size", type_t::u32());
-    kernel_iface.register_arg("ptr", type_t::byte(type::attr_t::ptr));
+        dsl::kernel::iface_t &kernel_iface) const {
+    kernel_iface.register_arg("size", dsl::type_t::u32());
+    kernel_iface.register_arg("ptr", dsl::type_t::byte(dsl::type::attr_t::ptr));
 }
 
 void zero_out_kernel_desc_t::init_kernel_info(kernel_info_t &kernel_info,
@@ -52,7 +55,7 @@ void zero_out_kernel_desc_t::init_kernel_info(kernel_info_t &kernel_info,
         auto &var = kernel_info.arg_var(i);
         if (var.type().is_ptr()) continue;
         gpu_assert(name == "size") << "Unknown scalar argument: " << name;
-        kernel_info.set_internal_arg(name, into<uint32_t>(params.size));
+        kernel_info.set_immediate_arg(name, into<uint32_t>(params.size));
     }
     kernel_info.set_nd_range(nd_range(simd_, params.size));
 }

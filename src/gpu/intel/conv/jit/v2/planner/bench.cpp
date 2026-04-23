@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -490,12 +490,12 @@ tile_t random_shape(const bench_input_params_t &params, const tile_t &tile) {
     };
     auto make_random_dim_set
             = [&](const pvar_t &dim, dim_t s, dim_t m, dim_t l) {
-                  auto d = make_random_dim(dim);
-                  auto d_s = d.with_range(1, s);
-                  auto d_m = d.with_range(s + 1, m);
-                  auto d_l = d.with_range(m + 1, l);
-                  return d_s | d_m | d_l;
-              };
+        auto d = make_random_dim(dim);
+        auto d_s = d.with_range(1, s);
+        auto d_m = d.with_range(s + 1, m);
+        auto d_l = d.with_range(m + 1, l);
+        return d_s | d_m | d_l;
+    };
     tile_t s = problem_t::default_shape();
     auto g = make_random_dim(pvars::g, 2, 512);
     auto mb = make_random_dim_set(pvars::mb, 1, 16, 128);
@@ -705,19 +705,19 @@ layout_tag_t &get_out_tag(kernel_desc_t &kernel_desc) {
     return kernel_desc.dst_tag;
 }
 
-std::vector<type_t> get_out_types(const kernel_desc_t &kernel_desc) {
-    std::vector<type_t> ret;
+std::vector<dsl::type_t> get_out_types(const kernel_desc_t &kernel_desc) {
+    std::vector<dsl::type_t> ret;
     switch (kernel_desc.prop) {
         case prop_kind::forward:
-            ret.push_back(type_t::s8());
-            ret.push_back(type_t::f16());
-            ret.push_back(type_t::f32());
+            ret.push_back(dsl::type_t::s8());
+            ret.push_back(dsl::type_t::f16());
+            ret.push_back(dsl::type_t::f32());
             break;
         case prop_kind::backward_data: break;
         case prop_kind::backward_weights:
-            ret.push_back(type_t::f32());
+            ret.push_back(dsl::type_t::f32());
             if (kernel_desc.wei_tag.type().is_bf16())
-                ret.push_back(type_t::bf16());
+                ret.push_back(dsl::type_t::bf16());
         default: break;
     }
     return ret;
@@ -744,7 +744,7 @@ kernel_desc_t try_extensions(
     if (kernel_desc.prop == prop_kind::backward_weights
             && !kernel_desc.with_bias_bwd_w()) {
         auto d = kernel_desc;
-        d.bias_type = type_t::f32();
+        d.bias_type = dsl::type_t::f32();
         if (create_plan(d, bench_mger.hw()) && try_create(bench_mger, d)) {
             ext.add(extension_kind_t::bias);
             reqs_vec.push_back(d.reqs());
@@ -755,8 +755,8 @@ kernel_desc_t try_extensions(
     // Try Stream-K.
     bool try_stream_k = !kernel_desc.use_stream_k;
     try_stream_k &= (kernel_desc.prop != prop_kind::backward_data
-            || (kernel_desc.a_type() == type_t::f32()
-                    && kernel_desc.b_type() == type_t::f32()));
+            || (kernel_desc.a_type() == dsl::type_t::f32()
+                    && kernel_desc.b_type() == dsl::type_t::f32()));
     try_stream_k &= (!kernel_desc.is_dw
             || kernel_desc.prop == prop_kind::backward_weights);
     if (try_stream_k) {

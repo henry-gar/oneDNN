@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -29,9 +29,9 @@ namespace graph = dnnl::impl::graph;
 namespace utils = dnnl::graph::tests::unit::utils;
 
 TEST(test_reduce_compile, TestReduce) {
-    const auto apply_keep_dims_attr = [](const std::vector<int64_t> &shape,
-                                              const std::vector<int64_t> &axes,
-                                              const bool keep_dims) {
+    const auto apply_keep_dims_attr
+            = [](const std::vector<int64_t> &shape,
+                      const std::vector<int64_t> &axes, const bool keep_dims) {
         if (keep_dims) return shape;
         std::vector<size_t> excluded_axes;
         excluded_axes.reserve(axes.size());
@@ -545,10 +545,10 @@ TEST(test_reduce_execute_subgraph_fp32, ReduceWith3PostOps_CPU) {
 TEST(test_reduce_execute, ReduceMeanOutputDims) {
     const auto apply_keep_dims_attr
             = [](const std::vector<int64_t> &shape, const bool keep_dims) {
-                  if (keep_dims) return shape;
-                  std::vector<int64_t> new_shape;
-                  return new_shape;
-              };
+        if (keep_dims) return shape;
+        std::vector<int64_t> new_shape;
+        return new_shape;
+    };
     graph::engine_t *engine = get_engine();
     graph::stream_t *strm = get_stream();
 

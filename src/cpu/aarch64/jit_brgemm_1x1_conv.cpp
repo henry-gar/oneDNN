@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2023 Intel Corporation
+* Copyright 2021 Intel Corporation
 * Copyright 2024-2025 FUJITSU LIMITED
 * Copyright 2025 Arm Ltd. and affiliates
 *
@@ -100,9 +100,7 @@ status_t brgemm_1x1_convolution_fwd_t<isa>::pd_t::init(engine_t *engine) {
                     && one_of(entry.eltwise.alg,
                             // these fail due to label offset being too large
                             alg_kind::eltwise_tanh, alg_kind::eltwise_gelu_tanh,
-                            alg_kind::eltwise_gelu_erf,
-                            // this po segfaults TODO: check issues with f32
-                            alg_kind::eltwise_log);
+                            alg_kind::eltwise_gelu_erf);
             VDISPATCH_CONV(!is_failing_po, VERBOSE_BAD_ALGORITHM);
         }
     }
@@ -136,7 +134,7 @@ status_t brgemm_1x1_convolution_fwd_t<isa>::pd_t::init(engine_t *engine) {
         auto vK = (i_K) ? jcp_.K_tail : jcp_.K;
         const auto brg_idx = get_brg_idx(i_init, i_M, i_N, i_K);
         if (vM == 0 || vN == 0 || vK == 0) continue;
-        brgemm_t brg;
+        brgemm_desc_t brg;
         brgemm_strides_t brg_strides;
         brg_strides.stride_a = jcp_.brg_stride_a;
         brg_strides.stride_b = jcp_.brg_stride_b;
@@ -433,7 +431,7 @@ status_t brgemm_1x1_convolution_fwd_t<isa>::execute_forward_all(
 
     brgemm_exec_ctx_t brgemm_ctx(ctx, pd());
 
-    const memory_tracking::grantor_t scratchpad = ctx.get_scratchpad_grantor();
+    const auto &scratchpad = ctx.get_scratchpad_grantor();
 
     const auto &jcp = pd()->jcp_;
     const memory_desc_wrapper weights_d(pd()->weights_md(0));
@@ -468,7 +466,7 @@ status_t brgemm_1x1_convolution_fwd_t<isa>::execute_forward_all(
     brgemm_batch_element_t *const brg_batch_global
             = (jcp.brg_type != brgemm_strd)
             ? scratchpad.template get<brgemm_batch_element_t>(
-                    key_brgemm_primitive_batch)
+                      key_brgemm_primitive_batch)
             : nullptr;
     char *const c_buffer_global = (jcp.use_buffer)
             ? scratchpad.template get<char>(key_brgemm_primitive_buffer)

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2025 Intel Corporation
+* Copyright 2021 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -96,9 +96,7 @@ struct xe_global_fwd_t : public primitive_t {
             reduction_pd_ = *(++it);
             if (reduction_pd_)
                 return status::success;
-            else {
-                return status::invalid_arguments;
-            }
+            else { return status::invalid_arguments; }
         }
 
         std::shared_ptr<primitive_desc_t> reduction_pd_;

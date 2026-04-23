@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -181,17 +181,17 @@ void jit_avx512_core_bf16_fwd_kernel_vmm_t<Vmm>::apply_postops(int ur_w) {
             iterate(jcp.nb_oc_blocking, ur_w, mask_tail,
                     oc_blk_is_smaller_than_vmm,
                     [&](const bool mask_flag, const int k, const int j) {
-                        const size_t aux_output_l_off = get_dst_offset(j, k);
-                        const auto vmm_idx = vmm_dst_idx(j, k);
-                        vmm_idxs.emplace(vmm_idx);
+                const size_t aux_output_l_off = get_dst_offset(j, k);
+                const auto vmm_idx = vmm_dst_idx(j, k);
+                vmm_idxs.emplace(vmm_idx);
 
-                        rhs_arg_params_tail.vmm_idx_to_out_reg.emplace(
-                                vmm_idx, reg_dst);
-                        rhs_arg_params_tail.vmm_idx_to_out_elem_off_val.emplace(
-                                vmm_idx, aux_output_l_off);
-                        if (mask_flag)
-                            rhs_arg_params_tail.vmm_tail_idx_.emplace(vmm_idx);
-                    });
+                rhs_arg_params_tail.vmm_idx_to_out_reg.emplace(
+                        vmm_idx, reg_dst);
+                rhs_arg_params_tail.vmm_idx_to_out_elem_off_val.emplace(
+                        vmm_idx, aux_output_l_off);
+                if (mask_flag)
+                    rhs_arg_params_tail.vmm_tail_idx_.emplace(vmm_idx);
+            });
             rhs_arg_params = rhs_arg_params_tail;
             rhs_arg_params.vmm_tail_idx_.clear();
 
@@ -213,8 +213,8 @@ void jit_avx512_core_bf16_fwd_kernel_vmm_t<Vmm>::apply_postops(int ur_w) {
         } else {
             iterate(jcp.nb_oc_blocking, ur_w,
                     [&](const bool, const int k, const int j) {
-                        vmm_idxs.emplace(vmm_dst_idx(j, k));
-                    });
+                vmm_idxs.emplace(vmm_dst_idx(j, k));
+            });
             postops_injector_->compute_vector_range(vmm_idxs);
         }
     }
@@ -1792,8 +1792,14 @@ status_t jit_avx512_core_bf16_bwd_data_kernel_t::init_conf(jit_conv_conf_t &jcp,
     if (is_iw_threading_available(jcp)) {
         int ic_chunks = jcp.nb_ic / jcp.nb_ic_blocking;
         int work_units = jcp.ngroups * jcp.mb * ic_chunks * jcp.ih;
-        float no_iw_block_eff
-                = (float)work_units / rnd_up(work_units, jcp.nthr);
+
+        auto efficiency = [](dim_t size, dim_t block) {
+            // avoid msvc warning 'potential divide by zero'
+            if (size <= 0 || block == 0) return 0.f;
+            return (float)size / rnd_up(size, block);
+        };
+
+        float no_iw_block_eff = efficiency(work_units, jcp.nthr);
 
         // current design of generate() requires iw_block >= 2 * ur_w
         const int min_iw_block = jcp.ur_w * 2;
@@ -1802,9 +1808,9 @@ status_t jit_avx512_core_bf16_bwd_data_kernel_t::init_conf(jit_conv_conf_t &jcp,
                 rnd_up(jcp.iw, jcp.ur_w * iw_threads) / iw_threads);
         int nb_iw = div_up(jcp.iw, iw_block);
 
-        float block_eff = (float)jcp.iw / rnd_up(jcp.iw, iw_block);
+        float block_eff = efficiency(jcp.iw, iw_block);
         work_units = jcp.ngroups * jcp.mb * ic_chunks * jcp.ih * nb_iw;
-        float work_eff = (float)work_units / rnd_up(work_units, jcp.nthr);
+        float work_eff = efficiency(work_units, jcp.nthr);
         float iw_block_eff = block_eff * work_eff;
 
         const int iw_thread_min_size = 16 * 128;
@@ -1918,10 +1924,10 @@ void jit_avx512_core_bf16_conv_bwd_weights_kernel_f32_t::
     auto src_addr
             = [this, src_offset](int i_iw, int i_ic, ptrdiff_t extra_offset = 0,
                       bool vnni_bcast = false) {
-                  auto local_offset = get_src_offset(i_ic, i_iw);
-                  return EVEX_compress_addr(reg_src,
-                          local_offset + src_offset + extra_offset, vnni_bcast);
-              };
+        auto local_offset = get_src_offset(i_ic, i_iw);
+        return EVEX_compress_addr(
+                reg_src, local_offset + src_offset + extra_offset, vnni_bcast);
+    };
     auto ddst_addr = [this, ddst_offset](int i_ur) {
         auto ow_scale = 2;
         return EVEX_compress_addr(
@@ -2053,9 +2059,9 @@ void jit_avx512_core_bf16_conv_bwd_weights_kernel_f32_t::
         auto local_offset = get_kernel_offset(i_ic, i_kw);
         return EVEX_compress_addr(reg_kernel, local_offset + kernel_offset);
     };
-    auto src_addr = [this, reorder_bytes](int i_iw, int i_ic,
-                            ptrdiff_t extra_offset = 0,
-                            bool vnni_bcast = false) {
+    auto src_addr
+            = [this, reorder_bytes](int i_iw, int i_ic,
+                      ptrdiff_t extra_offset = 0, bool vnni_bcast = false) {
         int local_offset = i_ic * reorder_bytes + 2 * jcp.typesize_in * i_iw;
         return EVEX_compress_addr(rsp, local_offset, vnni_bcast);
     };
@@ -2064,9 +2070,9 @@ void jit_avx512_core_bf16_conv_bwd_weights_kernel_f32_t::
         return EVEX_compress_addr(
                 reg_ddst, get_ddst_offset(ow_scale * i_ur) + ddst_offset);
     };
-    auto load_src_to_stack = [&](int i_iw, int i_ic, Opmask mask,
-                                     bool mask_empty, Opmask stride_mask,
-                                     bool stride_mask_empty) {
+    auto load_src_to_stack
+            = [&](int i_iw, int i_ic, Opmask mask, bool mask_empty,
+                      Opmask stride_mask, bool stride_mask_empty) {
         auto local_offset = get_src_offset(i_ic, i_iw);
         int stack_offset
                 = i_ic * reorder_bytes + 2 * jcp.typesize_in * (i_iw + pad_l);
@@ -2362,8 +2368,8 @@ void jit_avx512_core_bf16_conv_bwd_weights_kernel_f32_t::
     auto get_src_reg_idx = [&](int i_iw, int i_ic) {
         return kw * ic_block_step + (i_iw % src_pl_len) * ic_block_step + i_ic;
     };
-    auto get_diff_dst_reg_idx = [diff_dst_pl_start_reg_idx, diff_dst_pl_len](
-                                        int i_ur) {
+    auto get_diff_dst_reg_idx
+            = [diff_dst_pl_start_reg_idx, diff_dst_pl_len](int i_ur) {
         return diff_dst_pl_start_reg_idx + (i_ur / 2) % diff_dst_pl_len;
     };
 
@@ -3607,8 +3613,8 @@ void jit_avx512_core_bf16_conv_bwd_weights_kernel_f32_t ::
         compute_od_loop_common(bool is_partial) {
     assert(jcp.harness == harness_3d_reduction);
 
-    const int src_backpad_overlap
-            = div_up(jcp.id + jcp.f_pad - (jcp.kd - 1), jcp.stride_d);
+    const int src_backpad_overlap = div_up(
+            nstl::max(0, jcp.id + jcp.f_pad - (jcp.kd - 1)), jcp.stride_d);
 
     const auto filter_shift
             = get_kernel_offset(0, static_cast<dim_t>(jcp.kh) * jcp.kw);
@@ -4289,9 +4295,9 @@ status_t jit_avx512_core_bf16_conv_bwd_weights_kernel_f32_t::init_conf(
     auto dst_tag = is_data_layout_nxc ? dat_tag_nxc : dat_tag_nCx16c;
     auto wei_tag = jcp.is_1stconv
             ? pick(2 * ndims - 6 + with_groups, Owi16o, gOwi16o, Ohwi16o,
-                    gOhwi16o, Odhwi16o, gOdhwi16o)
+                      gOhwi16o, Odhwi16o, gOdhwi16o)
             : pick(2 * ndims - 6 + with_groups, OIw16i16o, gOIw16i16o,
-                    OIhw16i16o, gOIhw16i16o, OIdhw16i16o, gOIdhw16i16o);
+                      OIhw16i16o, gOIhw16i16o, OIdhw16i16o, gOIdhw16i16o);
 
     if (src_md.format_kind == format_kind::any) {
         CHECK(memory_desc_init_by_tag(src_md, src_tag));
@@ -4526,9 +4532,9 @@ status_t jit_avx512_core_bf16_conv_bwd_weights_kernel_f32_t::init_conf(
 
     jcp.harness = ndims == 5
             ? harness_3d_reduction
-            : (use_full_spat_loop          ? harness_compute_full_spatial
-                            : (ndims == 4) ? harness_2d_reduction
-                                           : harness_mb_reduction);
+            : (use_full_spat_loop            ? harness_compute_full_spatial
+                              : (ndims == 4) ? harness_2d_reduction
+                                             : harness_mb_reduction);
 
     switch (jcp.harness) {
         case harness_2d_reduction: jcp.nthr_mb_work = jcp.mb * jcp.oh; break;

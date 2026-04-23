@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -186,6 +186,9 @@ struct conv_bwd_weights_t : public primitive_t {
 
         memory_desc_wrapper diff_dst_mdw(pd()->diff_dst_md());
         kernel_ctx.set_data_type(pd()->diff_dst_md()->data_type);
+        kernel_ctx.require_stateless_addressing(pd()->has_large_buffers());
+        kernel_ctx.register_buffer_size(diff_dst_mdw);
+        kernel_ctx.register_buffer_size(*pd()->diff_weights_md(1));
         offsets_t off;
         set_offsets(diff_dst_mdw, off.dst_off);
         def_offsets(off.dst_off, kernel_ctx, "DST",
@@ -227,8 +230,10 @@ struct conv_bwd_weights_t : public primitive_t {
             nested_args[DNNL_ARG_SCRATCHPAD] = args.at(DNNL_ARG_SCRATCHPAD);
         exec_ctx_t nested_ctx(ctx, std::move(nested_args));
 
-        nested_scratchpad_t ns(ctx, key_nested, nested_p_);
-        nested_ctx.set_scratchpad_grantor(ns.grantor());
+        auto *nested_grantor
+                = create_nested_grantor(ctx.get_scratchpad_grantor(),
+                        key_nested, nested_p_->pd()->scratchpad_registry());
+        nested_ctx.set_scratchpad_grantor(nested_grantor);
 
         status_t status = nested_p_->execute(nested_ctx);
         if (status != status::success) return status;

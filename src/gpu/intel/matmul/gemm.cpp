@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -56,11 +56,20 @@ status_t gemm_t::execute(const exec_ctx_t &ctx) const {
     args.c_zero_point = c0;
     args.a_scales = &CTX_IN_STORAGE(DNNL_ARG_ATTR_SCALES | DNNL_ARG_WEIGHTS);
     args.b_scales = &CTX_IN_STORAGE(DNNL_ARG_ATTR_SCALES | DNNL_ARG_SRC);
-    args.c_scales = &CTX_IN_STORAGE(DNNL_ARG_ATTR_SCALES | DNNL_ARG_DST);
+    bool dyn_scales
+            = gemm_->pd()->attr()->scales_.get(DNNL_ARG_DST).is_dynamic();
+    args.c_scales = dyn_scales
+            ? &CTX_OUT_STORAGE(DNNL_ARG_ATTR_SCALES | DNNL_ARG_DST)
+            : &CTX_IN_STORAGE(DNNL_ARG_ATTR_SCALES | DNNL_ARG_DST);
+
     args.a_group_sums = &CTX_IN_STORAGE(
             DNNL_ARG_ATTR_PRECOMPUTED_REDUCTIONS | DNNL_ARG_WEIGHTS);
     args.b_group_sums = &CTX_IN_STORAGE(
             DNNL_ARG_ATTR_PRECOMPUTED_REDUCTIONS | DNNL_ARG_SRC);
+    args.dropout_offset = &CTX_IN_STORAGE(DNNL_ARG_ATTR_DROPOUT_OFFSET);
+    args.dropout_seed = &CTX_IN_STORAGE(DNNL_ARG_ATTR_DROPOUT_SEED);
+    args.dropout_prob = &CTX_IN_STORAGE(DNNL_ARG_ATTR_DROPOUT_PROBABILITY);
+    args.dropout_mask = &CTX_OUT_STORAGE(DNNL_ARG_ATTR_DROPOUT_MASK);
     args.sround_seed = &CTX_IN_STORAGE(DNNL_ARG_ATTR_ROUNDING_SEED);
     args.exec_args = ctx.args();
     gemm::desc_t desc;
@@ -69,8 +78,9 @@ status_t gemm_t::execute(const exec_ctx_t &ctx) const {
 
     gemm::exec_ctx_t gemm_ctx(ctx, args, &desc);
 
-    nested_scratchpad_t ns(ctx, key_nested, gemm_);
-    gemm_ctx.set_scratchpad_grantor(ns.grantor());
+    auto *nested_grantor = create_nested_grantor(ctx.get_scratchpad_grantor(),
+            key_nested, gemm_->pd()->scratchpad_registry());
+    gemm_ctx.set_scratchpad_grantor(nested_grantor);
 
     status_t gemm_exec_status = gemm::gemm(gemm_)->execute(gemm_ctx);
     if (gemm_exec_status != status::success) return gemm_exec_status;

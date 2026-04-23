@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -313,12 +313,7 @@ jit_avx_gemv_t_f32_kern_t::jit_avx_gemv_t_f32_kern_t()
     , AO_(r14)
     , XO_(r15)
     , YO_(rbx)
-    , YO2_(rbp)
-    , arg_lda_(0)
-    , arg_x_(0)
-    , arg_incx_(0)
-    , arg_y_(0)
-    , arg_incy_(0) {
+    , YO2_(rbp) {
 
     // Assign integer registers
     M_ = abi_param1;

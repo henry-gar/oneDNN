@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -323,7 +323,7 @@ void ref_primitive_t::check_correctness(
                     {DNNL_ARG_BIAS, BIA},
                     {DNNL_ARG_DIFF_BIAS, BIA},
                     {DNNL_ARG_DST, DST},
-                    {DNNL_ARG_DST_1, DST_1},
+                    {DNNL_ARG_DST_1, SDPA_STATS},
                     {DNNL_ARG_DIFF_SRC_0, DST},
                     {DNNL_ARG_SRC_1, SRC_1},
                     {DNNL_ARG_MEAN, MEAN},
@@ -355,8 +355,8 @@ void ref_primitive_t::check_correctness(
         const auto &mem_dt = args.find(arg);
         const auto &mem_fp = args_.find(arg);
 
-        if (dnnl_arg_2_data_kind_map.find(arg)
-                == dnnl_arg_2_data_kind_map.end()) {
+        auto it = dnnl_arg_2_data_kind_map.find(arg);
+        if (it == dnnl_arg_2_data_kind_map.end()) {
             BENCHDNN_PRINT(1, "Output arg %d is unsupported!\n", arg);
             res->state = UNIMPLEMENTED;
             return;
@@ -365,36 +365,12 @@ void ref_primitive_t::check_correctness(
         attr_t attr;
         SWITCH_DRIVER(CASE_CHECK_CORRECTNESS, CASE_CUSTOM_CHECK_CORRECTNESS);
 
+        cmp.set_data_kind(it->second);
         cmp.set_has_eltwise_post_op(has_eltwise);
         cmp.set_op_output_has_nans(has_nans);
-        dnn_mem_t mem_fp_abx(mem_fp, dnnl_f32, tag::abx, ::get_cpu_engine());
-        // Reset `res` counters when more than a single arg is checked.
-        res->errors = 0;
-        res->total = 0;
-        auto st = cmp.compare(mem_fp_abx, mem_dt, attr, res);
-        if (st == OK) continue;
-
-        // If comparison failed, try a norm comparison. However, at this point,
-        // to limit the risk of hiding issues, the norm comparison is enabled
-        // if number of affected points is really small compared to the total
-        // number of points - 1 point per every 1024.
-        // This can be revisited later.
-        const size_t allowed_error_points = res->total / 1024;
-        const bool norm_check_allowed = allowed_error_points >= res->errors;
-
-        BENCHDNN_PRINT(0,
-                "[COMPARE_STATS] Norm check is %s; error_to_total_ratio: "
-                "%zu/%zu; allowed_ratio: %zu/%zu;\n",
-                norm_check_allowed ? "allowed" : "prohibited", res->errors,
-                res->total, allowed_error_points, res->total);
-
-        if (!norm_check_allowed) continue;
-
-        // Reset the `res` statistics state.
-        res->state = EXECUTED;
-        res->errors = 0;
-        res->total = 0;
-
+        // `cmp` object has internal knowledge on when this check must be
+        // enabled.
+        cmp.set_allow_norm_check(true);
         // TODO: there's an open question with how to determine the threshold
         // and what the criteria to use. Unless a partition says it is some
         // complex fusion (such as SDP) with a specific data type, setting such
@@ -412,8 +388,11 @@ void ref_primitive_t::check_correctness(
         //
         // Note: the following threshold is obtained from actual runs on
         // different hardware.
-        cmp.set_threshold(2.5e-3f);
-        cmp.set_norm_validation_mode(true);
+        cmp.set_threshold_norm(2.5e-3f);
+        dnn_mem_t mem_fp_abx(mem_fp, dnnl_f32, tag::abx, ::get_cpu_engine());
+        // Clear previous output stats.
+        auto cur_res_state = res->state;
+        res->reset_stats(cur_res_state);
         cmp.compare(mem_fp_abx, mem_dt, attr, res);
     }
 }

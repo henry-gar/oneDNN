@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -34,12 +34,12 @@ class problem_t {
 public:
     problem_t() = default;
     problem_t(const std::string &line);
-    const hw_t &hw() const { return hw_; }
+    const dsl::hw_t &hw() const { return hw_; }
     prop_kind_t prop() const { return prop_; }
     const layout_tag_t &src_tag() const { return src_tag_; }
     const layout_tag_t &wei_tag() const { return wei_tag_; }
     const layout_tag_t &dst_tag() const { return dst_tag_; }
-    const type_t &bias_type() const { return bias_type_; }
+    const dsl::type_t &bias_type() const { return bias_type_; }
     const layout_tag_t &layout_tag(tensor_kind_t kind) const {
         switch (kind) {
             case tensor_kind_t::a:
@@ -64,8 +64,8 @@ public:
         dim_t oc = shape_.at(pvars::oc);
         return (g > 1) && (ic == 1) && (oc == 1);
     }
-    const type_t &out_type() const;
-    void set_hw(const hw_t &hw) { hw_ = hw; }
+    const dsl::type_t &out_type() const;
+    void set_hw(const dsl::hw_t &hw) { hw_ = hw; }
     void set_prop(prop_kind_t prop) {
         prop_ = prop;
         if (prop_ == prop_kind::forward_inference) prop_ = prop_kind::forward;
@@ -73,7 +73,7 @@ public:
     void set_src_tag(const layout_tag_t &tag) { src_tag_ = tag; }
     void set_wei_tag(const layout_tag_t &tag) { wei_tag_ = tag; }
     void set_dst_tag(const layout_tag_t &tag) { dst_tag_ = tag; }
-    void set_bias_type(const type_t &bias_type) { bias_type_ = bias_type; }
+    void set_bias_type(const dsl::type_t &bias_type) { bias_type_ = bias_type; }
     void set_shape(const tile_t &shape) { shape_ = shape; }
     void set_with_groups(bool value) { with_groups_ = value; }
     void set_with_scales(bool value) { with_scales_ = value; }
@@ -93,18 +93,18 @@ public:
     std::string str() const;
     std::string csv_str() const;
 
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
     static tile_t default_shape();
     static double ops(prop_kind_t prop, const tile_t &shape);
 
 private:
-    hw_t hw_;
+    dsl::hw_t hw_;
     prop_kind_t prop_ = prop_kind::undef;
     layout_tag_t src_tag_;
     layout_tag_t wei_tag_;
     layout_tag_t dst_tag_;
-    type_t bias_type_;
+    dsl::type_t bias_type_;
     tile_t shape_;
     std::array<int, 3> dhw_map_ = {0};
     bool with_groups_ = false;

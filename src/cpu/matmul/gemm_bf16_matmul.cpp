@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -51,6 +51,8 @@ status_t gemm_bf16_matmul_t<dst_type>::pd_t::init(engine_t *engine) {
                         && is_bias_1xN());
     };
 
+    VDISPATCH_MATMUL(DNNL_CPU_THREADING_RUNTIME != DNNL_RUNTIME_THREADPOOL,
+            VERBOSE_UNSUPPORTED_THREADPOOL_RUNTIME);
     VDISPATCH_MATMUL(is_dense_format_kind(), VERBOSE_UNSUPPORTED_SPARSE_CFG);
     VDISPATCH_MATMUL(!has_zero_dim_memory(), VERBOSE_EMPTY_TENSOR, "");
 
@@ -109,7 +111,7 @@ status_t gemm_bf16_matmul_t<dst_type>::pd_t::check_and_configure_attributes(
                 && !attr()->scales_.has_default_values(DNNL_ARG_WEIGHTS)
                 && attr()->scales_.get_mask(DNNL_ARG_WEIGHTS) > 0) {
             // This case requires scratchpad with unknown size
-            if (N() == DNNL_RUNTIME_DIM_VAL) ok = false;
+            if (is_runtime_value(N())) ok = false;
         }
         return ok;
     };
@@ -136,7 +138,7 @@ status_t gemm_bf16_matmul_t<dst_type>::pd_t::check_and_configure_attributes(
                 && IMPLICATION(is_binary_po_per_oc,
                         gemm_based::check_gemm_binary_per_oc_compatible_formats(
                                 *this))
-                && IMPLICATION(N() == DNNL_RUNTIME_DIM_VAL, !has_prelu);
+                && IMPLICATION(is_runtime_value(N()), !has_prelu);
     };
 
     // check basic attributes
@@ -219,7 +221,7 @@ status_t gemm_bf16_matmul_t<dst_type>::execute_ref(
     DEFINE_ARG_SCALES_BUFFER(wei_scales, DNNL_ARG_WEIGHTS);
     DEFINE_ARG_SCALES_BUFFER(dst_scales, DNNL_ARG_DST);
 
-    auto scratchpad = ctx.get_scratchpad_grantor();
+    const auto &scratchpad = ctx.get_scratchpad_grantor();
     const int wei_scale_mask = pd()->attr()->scales_.get_mask(DNNL_ARG_WEIGHTS);
     const float *scales = precompute_scales(scratchpad, src_scales, wei_scales,
             src_d.dims()[ndims - 1], dst_d.dims()[ndims - 1], false,
@@ -254,7 +256,7 @@ status_t gemm_bf16_matmul_t<dst_type>::execute_ref(
     acc_data_t *acc = dst_is_acc
             ? (acc_data_t *)dst
             : ctx.get_scratchpad_grantor().template get<acc_data_t>(
-                    memory_tracking::names::key_matmul_dst_in_acc_dt);
+                      memory_tracking::names::key_matmul_dst_in_acc_dt);
     // case: dynamic sizes
     bool need_free_acc = false;
     if (acc == nullptr) {
@@ -355,7 +357,7 @@ status_t gemm_bf16_matmul_t<dst_type>::execute_ref(
                     const size_t dst_logical_off = i_work;
                     const size_t dim1_off = helper.ndims() > 3
                             ? ((cur_b % batch_without_dim0)
-                                    / batch_without_dim01)
+                                      / batch_without_dim01)
                             : cur_m;
                     // offset for case with post-op broadcast_channel
                     const size_t matrix_per_first_batch_off = helper.ndims() > 3

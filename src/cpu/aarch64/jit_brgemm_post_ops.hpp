@@ -1,7 +1,7 @@
 /*******************************************************************************
-* Copyright 2020-2023 Intel Corporation
+* Copyright 2020 Intel Corporation
 * Copyright 2024-2025 FUJITSU LIMITED
-* Copyright 2024-2025 Arm Ltd. and affiliates
+* Copyright 2024-2026 Arm Ltd. and affiliates
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -21,13 +21,11 @@
 #include <memory>
 
 #include "common/c_types_map.hpp"
-#include "common/memory_tracking.hpp"
 #include "common/utils.hpp"
 
 #include "cpu/aarch64/injectors/jit_uni_postops_injector.hpp"
-#include "cpu/aarch64/jit_brgemm_primitive_conf.hpp"
 #include "cpu/aarch64/jit_generator.hpp"
-#include "cpu/cpu_engine.hpp"
+#include "cpu/aarch64/jit_primitive_conf.hpp"
 
 using namespace Xbyak_aarch64;
 
@@ -35,228 +33,6 @@ namespace dnnl {
 namespace impl {
 namespace cpu {
 namespace aarch64 {
-
-struct brgemm_kernel_diff_bias_t {
-    brgemm_kernel_diff_bias_t()
-        : ptr_diff_dst(nullptr)
-        , ptr_diff_bias_acc(nullptr)
-        , ptr_diff_bias(nullptr)
-        , flags(0) {};
-
-    void *ptr_diff_dst;
-    void *ptr_diff_bias_acc;
-    void *ptr_diff_bias;
-    int flags;
-};
-
-#define GET_OFF(field) (uint32_t) offsetof(brgemm_kernel_diff_bias_t, field)
-
-struct jit_brgemm_kernel_diff_bias_t : public jit_generator_t {
-    jit_brgemm_kernel_diff_bias_t(
-            const jit_brgemm_primitive_conf_t &ajbgp, const brgemm_t &abrg)
-        : brg_(abrg)
-        , ddst_dt_(ajbgp.dst_dt)
-        , bia_dt_(ajbgp.bia_dt)
-        , acc_dt_(ajbgp.acc_dt)
-        , ddst_typesize_(types::data_type_size(ddst_dt_))
-        , bia_typesize_(types::data_type_size(bia_dt_))
-        , acc_typesize_(types::data_type_size(acc_dt_))
-        , mult_(data_type_vnni_granularity(ddst_dt_)) {}
-
-    DECLARE_CPU_JIT_AUX_FUNCTIONS(jit_brgemm_kernel_diff_bias_t)
-
-private:
-    brgemm_t brg_;
-    data_type_t ddst_dt_;
-    data_type_t bia_dt_;
-    data_type_t acc_dt_;
-
-    int ddst_typesize_;
-    int bia_typesize_;
-    int acc_typesize_;
-    int mult_;
-
-    // Register decomposition
-    const XReg param1 = x7; //abi_param1
-    const XReg reg_ddst = x15;
-    const XReg reg_bias = x14;
-    const XReg reg_bias_acc = x13;
-    const XReg aux_reg_ddst = x12;
-    const XReg reg_k_iter = x11;
-    const XReg reg_flag = x10;
-
-    PReg k_full_mask = PReg(2);
-    PReg k_tail_mask = PReg(3);
-    ZReg vreg_unit = ZReg(31);
-    ZReg vreg_perm = ZReg(30);
-
-    const int n_max_regs_ = 4;
-
-    ZReg get_bias_reg(int n) const { return ZReg(n); }
-    ZReg get_bias_reg_lower(int n) const { return ZReg(n); }
-    ZReg get_ddst_reg(int n) const { return ZReg(n + n_max_regs_); }
-
-    void accumulate_bias(int idx, bool mask_flag) {
-        auto vddst = get_ddst_reg(idx);
-        const auto k_mask = mask_flag ? k_tail_mask : k_full_mask;
-        auto vbias = get_bias_reg(idx);
-        if (ddst_dt_ == data_type::f16) {
-            assert(!"unsupported\n");
-        } else {
-            auto addr = ptr(
-                    aux_reg_ddst, ddst_typesize_ * mult_ * idx * brg_.ld_block);
-            ld1w(vddst.s, k_mask / T_z, addr);
-            if (ddst_dt_ == data_type::bf16)
-                assert(!"unsupported\n");
-            else
-                fadd(vbias.s, vbias.s, vddst.s);
-        }
-    }
-
-    void store(int idx, bool mask_flag) {
-        auto addr = ptr(reg_bias, bia_typesize_ * idx * brg_.ld_block);
-        const auto k_mask = mask_flag ? k_tail_mask : k_full_mask;
-        switch (bia_dt_) {
-            case data_type::bf16: assert(!"unsupported\n"); break;
-            case data_type::f16: assert(!"unsupported\n"); break;
-            case data_type::f32: st1w(get_bias_reg(idx).s, k_mask, addr); break;
-            default: assert(!"Unsupported bias data type");
-        }
-    }
-
-    void loop_by_N(int n_loop, int nb_tail) {
-
-        mov(aux_reg_ddst, reg_ddst);
-
-        int n_iters = n_loop;
-        if (nb_tail > 0) n_iters--;
-        Label k_loop, init_zero, init_done;
-        int n_ = 0;
-
-        tst(reg_flag, FLAG_REDUCE_FIRST);
-        b(NE, init_zero); // FLAG_REDUCE_FIRST is set
-
-        for (; n_ < n_iters; n_++) {
-            ldr(get_bias_reg(n_),
-                    ptr(reg_bias_acc, acc_typesize_ * n_ * brg_.ld_block));
-        }
-        if (nb_tail > 0) {
-            ld1w(get_bias_reg(n_).s, k_tail_mask / T_z,
-                    ptr(reg_bias_acc, acc_typesize_ * n_ * brg_.ld_block));
-        }
-        b(init_done);
-        L(init_zero);
-
-        for (int n_ = 0; n_ < n_loop; n_++) {
-            eor(get_bias_reg(n_).d, get_bias_reg(n_).d, get_bias_reg(n_).d);
-        }
-        L(init_done);
-
-        mov(reg_k_iter, utils::div_up(brg_.reduce_dim, mult_));
-        L(k_loop);
-        {
-            int n_ = 0;
-            for (; n_ < n_iters; n_++)
-                accumulate_bias(n_, false);
-
-            if (nb_tail > 0) accumulate_bias(n_, true);
-
-            add_imm(aux_reg_ddst, aux_reg_ddst,
-                    ddst_typesize_ * mult_ * brg_.LDB, X_TMP_0);
-
-            sub(reg_k_iter, reg_k_iter, 1);
-            b(NE, k_loop);
-        }
-
-        Label store_final, store_done;
-        tst(reg_flag, FLAG_REDUCE_LAST);
-        b(NE, store_final); // FLAG_REDUCE_LAST is set
-
-        n_ = 0;
-        for (; n_ < n_iters; n_++) {
-            str(get_bias_reg(n_),
-                    ptr(reg_bias_acc, acc_typesize_ * n_ * brg_.ld_block));
-        }
-        if (nb_tail > 0) {
-            st1w(get_bias_reg(n_).s, k_tail_mask,
-                    ptr(reg_bias_acc, acc_typesize_ * n_ * brg_.ld_block));
-        }
-        b(store_done);
-
-        L(store_final);
-        n_ = 0;
-
-        for (; n_ < n_iters; n_++)
-            store(n_, false);
-
-        if (nb_tail > 0) store(n_, true);
-
-        L(store_done);
-    }
-
-    void generate() override {
-
-        if (!utils::one_of(brg_.isa_impl, sve_512, sve_256, sve_128)) {
-            assert(!"unsupported isa: jit_brgemm_kernel_t only supports SVE "
-                    "512, 256 and 128, this should have been checked earlier "
-                    "in the implementation");
-        }
-
-        size_t simd_w_ = simd_elems(data_type::f32, brg_.isa_impl);
-
-        preamble();
-        if (simd_w_ != cpu_sveLen / sizeof(float)) {
-            set_preg(P_ALL_ONE.b, simd_w_ * 4, X_TMP_0, X_TMP_1);
-            set_preg(k_full_mask.b, simd_w_ * 4, X_TMP_0, X_TMP_1);
-        } else
-            ptrue(k_full_mask.b);
-
-        int nb = utils::div_up(brg_.load_dim, brg_.ld_block);
-        int nb_tail = brg_.load_dim % brg_.ld_block;
-
-        int n_loop = nb / n_max_regs_;
-        int n_loop_tail = nb % n_max_regs_;
-        if (n_loop_tail == 0 && nb_tail > 0) {
-            n_loop--;
-            n_loop_tail = n_max_regs_;
-        }
-
-        set_preg(k_tail_mask.s, nb_tail, X_TMP_0, X_TMP_1);
-        pfalse(P_TMP_0.b);
-        zip1(k_tail_mask.b, k_tail_mask.b, P_TMP_0.b);
-        zip1(k_tail_mask.h, k_tail_mask.h, P_TMP_0.h);
-
-        if (ddst_dt_ == data_type::bf16) { assert(!"unsupported data type\n"); }
-
-        if (ddst_dt_ == data_type::f16) { assert(!"unsupported data type\n"); }
-
-        add_imm(X_DEFAULT_ADDR, param1, GET_OFF(ptr_diff_dst), X_TMP_0);
-        ldr(reg_ddst, ptr(X_DEFAULT_ADDR));
-        add_imm(X_DEFAULT_ADDR, param1, GET_OFF(ptr_diff_bias_acc), X_TMP_0);
-        ldr(reg_bias_acc, ptr(X_DEFAULT_ADDR));
-        add_imm(X_DEFAULT_ADDR, param1, GET_OFF(ptr_diff_bias), X_TMP_0);
-        ldr(reg_bias, ptr(X_DEFAULT_ADDR));
-        add_imm(X_DEFAULT_ADDR, param1, GET_OFF(flags), X_TMP_0);
-        ldr(reg_flag, ptr(X_DEFAULT_ADDR));
-
-        for (int nb_ = 0; nb_ < n_loop; nb_++) {
-            loop_by_N(n_max_regs_, 0);
-
-            add_imm(reg_ddst, reg_ddst,
-                    ddst_typesize_ * mult_ * n_max_regs_ * brg_.ld_block,
-                    X_TMP_0);
-            add_imm(reg_bias, reg_bias,
-                    bia_typesize_ * n_max_regs_ * brg_.ld_block, X_TMP_0);
-            add_imm(reg_bias_acc, reg_bias_acc,
-                    acc_typesize_ * n_max_regs_ * brg_.ld_block, X_TMP_0);
-        }
-
-        if (n_loop_tail > 0) loop_by_N(n_loop_tail, nb_tail);
-        postamble();
-    }
-};
-
-#undef GET_OFF
 
 #define GET_OFF(field) offsetof(brgemm_kernel_post_ops_t, field)
 
@@ -279,7 +55,7 @@ template <cpu_isa_t isa>
 struct jit_brgemm_kernel_post_ops_t : public jit_generator_t {
 
     jit_brgemm_kernel_post_ops_t(const jit_brgemm_conv_conf_t &ajcp,
-            const brgemm_t &abrg, const primitive_attr_t &aattr)
+            const brgemm_desc_t &abrg, const primitive_attr_t &aattr)
         : brg(abrg)
         , jcp(ajcp)
         , attr(aattr)
@@ -312,7 +88,7 @@ struct jit_brgemm_kernel_post_ops_t : public jit_generator_t {
                     save_state, reserved_eltwise_gpr, reserved_eltwise_maskr};
 
             postops_injector_ = utils::make_unique<
-                    injector::jit_uni_postops_injector_t<isa>>(
+                    injector::jit_uni_postops_injector_t<to_vla_sve(isa)>>(
                     this, attr.post_ops_, bsp, esp);
         }
 
@@ -335,7 +111,7 @@ struct jit_brgemm_kernel_post_ops_t : public jit_generator_t {
 
     DECLARE_CPU_JIT_AUX_FUNCTIONS(jit_brgemm_kernel_post_ops)
 
-    brgemm_t brg;
+    brgemm_desc_t brg;
     jit_brgemm_conv_conf_t jcp;
     const primitive_attr_t &attr;
 
@@ -345,7 +121,7 @@ private:
     data_type_t inp_dt_;
     data_type_t out_dt_;
     data_type_t bia_dt_;
-    std::unique_ptr<injector::jit_uni_postops_injector_t<isa>>
+    std::unique_ptr<injector::jit_uni_postops_injector_t<to_vla_sve(isa)>>
             postops_injector_;
 
     const bool with_binary_non_scalar_bcast_;
@@ -365,6 +141,7 @@ private:
     const XReg reg_out = x14;
     const XReg aux_reg_in = x13;
     const XReg aux_reg_out = x12;
+    const XReg reg_mb_loop = x16;
 
     const XReg reg_bias = x11;
     const XReg aux_reg_bias = x10;
@@ -491,7 +268,7 @@ private:
         }
     }
 
-    ZReg vector(int m, int n, int n_block) { return ZReg(m * n_block + n); };
+    ZReg vector(int m, int n, int n_block) { return ZReg(m * n_block + n); }
 
     void inject_attr_postops(int m_block, int n_block, int tail = 0) {
         const auto &p = attr.post_ops_;
@@ -603,7 +380,7 @@ private:
         cmp(reg_apply_comp, 0);
         b(EQ, label_apply_without_comp);
         apply_comp(m_block, n_block, tail);
-        L_aligned(label_apply_without_comp);
+        L(label_apply_without_comp);
 
         for_(int m = 0; m < m_block; m++)
         for (int n = 0; n < n_block; n++) {
@@ -995,15 +772,19 @@ private:
             }
         }
 
-        for (int mb_ = 0; mb_ < mb; mb_++) {
+        // Unrolling over mb can result in very large post-op assembly being
+        // generated (see Issue #4089), so branch and loop instead.
+        asm_for(reg_mb_loop, mb, [&]() {
             loop_by_N(m_block, nb2, nb2_tail, nb_tail);
 
             if (brg.alpha != 0)
                 add_imm(reg_in, reg_in, inp_typesize_ * (m_block * brg.LDC),
                         X_TMP_0);
+
             add_imm(reg_out, reg_out, out_typesize_ * (m_block * LDD_),
                     X_TMP_0);
-        }
+        });
+
         if (mb_tail > 0) loop_by_N(mb_tail, nb2, nb2_tail, nb_tail);
 
         add_imm(X_SP, X_SP, stack_space_needed_, X_TMP_0);

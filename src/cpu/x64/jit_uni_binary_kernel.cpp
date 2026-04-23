@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -29,6 +29,7 @@ namespace x64 {
 static bcast_set_t get_supported_postops_bcast_strategies() {
     return {broadcasting_strategy_t::scalar, broadcasting_strategy_t::per_oc,
             broadcasting_strategy_t::per_oc_spatial,
+            broadcasting_strategy_t::per_w,
             broadcasting_strategy_t::no_broadcast};
 }
 
@@ -40,7 +41,7 @@ static bool is_ne_xf16_supported(cpu_isa_t isa, const data_type_t dtype) {
 }
 
 binary_kernel_t::binary_kernel_t(const size_t vlen, const binary_pd_t *pd,
-        const jit_binary_conf_t conf, const char *name, bool tail_kernel)
+        const jit_binary_conf_t &conf, const char *name, bool tail_kernel)
     : jit_generator_t(name, conf.isa)
     , vlen_(vlen)
     , simd_w_(vlen / sizeof(float))
@@ -68,10 +69,12 @@ size_t binary_kernel_t::get_tail_size() const {
             && (is_tail_kernel_ || conf_.bcast_type == bcast_t::per_w))
         nelems = dims[1];
     else if (conf_.bcast_type == bcast_t::none
-            && !conf_.postops_per_oc_broadcast_exists)
+            && !conf_.postops_per_oc_broadcast_exists
+            && !conf_.postops_per_w_broadcast_exists)
         nelems = src0_d.nelems(true);
     else if (conf_.bcast_type == bcast_t::per_batch
-            && !conf_.postops_per_oc_broadcast_exists)
+            && !conf_.postops_per_oc_broadcast_exists
+            && !conf_.postops_per_w_broadcast_exists)
         nelems = src0_d.nelems(true) / dims[0];
     else {
         if (conf_.op_type == op_t::n_spatial_c)
@@ -79,8 +82,8 @@ size_t binary_kernel_t::get_tail_size() const {
         else if (conf_.op_type == op_t::n_c_spatial && ndims >= 3)
             nelems = conf_.bcast_type == bcast_t::per_w
                     ? utils::array_product(
-                            dims + (ndims - conf_.not_bcasted_sp_dims),
-                            conf_.not_bcasted_sp_dims)
+                              dims + (ndims - conf_.not_bcasted_sp_dims),
+                              conf_.not_bcasted_sp_dims)
                     : utils::array_product(dims + 2, ndims - 2);
     }
     // it's float due to for bfloat16 we still load 16 elements, not 32.
@@ -89,9 +92,9 @@ size_t binary_kernel_t::get_tail_size() const {
 
 template <cpu_isa_t isa, typename Vmm>
 jit_uni_binary_kernel_t<isa, Vmm>::jit_uni_binary_kernel_t(
-        const binary_pd_t *pd, const jit_binary_conf_t conf, bool tail_kernel)
+        const binary_pd_t *pd, const jit_binary_conf_t &conf, bool tail_kernel)
     : binary_kernel_t(
-            vreg_traits_t<Vmm>::vlen, pd, conf, jit_name(), tail_kernel)
+              vreg_traits_t<Vmm>::vlen, pd, conf, jit_name(), tail_kernel)
     , offt_src0_(vlen_ / ((conf_.is_bf16 || conf_.is_f16) ? 2 : 1))
     , offt_src1_(conf_.use_stride_src1 ? offt_src0_ : 0)
     , offt_src2_(offt_src0_) {
@@ -222,11 +225,18 @@ void jit_uni_binary_kernel_t<isa, Vmm>::apply_postops(int unroll, bool tail) {
         if (!conf_.is_i8) shl(reg_tmp_, is_xf16(conf_.dst_type) ? 1 : 2);
         add(reg_tmp1_, reg_tmp_);
 
+        const auto postops_per_w_broadcast_exists
+                = conf_.postops_per_w_broadcast_exists;
         for (int vmm_idx = 1; vmm_idx < unroll + vmm_start_idx_; vmm_idx++) {
+            const auto vmm_l_off = (vmm_idx - vmm_start_idx_) * simd_w_;
+            const auto dst_dt_size = types::data_type_size(conf_.dst_type);
             rhs_arg_params.vmm_idx_to_out_reg.emplace(vmm_idx, reg_tmp1_);
-            rhs_arg_params.vmm_idx_to_out_elem_off_val.emplace(vmm_idx,
-                    (vmm_idx - vmm_start_idx_) * simd_w_
-                            * types::data_type_size(conf_.dst_type));
+            if (postops_per_w_broadcast_exists)
+                rhs_arg_params.vmm_idx_to_out_addr.emplace(
+                        vmm_idx, dst_ptr(vmm_l_off * dst_dt_size));
+            else
+                rhs_arg_params.vmm_idx_to_out_elem_off_val.emplace(
+                        vmm_idx, vmm_l_off * dst_dt_size);
             if (tail) rhs_arg_params.vmm_tail_idx_.emplace(vmm_idx);
         }
         postops_injector_->compute_vector_range(

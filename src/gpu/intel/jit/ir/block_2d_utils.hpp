@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -41,6 +41,7 @@ inline int block_2d_base_alignment(ngen::HW hw) {
         case ngen::HW::XeHPC: return 64;
         case ngen::HW::Xe2:
         case ngen::HW::Xe3: return 64;
+        case ngen::HW::Xe3p: return 4;
         default: gpu_error_not_expected();
     }
     return 0;
@@ -54,15 +55,15 @@ inline int block_2d_w_alignment(int type_size) {
     return std::max(4, type_size);
 }
 
-inline bool block_2d_width_ok(dim_t width, int type_size) {
-    dim_t width_bytes = width * type_size;
+inline bool block_2d_width_ok(int64_t width, int type_size) {
+    int64_t width_bytes = width * type_size;
     if (width_bytes < block_2d_min_dim()) return false;
     if (width_bytes > block_2d_max_dim()) return false;
     if (width_bytes % block_2d_w_alignment(type_size) != 0) return false;
     return true;
 }
 
-inline bool block_2d_height_ok(dim_t height) {
+inline bool block_2d_height_ok(int64_t height) {
     if (height > block_2d_max_dim()) return false;
     return true;
 }
@@ -72,14 +73,15 @@ inline int block_2d_pitch_alignment(ngen::HW hw) {
         case ngen::HW::XeHPC: return 8;
         case ngen::HW::Xe2: return 16;
         case ngen::HW::Xe3: return 16;
+        case ngen::HW::Xe3p: return 4;
         default: gpu_error_not_expected();
     }
     return 0;
 }
 
 inline bool block_2d_pitch_ok(
-        ngen::HW hw, dim_t pitch, int type_size, bool use_xy = true) {
-    dim_t pitch_bytes = pitch * type_size;
+        ngen::HW hw, int64_t pitch, int type_size, bool use_xy = true) {
+    int64_t pitch_bytes = pitch * type_size;
     if (pitch_bytes < block_2d_min_dim()) return false;
     // 2^24 Pitch does not work on Xe2/Xe3
     if (pitch_bytes > block_2d_max_dim() - 1) return false;
@@ -89,9 +91,12 @@ inline bool block_2d_pitch_ok(
     return true;
 }
 
-inline int block_2d_max_count(
-        bool is_store, bool is_transpose, int block_width, int type_size) {
+inline int block_2d_max_count(ngen::HW hw, bool is_prefetch, bool is_store,
+        bool is_transpose, int block_width, int type_size) {
     if (is_store || is_transpose) return 1;
+    if (hw == ngen::HW::Xe3p && is_prefetch) {
+        return 256 / (block_width * type_size);
+    }
     return 64 / (block_width * type_size);
 }
 

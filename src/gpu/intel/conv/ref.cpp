@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -33,6 +33,7 @@ static status_t init_conf_common(
     const primitive_attr_t &attr = *pd->attr();
 
     set_default_conf(conf, cd, src_md, weights_md, dst_md, bias_md, attr);
+    conf.require_stateless_addressing = pd->has_large_buffers();
 
     int oc_idx = (int)conf.with_groups;
     auto *intel_engine = utils::downcast<intel::engine_t *>(engine);
@@ -90,6 +91,7 @@ static status_t init_conf_common(
 static status_t init_kernel_ctx_common(compute::kernel_ctx_t &kernel_ctx,
         const conf_t &conf, const post_ops_t &post_ops,
         const memory_desc_t *dst_md) {
+    kernel_ctx.require_stateless_addressing(conf.require_stateless_addressing);
     kernel_ctx.define_int("NDIMS", conf.ndims);
     kernel_ctx.define_int("G", conf.ngroups);
     kernel_ctx.define_int("WITH_GROUPS", conf.with_groups);

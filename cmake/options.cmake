@@ -1,5 +1,5 @@
 #===============================================================================
-# Copyright 2018-2025 Intel Corporation
+# Copyright 2018 Intel Corporation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -56,7 +56,7 @@ option(ONEDNN_BUILD_GRAPH "builds graph component" ON)
 
 option(ONEDNN_ENABLE_GRAPH_DUMP "enables control of dumping graph artifacts via
     ONEDNN_GRAPH_DUMP environment variable. The option and feature are valid only
-    when ONEDNN_BUILD_GRAPH is ON" OFF)
+    when ONEDNN_BUILD_GRAPH is ON" ON) # enabled by default
 
 # =============================
 # Building properties and scope
@@ -127,7 +127,7 @@ set(DNNL_ENABLE_PRIMITIVE "ALL" CACHE STRING
     - ALL (the default). Includes all primitives to be enabled.
     - <PRIMITIVE_NAME>. Includes only the selected primitive to be enabled.
       Possible values are: BATCH_NORMALIZATION, BINARY, CONCAT, CONVOLUTION,
-      DECONVOLUTION, ELTWISE, GROUP_NORMALIZATION, INNER_PRODUCT,
+      DECONVOLUTION, ELTWISE, GATED_MLP, GROUP_NORMALIZATION, INNER_PRODUCT,
       LAYER_NORMALIZATION, LRN, MATMUL, POOLING, PRELU, REDUCTION, REORDER,
       RESAMPLING, RNN, SDPA, SHUFFLE, SOFTMAX, SUM.
     - <PRIMITIVE_NAME>;<PRIMITIVE_NAME>;... Includes only selected primitives to
@@ -151,7 +151,7 @@ set(DNNL_ENABLE_PRIMITIVE_GPU_ISA "ALL" CACHE STRING
     implementations will always be available. Valid values:
     - ALL (the default). Includes all ISA to be enabled.
     - <ISA_NAME>;<ISA_NAME>;... Includes only selected ISA to be enabled.
-      Possible values are: XELP, XEHP, XEHPG, XEHPC, XE2, XE3.")
+      Possible values are: XELP, XEHP, XEHPG, XEHPC, XE2, XE3, XE3P.")
 
 set(ONEDNN_ENABLE_GEMM_KERNELS_ISA "ALL" CACHE STRING
     "Specifies an ISA set of GeMM kernels residing in x64/gemm folder to be
@@ -213,6 +213,11 @@ option(DNNL_EXPERIMENTAL_UKERNEL
     independently from DNNL_EXPERIMENTAL."
     OFF) # disabled by default
 
+option(DNNL_EXPERIMENTAL_GROUPED_MEMORY
+    "Enable experimental support for grouped memory format and grouped GEMM.
+    This option works independently from DNNL_EXPERIMENTAL."
+    OFF) # disabled by default
+
 option(DNNL_EXPERIMENTAL_PROFILING
     "Enable experimental profiling capabilities. This option works independently
     from DNNL_EXPERIMENTAL."
@@ -226,6 +231,10 @@ option(DNNL_EXPERIMENTAL_LOGGING
 option(DNNL_EXPERIMENTAL_SYCL_KERNEL_COMPILER
     "Enable experimental SYCL OpenCL kernel compiler extension. This option
     works independently from DNNL_EXPERIMENTAL."
+    OFF) # disabled by default
+
+option(DNNL_SAFE_RBP
+    "Make RBP register untouchable in JIT kernels to allow stack unwind"
     OFF) # disabled by default
 
 # ======================
@@ -266,8 +275,8 @@ endif()
 set(_DNNL_TEST_THREADPOOL_IMPL "STANDALONE" CACHE STRING
     "specifies which threadpool implementation to use when
     DNNL_CPU_RUNTIME=THREADPOOL is selected. Valid values: STANDALONE, EIGEN,
-    TBB")
-if(NOT "${_DNNL_TEST_THREADPOOL_IMPL}" MATCHES "^(STANDALONE|TBB|EIGEN)$")
+    EIGEN_ASYNC, TBB")
+if(NOT "${_DNNL_TEST_THREADPOOL_IMPL}" MATCHES "^(STANDALONE|TBB|EIGEN|EIGEN_ASYNC)$")
     message(FATAL_ERROR
         "Unsupported threadpool implementation: ${_DNNL_TEST_THREADPOOL_IMPL}")
 endif()
@@ -283,7 +292,7 @@ set(DNNL_GPU_RUNTIME "NONE" CACHE STRING
 
     Using OpenCL for GPU requires setting OPENCLROOT if the libraries are
     installed in a non-standard location.")
-if(NOT "${DNNL_GPU_RUNTIME}" MATCHES "^(OCL|NONE|DPCPP|SYCL)$")
+if(NOT "${DNNL_GPU_RUNTIME}" MATCHES "^(OCL|NONE|DPCPP|SYCL|ZE)$")
     message(FATAL_ERROR "Unsupported GPU runtime: ${DNNL_GPU_RUNTIME}")
 endif()
 
@@ -300,7 +309,7 @@ if(NOT "${DNNL_GPU_VENDOR}" MATCHES "^(NONE|INTEL|NVIDIA|AMD|GENERIC)$")
 endif()
 
 set(OPENCLROOT "" CACHE STRING
-    "path to Intel SDK for OpenCL applications.
+    "Path to OpenCL SDK.
     Use this option to specify custom location for OpenCL.")
 
 # TODO: move logic to other cmake files?

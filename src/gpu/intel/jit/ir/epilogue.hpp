@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@
 #define GPU_INTEL_JIT_IR_EPILOGUE_HPP
 
 #include "gpu/intel/jit/ir/gemm_schedule.hpp"
-#include "gpu/intel/jit/ir/ir.hpp"
+#include "gpu/intel/jit/ir/legacy.hpp"
 #include "gpu/intel/jit/ir/post_ops.hpp"
 #include "gpu/intel/jit/ir/slm_reduce_builder.hpp"
 
@@ -28,7 +28,7 @@ namespace gpu {
 namespace intel {
 namespace jit {
 
-stmt_t create_epilogue_stmt(const kernel::options_t &options,
+stmt_t create_epilogue_stmt(const dsl::kernel::options_t &options,
         ir_context_t &ir_ctx, const gemm_schedule_t &gemm_schedule,
         bool force_c_reorder, const post_op_context_t &post_op_ctx,
         const tile_coord_t &thr_tile_coord, const layout_t &c_reg_layout,

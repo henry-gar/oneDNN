@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2017-2025 Intel Corporation
+* Copyright 2017 Intel Corporation
 * Copyright 2020-2021 FUJITSU LIMITED
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
@@ -512,8 +512,8 @@ HANDLE_EXCEPTIONS_FOR_TEST_F(attr_test_t, TestSumPostOpQuantization) {
     if (!unsupported_data_type(data_type::bf16))
         test_dts.push_back(data_type::bf16);
 
-    auto create_pd = [&e](primitive::kind pk, data_type dt,
-                             primitive_attr &attr) {
+    auto create_pd
+            = [&e](primitive::kind pk, data_type dt, primitive_attr &attr) {
         switch (pk) {
             case primitive::kind::convolution: {
                 memory::desc dat_md {
@@ -694,6 +694,8 @@ HANDLE_EXCEPTIONS_FOR_TEST_F(attr_test_t, DepthwiseFusion) {
             "Depthwise fusion is only supported on CPU engine");
 #if DNNL_AARCH64
     SKIP_IF(true, "Depthwise fusion is not supported on AArch64 at this time");
+#elif DNNL_RV64
+    SKIP_IF(true, "Depthwise fusion is not supported on RV64 at this time");
 #endif
 
     engine e {engine_kind, 0};

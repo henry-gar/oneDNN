@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright 2022-2025 Intel Corporation
+ * Copyright 2022 Intel Corporation
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -37,7 +37,6 @@
 
 #include "graph/backend/dnnl/common.hpp"
 #include "graph/backend/dnnl/fusion_info.hpp"
-#include "graph/backend/dnnl/internal_ops.hpp"
 #include "graph/backend/dnnl/utils.hpp"
 
 #include "dnnl.hpp"
@@ -71,7 +70,6 @@ public:
 
     subgraph_t(const std::vector<op_ptr> &ops, bool reset_layout = true);
 
-    status_t reset_engine(const dnnl::engine &eng);
     // The inputs and outputs logical tensors given by users at compilation
     // stage
     std::vector<logical_tensor_t> ins_;
@@ -102,7 +100,7 @@ public:
             = {})
         : enabled_(false)
         , mem_info_func_(mem_info_func)
-#ifdef DNNL_ENABLE_GRAPH_DUMP
+#ifndef DNNL_DISABLE_GRAPH_DUMP
         , partition_id_(partition_id)
         , index_(0)
 #endif
@@ -121,7 +119,7 @@ public:
 private:
     bool enabled_ = false;
     std::function<std::string(const value_t *)> mem_info_func_;
-#ifdef DNNL_ENABLE_GRAPH_DUMP
+#ifndef DNNL_DISABLE_GRAPH_DUMP
     size_t partition_id_;
     size_t index_;
 #endif

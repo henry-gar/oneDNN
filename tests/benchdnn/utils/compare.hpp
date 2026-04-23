@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -31,7 +31,8 @@ struct compare_t {
         driver_check_func_args_t() = default;
         driver_check_func_args_t(const dnn_mem_t &exp_mem,
                 const dnn_mem_t &got_f32, const int64_t i,
-                const dnnl_data_type_t data_type, const float trh);
+                const dnnl_data_type_t data_type, const float trh,
+                data_kind_t dk);
 
         dnnl_data_type_t dt = dnnl_data_type_undef;
         int64_t idx = 0;
@@ -41,12 +42,39 @@ struct compare_t {
         float diff = 0.f;
         float rel_diff = 0.f;
         float trh = 0.f;
+        data_kind_t dk = DAT_TOTAL;
+    };
+
+    struct dump_point_ctx_t {
+        dump_point_ctx_t(const_dnnl_memory_desc_t md, int64_t l_offset,
+                float exp_f32, float exp, float got, float diff, float rel_diff)
+            : md(md)
+            , l_offset(l_offset)
+            , exp_f32(exp_f32)
+            , exp(exp)
+            , got(got)
+            , diff(diff)
+            , rel_diff(rel_diff) {}
+
+        const_dnnl_memory_desc_t md;
+        int64_t l_offset;
+        float exp_f32;
+        float exp;
+        float got;
+        float diff;
+        float rel_diff;
     };
 
     compare_t() = default;
 
-    void set_norm_validation_mode(bool un) { use_norm_ = un; }
-    void set_threshold(float trh) { trh_ = trh; }
+    void set_allow_norm_check(bool anc) { allow_norm_check_ = anc; }
+    // Sets both thresholds - for p2p and norm. If needed an updated norm
+    // threshold, use `set_threshold_norm`.
+    void set_threshold(float trh) {
+        trh_ = trh;
+        trh_norm_ = trh;
+    }
+    void set_threshold_norm(float trhn) { trh_norm_ = trhn; }
     void set_zero_trust_percent(float ztp) { zero_trust_percent_ = ztp; }
     void set_data_kind(data_kind_t dk) { kind_ = dk; }
     void set_op_output_has_nans(bool ohn) { op_output_has_nans_ = ohn; }
@@ -69,10 +97,12 @@ struct compare_t {
             const attr_t &attr, res_t *res) const;
 
 private:
-    // Switch between point-to-point and norm comparison.
-    bool use_norm_ = false;
+    // If point-to-point comparison fails, allows fallback to norm check.
+    bool allow_norm_check_ = false;
     // Threshold for a point-to-point comparison.
     float trh_ = 0.f;
+    // Threshold for norm comparison.
+    float trh_norm_ = 0.f;
     // The percent value of zeros allowed in the output.
     float default_zero_trust_percent_ = 30.f;
     float zero_trust_percent_ = default_zero_trust_percent_;
@@ -94,11 +124,17 @@ private:
     // layout for proper comparison.
     bool has_prim_ref_ = false;
 
+    // Internal members.
+    //
+    // `mutable` to preserve `const`antness of compare methods.
+    mutable std::vector<dump_point_ctx_t> p2p_dumps_;
+
     // Internal validation methods under `compare` interface.
     int compare_p2p(const dnn_mem_t &exp_mem, const dnn_mem_t &got_mem,
             const attr_t &attr, res_t *res) const;
     int compare_norm(const dnn_mem_t &exp_mem, const dnn_mem_t &got_mem,
             const attr_t &attr, res_t *res) const;
+    void dump_p2p_errors() const;
 
     std::string get_kind_str() const {
         std::string kind_str;

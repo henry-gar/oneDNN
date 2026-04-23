@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -235,13 +235,13 @@ private:
     // FWD:        src -> A,      wei -> B,      dst -> C
     // BWD_D: diff_dst -> A,      wei -> B, diff_src -> C
     // BWD_W:      src -> A, diff_dst -> B, diff_wei -> C
-    status_t init_abc_data_types(const hw_t &hw);
+    status_t init_abc_data_types(const dsl::hw_t &hw);
 
     status_t init_acc_data_type();
 
     bool with_sum_post_op() const;
 
-    void init_transpose(const hw_t &hw);
+    void init_transpose(const dsl::hw_t &hw);
 };
 
 void normalize_shape(dim_t &id, dim_t &od, dim_t &kd, dim_t &sd, dim_t &dd,

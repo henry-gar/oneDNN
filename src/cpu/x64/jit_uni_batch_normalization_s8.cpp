@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -758,7 +758,8 @@ status_t jit_uni_batch_normalization_s8_fwd_t<isa>::execute(
             = pd()->MB() * pd()->C() * pd()->D() * pd()->H() * pd()->W()
             <= 4096;
 
-    parallel(force_sequential ? 1 : 0, [&](const int ithr, const int nthr) {
+    parallel(force_sequential ? 1 : 0,
+            [= COMPAT_THIS_CAPTURE](const int ithr, const int nthr) {
         bnorm_driver_->exec(ithr, nthr, src, dst, scale, shift, mean, var);
     });
 

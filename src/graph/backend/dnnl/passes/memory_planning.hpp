@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright 2021-2025 Intel Corporation
+ * Copyright 2021 Intel Corporation
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -263,7 +263,7 @@ private:
     }
 
     struct buffer_info_t {
-        buffer_info_t(size_t id, size_t size) : id_(id), max_bytes_(size) {};
+        buffer_info_t(size_t id, size_t size) : id_(id), max_bytes_(size) {}
         // the id of the buffer.
         size_t id_;
         // maximum size of buffer requested.
@@ -334,7 +334,7 @@ public:
 
     const std::vector<inplace_pair_t> &get_subgraph_inplace_pairs() const {
         return inplace_pairs_;
-    };
+    }
 
     std::string get_memory_info(const value_t *val) const {
         std::string str;

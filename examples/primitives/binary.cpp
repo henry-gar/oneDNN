@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -17,9 +17,12 @@
 /// @example binary.cpp
 /// > Annotated version: @ref binary_example_cpp
 
-/// @page binary_example_cpp Binary Primitive Example
-/// This C++ API example demonstrates how to create and execute a
+/// @page binary_example_cpp_brief
+/// @brief This C++ API example demonstrates how to create and execute a
 /// [Binary](@ref dev_guide_binary) primitive.
+
+/// @page binary_example_cpp Binary Primitive Example
+/// \copybrief binary_example_cpp_brief
 ///
 /// Key optimizations included in this example:
 /// - In-place primitive execution;

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2025 Intel Corporation
+* Copyright 2021 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -798,6 +798,8 @@ status_t generic_t::pd_t::init_conf(impl::engine_t *engine) {
     conf.src_md_info = memory_desc_info_t::create(src_mdw);
     conf.dst_md_info = memory_desc_info_t::create(dst_mdw);
 
+    conf.require_stateless_addressing = has_large_buffers();
+
     conf.src_quant = {&attr_copy, src_mdw, DNNL_ARG_SRC};
     conf.dst_quant = {&attr_copy, dst_mdw, DNNL_ARG_DST};
     conf.sum_quant = {&attr_copy};
@@ -879,6 +881,7 @@ status_t generic_t::pd_t::init_kernel_ctx(
     conf.sum_quant.define_macros(kernel_ctx, "SUM");
 
     def_dispatch(kernel_ctx, conf.dispatch);
+    kernel_ctx.require_stateless_addressing(conf.require_stateless_addressing);
 
     kernel_ctx.define_int("SUB_GROUP_SIZE", conf.sub_group_size);
 

@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright 2020-2025 Intel Corporation
+ * Copyright 2020 Intel Corporation
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -34,7 +34,6 @@
 #include "graph/utils/utils.hpp"
 
 #include "graph/backend/dnnl/common.hpp"
-#include "graph/backend/dnnl/internal_ops.hpp"
 #include "graph/backend/dnnl/layout_id_mgr.hpp"
 #include "graph/backend/dnnl/utils.hpp"
 
@@ -81,12 +80,12 @@ public:
         static const std::unordered_set<engine_kind_t, enum_hash_t>
                 supported_kind = {
 #if DNNL_CPU_RUNTIME != DNNL_RUNTIME_NONE
-                    engine_kind::cpu,
+                        engine_kind::cpu,
 #endif
 
 #if DNNL_GPU_RUNTIME == DNNL_RUNTIME_SYCL \
         || DNNL_GPU_RUNTIME == DNNL_RUNTIME_OCL
-                    engine_kind::gpu,
+                        engine_kind::gpu,
 #endif
                 };
         return supported_kind.count(kind);
@@ -111,33 +110,29 @@ public:
         auto &pass_registry = get_pass_registry();
         graph::pass::pass_manager_t pm(pass_registry);
 
-#ifdef DNNL_ENABLE_GRAPH_DUMP
-        std::string pass_config_json = "dnnl_graph_passes.json";
-        std::ifstream fs(pass_config_json.c_str());
-        if (fs) {
-            verbose_printf(
-                    "graph,info,pattern,load,%s\n", pass_config_json.c_str());
-        } else {
-            if (getenv_int_user("GRAPH_DUMP", 0) > 0
-                    || graph::utils::check_verbose_string_user(
-                            "GRAPH_DUMP", "pattern")) {
+        if (graph::utils::get_graph_dump_mode(
+                    graph::graph_dump_mode_t::pattern)) {
+            std::string pass_config_json = "dnnl_graph_passes.json";
+            std::ifstream fs(pass_config_json.c_str());
+            if (fs) {
+                verbose_printf("graph,info,pattern,load,%s\n",
+                        pass_config_json.c_str());
+            } else {
                 verbose_printf("graph,info,pattern,dump,%s\n",
                         pass_config_json.c_str());
                 pm.print_passes(pass_config_json);
             }
+            pm.run_passes(agraph, &fs, policy, dnnl_pass_filter);
+        } else {
+            pm.run_passes(agraph, "", policy, dnnl_pass_filter);
         }
-        pm.run_passes(agraph, &fs, policy, dnnl_pass_filter);
-#else
-        pm.run_passes(agraph, "", policy, dnnl_pass_filter);
-#endif
+
         return status::success;
     }
 
 private:
     dnnl_backend_t(const std::string &name, float priority);
-
     static graph::pass::pass_registry_t register_passes();
-    bool register_op_schemas();
 
     dnnl_layout_id_manager_t layout_id_manager_;
     static graph::pass::pass_registry_t pass_registry_;

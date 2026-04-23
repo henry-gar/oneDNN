@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -22,15 +22,14 @@
 
 #include "common/c_types_map.hpp"
 #include "common/utils.hpp"
-#include "gpu/intel/jit/codegen/ngen_helpers.hpp"
+#include "gemmstone/../../dsl/ir/ir.hpp"
+#include "gemmstone/../../dsl/ir/pass/trace.hpp"
 #include "gpu/intel/jit/ir/epilogue.hpp"
 #include "gpu/intel/jit/ir/gemm_schedule.hpp"
-#include "gpu/intel/jit/ir/ir.hpp"
-#include "gpu/intel/jit/ir/message.hpp"
 #include "gpu/intel/jit/ir/post_ops.hpp"
+#include "gpu/intel/jit/ir/send_builder.hpp"
 #include "gpu/intel/jit/ir/tensor_config.hpp"
 #include "gpu/intel/jit/pass/pass.hpp"
-#include "gpu/intel/jit/utils/trace.hpp"
 
 namespace dnnl {
 namespace impl {
@@ -46,7 +45,7 @@ public:
     post_op_view_mapper_t(const view_t &cp_view, const int ndims)
         : base_t(cp_view), ndims_(ndims) {}
 
-    view_t create_view(const type_t &type, uint32_t mask) const override {
+    view_t create_view(const dsl::type_t &type, uint32_t mask) const override {
         return base_t::create_view(type, normalize_mask(mask));
     }
 
@@ -88,7 +87,7 @@ private:
     }
 
     static tile_t dims_to_3d(const std::vector<dim_t> &dims) {
-        layout_t dummy_layout(type_t::u8(), dims);
+        layout_t dummy_layout(dsl::type_t::u8(), dims);
         return spatials_to_3d(dummy_layout, false, {0, 1, 2}).tile();
     }
 
@@ -146,16 +145,16 @@ stmt_t builder_t::try_build(builder_t &pb, const kernel_info_t &ki,
     gpu_assert(src_layout.ndims() == dst_layout.ndims());
 
     // Create loop variables.
-    auto mb = var_t::make(type_t::s32(), "mb");
-    auto oc = var_t::make(type_t::s32(), "oc");
+    auto mb = var_t::make(dsl::type_t::s32(), "mb");
+    auto oc = var_t::make(dsl::type_t::s32(), "oc");
 
-    auto od = var_t::make(type_t::s32(), "od");
-    auto oh = var_t::make(type_t::s32(), "oh");
-    auto ow = var_t::make(type_t::s32(), "ow");
+    auto od = var_t::make(dsl::type_t::s32(), "od");
+    auto oh = var_t::make(dsl::type_t::s32(), "oh");
+    auto ow = var_t::make(dsl::type_t::s32(), "ow");
 
-    auto kd = var_t::make(type_t::s32(), "kd");
-    auto kh = var_t::make(type_t::s32(), "kh");
-    auto kw = var_t::make(type_t::s32(), "kw");
+    auto kd = var_t::make(dsl::type_t::s32(), "kd");
+    auto kh = var_t::make(dsl::type_t::s32(), "kh");
+    auto kw = var_t::make(dsl::type_t::s32(), "kw");
 
     // Initialize masks.
     const bool check_iw = utils::need_src_or_dst_check(!prb.is_backward, prb.ow,
@@ -177,10 +176,7 @@ stmt_t builder_t::try_build(builder_t &pb, const kernel_info_t &ki,
     const auto &lg = cfg.loop_grid();
     const auto &kg = cfg.kernel_grid();
     const auto &tg = cfg.thread_group_grid();
-    const auto &dims_grid = cfg.dims_padded();
-    std::vector<dim_t> padded_dims(dims_grid.ndims());
-    for (dim_idx_t i = 0; i < padded_dims.size(); i++)
-        padded_dims[i] = dims_grid[i];
+    const auto &padded_dims = cfg.dims_padded();
     gpu_assert(padded_dims.size() == 5);
     std::vector<dim_t> dims {padded_dims[0], src_layout.elems(1),
             padded_dims[2], padded_dims[3], padded_dims[4]};
@@ -374,13 +370,13 @@ stmt_t builder_t::try_build(builder_t &pb, const kernel_info_t &ki,
     ir_context_t ir_ctx(exec, init_cset);
 
     auto acc_type = cfg.acc_type(simd);
-    auto acc_buf
-            = ir_ctx.create_tmp_var(type_t::byte(type::attr_t::ptr), "acc");
+    auto acc_buf = ir_ctx.create_tmp_var(
+            dsl::type_t::byte(dsl::type::attr_t::ptr), "acc");
     const auto acc_sc_size = acc_type.base().size();
     const auto acc_size = acc_sc_size * lg[4] * lg[3] * lg[2] * lg[1] * lg[0];
 
-    auto read_buf
-            = ir_ctx.create_tmp_var(type_t::byte(type::attr_t::ptr), "read");
+    auto read_buf = ir_ctx.create_tmp_var(
+            dsl::type_t::byte(dsl::type::attr_t::ptr), "read");
     auto read_params = get_send_params(
             exec, send_op_t::load, send_address_t::a64, src_thr_view);
     read_params.try_legacy = false;
@@ -406,25 +402,22 @@ stmt_t builder_t::try_build(builder_t &pb, const kernel_info_t &ki,
 
     const bool is_identity(prb.kd * prb.kh * prb.kw <= 1);
 
-    const type_t read_type(read_layout.type()[simd]);
+    const dsl::type_t read_type(read_layout.type()[simd]);
 
     stmt_t stmt;
 
-    auto gen_fill_values = [](int simd, bool isneg, type_t type) {
+    auto gen_fill_values = [](int simd, bool isneg, dsl::type_t type) {
         gpu_assert(type.base().size() <= 4);
         const int mult = 4 / type.base().size();
         expr_t v = 0;
         if (isneg) {
-            switch (to_ngen(type.base())) {
-                case ngen::DataType::f: v = 0xFF7FFFFF; break;
-                case ngen::DataType::bf: v = 0xFF7FFF7F; break;
-                case ngen::DataType::hf: v = 0xFBFFFBFF; break;
-                default:
-                    v = (mult > 1) ? (mult > 2) ? 0x80808080 : 0x80008000
-                                   : 0x80000000;
-            }
+            v = type.is_f32()        ? 0xFF7FFFFF
+                    : type.is_bf16() ? 0xFF7FFF7F
+                    : type.is_f16()  ? 0xFBFFFBFF
+                    : (mult > 1)     ? (mult > 2) ? 0x80808080 : 0x80008000
+                                     : 0x80000000;
         }
-        v = cast_t::make(type_t::s32(), v);
+        v = cast_t::make(dsl::type_t::s32(), v);
         auto v_long = shuffle_t::make_broadcast(v, simd);
         auto v_short = shuffle_t::make_broadcast(v, simd / mult);
         return std::make_pair(v_short, v_long);
@@ -482,9 +475,8 @@ stmt_t builder_t::try_build(builder_t &pb, const kernel_info_t &ki,
                     = compute_stmt.append(store_t::make(acc_buf, off_a, op));
         }
 
-        stmt = stmt.append(schedule.create_loop_nest((check_idhw)
-                        ? fill_stmt.append(compute_stmt)
-                        : std::move(compute_stmt)));
+        stmt = stmt.append(schedule.create_loop_nest(
+                (check_idhw) ? fill_stmt.append(compute_stmt) : compute_stmt));
 
         if (!cfg.is_max()) {
             expr_t filter(prb.kd * prb.kh * prb.kw);
@@ -498,26 +490,38 @@ stmt_t builder_t::try_build(builder_t &pb, const kernel_info_t &ki,
                 auto dhw = dim(od, prb.stride_d, prb.f_pad, prb.kd, prb.id)
                         * dim(oh, prb.stride_h, prb.t_pad, prb.kh, prb.ih)
                         * dim(ow, prb.stride_w, prb.l_pad, prb.kw, prb.iw);
-                filter = cast_t::make(type_t::f32(), dhw);
+                filter = cast_t::make(dsl::type_t::f32(), dhw);
             }
             filter = shuffle_t::make_broadcast(filter, simd);
             for (int i = 0; i < acc_size; i += simd * acc_sc_size) {
-                auto acc = cast_t::make(
-                        type_t::f32(simd), load_t::make(acc_type, acc_buf, i));
+                auto acc = cast_t::make(dsl::type_t::f32(simd),
+                        load_t::make(acc_type, acc_buf, i));
                 stmt = stmt.append(store_t::make(acc_buf, i, acc / filter));
             }
-            acc_type = type_t::f32(simd);
+            acc_type = dsl::type_t::f32(simd);
         }
         stmt = inject_alloc_stmts(stmt, read_alloc);
     }
 
-    int buf_size = 0;
-    post_op_view_mapper_t view_mapper(dst_view, prb.ndims);
-    post_op_context_t post_op_ctx(*pd.attr(), cfg.zp_cfg(), schedule, ki,
-            *pd.invariant_dst_md(), *pd.invariant_dst_md(), view_mapper);
-    stmt = stmt.append(create_epilogue_stmt(exec, ir_ctx, schedule,
-            /*force_c_reorder=*/false, post_op_ctx, dst_thr_tile_coord,
-            write_layout.with(acc_type.base()), dst_buf, acc_buf, buf_size));
+    if (is_identity && pd.attr()->post_ops_.has_default_values()) {
+        stmt = stmt.append(write_stmt);
+    } else {
+        int buf_size = 0;
+        post_op_view_mapper_t view_mapper(dst_view, prb.ndims);
+        post_op_context_t post_op_ctx(*pd.attr(), cfg.zp_cfg(), schedule, ki,
+                *pd.invariant_dst_md(), *pd.invariant_dst_md(), view_mapper);
+        stmt = stmt.append(create_epilogue_stmt(exec, ir_ctx, schedule,
+                /*force_c_reorder=*/false, post_op_ctx, dst_thr_tile_coord,
+                write_layout.with(acc_type.base()), dst_buf, acc_buf,
+                buf_size));
+        for (auto &alloc : allocs) {
+            auto &a = alloc.as<alloc_t>();
+            if (a.buf.is_same(acc_buf))
+                alloc = alloc_t::make(a.buf,
+                        std::max(a.size, uint32_t(buf_size)), a.kind, a.attrs,
+                        a.body);
+        }
+    }
 
     loop_bound_counter_t lbc(schedule);
     auto exit_cond = (lbc.count(ow) >= prb.ow) ? (ow < prb.ow) : expr_t();

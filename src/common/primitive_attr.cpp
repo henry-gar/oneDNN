@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2017-2025 Intel Corporation
+* Copyright 2017 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -19,6 +19,8 @@
 #include "c_types_map.hpp"
 #include "math_utils.hpp"
 #include "primitive_attr.hpp"
+#include "primitive_hashing.hpp"
+#include "primitive_serialization.hpp"
 #include "type_helpers.hpp"
 #include "utils.hpp"
 #include "verbose.hpp"
@@ -82,6 +84,22 @@ status_t dropout_t::set_default_formats(const memory_desc_t *dst_md) {
     return (dst_ok) ? status::success : status::invalid_arguments;
 }
 
+size_t dropout_t::get_hash() const {
+    size_t seed = 0;
+    seed = hash_combine(
+            seed, primitive_hashing::get_md_hash(user_dropout_desc_));
+    seed = hash_combine(seed, seed_dt_);
+    seed = hash_combine(seed, use_offset_);
+    seed = hash_combine(seed, use_host_scalars_);
+    return seed;
+}
+
+void dropout_t::serialize(serialization_stream_t &sstream) const {
+    dnnl::impl::serialize(sstream, user_dropout_desc_);
+    sstream.append(seed_dt_);
+    sstream.append(use_offset_);
+    sstream.append(use_host_scalars_);
+}
 } // namespace impl
 } // namespace dnnl
 
@@ -224,7 +242,7 @@ status_t post_ops_t::validate_binary(alg_kind_t alg,
 
     // Additional check to restrict run-time dimension usage until supported.
     for (int d = 0; d < user_src1_desc->ndims; ++d) {
-        VCHECK_ATTR(user_src1_desc->dims[d] != DNNL_RUNTIME_DIM_VAL,
+        VCHECK_ATTR(!is_runtime_value(user_src1_desc->dims[d]),
                 VERBOSE_RUNTIMEDIM_UNSUPPORTED);
     }
 
@@ -233,7 +251,7 @@ status_t post_ops_t::validate_binary(alg_kind_t alg,
         VCHECK_ATTR(memory_desc_sanity_check(*user_src2_desc),
                 VERBOSE_MEM_DESC_CHECK_FAIL);
         for (int d = 0; d < user_src2_desc->ndims; ++d) {
-            VCHECK_ATTR(user_src2_desc->dims[d] != DNNL_RUNTIME_DIM_VAL,
+            VCHECK_ATTR(!is_runtime_value(user_src2_desc->dims[d]),
                     VERBOSE_RUNTIMEDIM_UNSUPPORTED);
         }
     }
@@ -404,11 +422,21 @@ status_t post_ops_t::validate_binary(
     return status::success;
 }
 
-status_t primitive_attr_t::set_dropout(const memory_desc_t *user_dropout_desc) {
-    if (any_null(user_dropout_desc)) return invalid_arguments;
+status_t primitive_attr_t::set_dropout(const memory_desc_t *user_dropout_desc,
+        data_type_t seed_dt, bool use_offset, bool use_host_scalars) {
+    VCHECK_ATTR(user_dropout_desc, VERBOSE_NULL_ARG);
+    VCHECK_ATTR(utils::one_of(user_dropout_desc->data_type, data_type::u8,
+                        data_type::undef),
+            VERBOSE_INVALID_DATATYPE, "dropout");
+    VCHECK_ATTR(utils::one_of(seed_dt, data_type::s32, data_type::s64),
+            VERBOSE_INVALID_DATATYPE, "dropout");
+
     dropout_.user_dropout_desc_ = *user_dropout_desc;
     dropout_.dropout_desc_ = *user_dropout_desc;
-    return success;
+    dropout_.seed_dt_ = seed_dt;
+    dropout_.use_offset_ = use_offset;
+    dropout_.use_host_scalars_ = use_host_scalars;
+    return status::success;
 }
 
 status_t primitive_attr_t::set_fpmath_mode(
@@ -491,10 +519,30 @@ status_t dnnl_primitive_attr_get_dropout(
     return success;
 }
 
+status_t dnnl_primitive_attr_get_dropout_v2(const primitive_attr_t *attr,
+        const memory_desc_t **user_dropout_desc, data_type_t *seed_dt,
+        int *use_offset, int *use_host_scalars) {
+    if (any_null(attr)) return invalid_arguments;
+    if (user_dropout_desc)
+        *user_dropout_desc = &attr->dropout_.user_dropout_desc_;
+    if (seed_dt) *seed_dt = attr->dropout_.seed_dt_;
+    if (use_offset) *use_offset = attr->dropout_.use_offset_;
+    if (use_host_scalars) *use_host_scalars = attr->dropout_.use_host_scalars_;
+    return success;
+}
+
 status_t dnnl_primitive_attr_set_dropout(
         primitive_attr_t *attr, const memory_desc_t *user_dropout_desc) {
+    return dnnl_primitive_attr_set_dropout_v2(
+            attr, user_dropout_desc, dnnl_s32, false, false);
+}
+
+status_t dnnl_primitive_attr_set_dropout_v2(primitive_attr_t *attr,
+        const memory_desc_t *user_dropout_desc, data_type_t seed_dt,
+        int use_offset, int use_host_scalars) {
     if (any_null(attr)) return invalid_arguments;
-    return attr->set_dropout(user_dropout_desc);
+    return attr->set_dropout(
+            user_dropout_desc, seed_dt, use_offset, use_host_scalars);
 }
 
 status_t dnnl_primitive_attr_get_fpmath_mode(
@@ -577,16 +625,27 @@ status_t dnnl_primitive_attr_set_scales_mask(
 status_t dnnl_primitive_attr_set_scales(primitive_attr_t *attr, int arg,
         int mask, int group_ndims, const dims_t group_dims,
         data_type_t data_type) {
-    return dnnl_primitive_attr_set_scales_v2(
-            attr, arg, mask, group_ndims, group_dims, data_type, 0);
+    return dnnl_primitive_attr_set_scales_v3(attr, arg, mask, group_ndims,
+            group_dims, data_type, 0, quantization_mode::static_sazp);
 }
 
 status_t dnnl_primitive_attr_set_scales_v2(primitive_attr_t *attr, int arg,
         int mask, int group_ndims, const dims_t group_dims,
         data_type_t data_type, int is_on_host) {
+    return dnnl_primitive_attr_set_scales_v3(attr, arg, mask, group_ndims,
+            group_dims, data_type, is_on_host, quantization_mode::static_sazp);
+}
+
+status_t dnnl_primitive_attr_set_scales_v3(primitive_attr_t *attr, int arg,
+        int mask, int group_ndims, const dims_t group_dims,
+        data_type_t data_type, int is_on_host, quantization_mode_t qmode) {
     using namespace data_type;
     VCHECK_ATTR(attr, VERBOSE_NULL_ARG);
     VCHECK_ATTR(arg >= 0, VERBOSE_BAD_PARAM, "arg");
+    VCHECK_ATTR(utils::one_of(qmode, quantization_mode::static_sazp,
+                        quantization_mode::dynamic_mx,
+                        quantization_mode::dynamic_fp),
+            VERBOSE_BAD_PARAM, "qmode");
     VCHECK_ATTR(
             utils::one_of(data_type, f32, bf16, f16, e8m0, f8_e5m2, f8_e4m3),
             VERBOSE_INVALID_DATATYPE, "scales");
@@ -596,12 +655,14 @@ status_t dnnl_primitive_attr_set_scales_v2(primitive_attr_t *attr, int arg,
     if (is_on_host) { // only single value host-side scale is supported
         VCHECK_ATTR(mask == 0, VERBOSE_BAD_PARAM, "mask");
         VCHECK_ATTR(group_ndims == 0, VERBOSE_BAD_PARAM, "group_ndims");
-        return attr->scales_.set(arg, 0, data_type, 0, {}, true);
     } else {
         VCHECK_ATTR(mask >= 0, VERBOSE_BAD_PARAM, "mask");
         VCHECK_ATTR(group_ndims >= 0, VERBOSE_BAD_PARAM, "group_ndims");
-        return attr->scales_.set(arg, mask, data_type, group_ndims, group_dims);
     }
+    VCHECK_ATTR(IMPLICATION(group_ndims > 0, mask > 0), VERBOSE_BAD_PARAM,
+            "mask incompatible with group_dims");
+    return attr->scales_.set(
+            arg, mask, data_type, group_ndims, group_dims, is_on_host, qmode);
 }
 
 status_t dnnl_primitive_attr_set_zero_points_mask(
@@ -629,7 +690,8 @@ status_t dnnl_primitive_attr_set_zero_points_v2(dnnl_primitive_attr_t attr,
             VERBOSE_INVALID_DATATYPE, "zero points");
     VCHECK_ATTR(IMPLICATION(utils::one_of(data_type, s4, u4), mask > 0),
             VERBOSE_BAD_PARAM, "mask with int4 data type");
-    VCHECK_ATTR(IMPLICATION(!utils::one_of(arg, DNNL_ARG_SRC, DNNL_ARG_WEIGHTS),
+    VCHECK_ATTR(IMPLICATION(!utils::one_of(arg, DNNL_ARG_SRC, DNNL_ARG_WEIGHTS,
+                                    DNNL_ARG_WEIGHTS_1, DNNL_ARG_WEIGHTS_2),
                         data_type == s32 && group_ndims == 0),
             VERBOSE_INVALID_DATATYPE, "zero points");
     VCHECK_ATTR(

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -15,8 +15,8 @@
 *******************************************************************************/
 
 #include "gpu/intel/jit/ir/v2/reqs.hpp"
+#include "gemmstone/../../dsl/ir/pass/simplify.hpp"
 #include "gpu/intel/jit/ir/linear_expr.hpp"
-#include "gpu/intel/jit/pass/simplify.hpp"
 #include "gpu/intel/logging.hpp"
 
 #include <iostream>
@@ -30,13 +30,14 @@ namespace v2 {
 
 const expr_t &index_var(const pvar_t &p) {
     static thread_local pvar_map_t<expr_t> vars;
-    if (!vars.has(p)) vars[p] = var_t::make(type_t::s32(), p.str() + "_idx");
+    if (!vars.has(p))
+        vars[p] = var_t::make(dsl::type_t::s32(), p.str() + "_idx");
     return vars[p];
 }
 
 const expr_t &var(const pvar_t &p) {
     static thread_local pvar_map_t<expr_t> vars;
-    if (!vars.has(p)) vars[p] = const_var_t::make(type_t::s32(), p.str());
+    if (!vars.has(p)) vars[p] = const_var_t::make(dsl::type_t::s32(), p.str());
     return vars[p];
 }
 
@@ -61,7 +62,7 @@ pvar_t to_index_pvar(const expr_t &index_var) {
 bool is_a_mod_b_eq_0(const expr_t &e, expr_t &a, expr_t &b) {
     auto *eq_op = e.as_ptr<binary_op_t>();
     if (!eq_op || eq_op->op_kind != op_kind_t::_eq) return false;
-    if (!is_zero(eq_op->b)) return false;
+    if (!eq_op->b.is(0)) return false;
     auto *mod_op = eq_op->a.as_ptr<binary_op_t>();
     if (!mod_op || mod_op->op_kind != op_kind_t::_mod) return false;
     a = mod_op->a;
@@ -221,7 +222,7 @@ public:
         return oss.str();
     }
 
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
 private:
     static std::vector<pvar_t> split(const expr_t &e) {
@@ -299,7 +300,7 @@ public:
         return oss.str();
     }
 
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
 private:
     bool is_undef_ = true;
@@ -405,7 +406,7 @@ public:
         return oss.str();
     }
 
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
 private:
     static const int max_entries = 2;
@@ -559,7 +560,7 @@ public:
         auto s = jit::parse<std::string>(in);
         for (req_kind_t op : {req_kind_t::_or_eq, req_kind_t::eq,
                      req_kind_t::ge, req_kind_t::le}) {
-            auto s_op = to_string(op);
+            const auto &s_op = to_string(op);
             auto pos = s.find(s_op);
             if (pos == std::string::npos) continue;
             auto s_lhs = s.substr(0, pos);
@@ -597,7 +598,7 @@ public:
         return oss.str();
     }
 
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
 private:
     bool try_init_mod_eq_0(const expr_t &e) {

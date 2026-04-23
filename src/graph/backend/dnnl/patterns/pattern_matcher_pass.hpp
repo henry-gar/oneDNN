@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2025 Intel Corporation
+* Copyright 2021 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -134,9 +134,8 @@ public:
             pu.match(agraph, pgraph, fusion_ops);
             if (!fusion_ops.empty()) {
                 // temporary solution here for showing which pattern matched
-                if (getenv_int_user("GRAPH_DUMP", 0) > 0
-                        || graph::utils::check_verbose_string_user(
-                                "GRAPH_DUMP", "pattern")) {
+                if (graph::utils::get_graph_dump_mode(
+                            graph::graph_dump_mode_t::pattern)) {
                     verbose_printf("graph,info,pattern,hit,%s\n",
                             get_pass_name().c_str());
                 }

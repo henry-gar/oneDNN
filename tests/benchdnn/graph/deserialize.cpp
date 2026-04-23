@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -87,6 +87,8 @@ logical_tensor::data_type deserialized_lt_t::get_data_type() const {
         return logical_tensor::data_type::s4;
     } else if (data_type_ == "u4") {
         return logical_tensor::data_type::u4;
+    } else if (data_type_ == "s64") {
+        return logical_tensor::data_type::s64;
     } else {
         return logical_tensor::data_type::undef;
     }
@@ -223,6 +225,7 @@ dnnl_driver_t deserialized_op_t::opkind2driver() const {
                             dnnl_driver_t::deconv},
                     {dnnl::graph::op::kind::Dequantize, dnnl_driver_t::reorder},
                     {dnnl::graph::op::kind::Divide, dnnl_driver_t::binary},
+                    {dnnl::graph::op::kind::Dropout, dnnl_driver_t::eltwise},
                     {dnnl::graph::op::kind::DynamicDequantize,
                             dnnl_driver_t::reorder},
                     {dnnl::graph::op::kind::DynamicQuantize,
@@ -291,6 +294,7 @@ dnnl_driver_t deserialized_op_t::opkind2driver() const {
                     {dnnl::graph::op::kind::ReLUBackward,
                             dnnl_driver_t::eltwise},
                     {dnnl::graph::op::kind::Reorder, dnnl_driver_t::reorder},
+                    {dnnl::graph::op::kind::RMSNorm, dnnl_driver_t::lnorm},
                     {dnnl::graph::op::kind::Round, dnnl_driver_t::eltwise},
                     {dnnl::graph::op::kind::Select, dnnl_driver_t::binary},
                     {dnnl::graph::op::kind::Sigmoid, dnnl_driver_t::eltwise},
@@ -400,6 +404,11 @@ logical_tensor::dims deserialized_op_t::get_NCX_shape(
     return src_dims;
 }
 
+const deserialized_op_t &deserialized_op_t::dummy() {
+    static const deserialized_op_t op {};
+    return op;
+}
+
 void deserialized_graph_t::load(const std::string &pass_config_json) {
     std::ifstream fs(pass_config_json.c_str());
     utils::json::json_reader_t read(&fs);
@@ -453,8 +462,7 @@ void deserialized_graph_t::load(const std::string &pass_config_json) {
         for (const auto &lt : aop.out_lts_) {
             out_lt_2_op_[lt.id_] = aop;
             // collect graph internal and output tensors memory layout
-            std::string mtag
-                    = strides2memory_tag(lt.shape_.size(), lt.stride_, false);
+            std::string mtag = strides2memory_tag(lt.shape_, lt.stride_, false);
             if (!is_contiguous_memory(lt.stride_, lt.shape_, mtag)) {
                 // "not_available" string is handled later inside flex_rewrite.
                 mtag = "not_available";
@@ -509,8 +517,7 @@ void deserialized_graph_t::load(const std::string &pass_config_json) {
 
             graph_tensors_.emplace(in_lt.first, lt.shape_);
             // collect graph input tensors memory layout
-            std::string mtag
-                    = strides2memory_tag(lt.shape_.size(), lt.stride_, false);
+            std::string mtag = strides2memory_tag(lt.shape_, lt.stride_, false);
             if (!is_contiguous_memory(lt.stride_, lt.shape_, mtag)) {
                 mtag = "not_available";
             }
@@ -659,8 +666,7 @@ const deserialized_op_t &deserialized_graph_t::get_op(size_t id) const {
         if (op.id_ == id) return op;
     }
     assert(!"Given id was not found in the deserialized graph.");
-    static deserialized_op_t dummy;
-    return dummy;
+    return deserialized_op_t::dummy();
 }
 
 const deserialized_op_t &deserialized_graph_t::get_op_by_out_lt(
@@ -670,8 +676,7 @@ const deserialized_op_t &deserialized_graph_t::get_op_by_out_lt(
         if (out_lt.id_ == out_lt_id) return op;
     }
 
-    static deserialized_op_t dummy;
-    return dummy;
+    return deserialized_op_t::dummy();
 }
 
 const deserialized_op_t &deserialized_graph_t::get_op_by_in_lt(
@@ -681,8 +686,7 @@ const deserialized_op_t &deserialized_graph_t::get_op_by_in_lt(
         if (in_lt.id_ == in_lt_id) return op;
     }
 
-    static deserialized_op_t dummy;
-    return dummy;
+    return deserialized_op_t::dummy();
 }
 
 void deserialized_graph_t::detect_recognized_patterns() {
@@ -699,18 +703,26 @@ void deserialized_graph_t::detect_recognized_patterns() {
         BENCHDNN_PRINT(3, "%s\n", "[INFO]:sdpa_bwd pattern is recognized");
         return;
     }
+    if (ops_.size() >= 5 && detect_gmlp_impl()) {
+        recognized_pattern_ = graph_recognized_pattern_t::gmlp;
+        BENCHDNN_PRINT(3, "%s\n", "[INFO]:gmlp pattern is recognized");
+        return;
+    }
 }
 
 bool deserialized_graph_t::detect_sdpa_fwd_impl() const {
-
+    static const std::unordered_set<std::string> mm1_pre_op_kind
+            = {"Dequantize", "TypeCast", "DynamicDequantize"};
     static const std::unordered_set<std::string> mm1_post_op_kind
             = {"Divide", "Multiply", "Add", "Subtract", "Select", "GenIndex",
                     "GreaterEqual", "StaticReshape", "StaticTranspose"};
+    static const std::unordered_set<std::string> mm2_pre_op_kind
+            = {"Dequantize", "TypeCast", "Quantize", "Dropout"};
     const auto is_root_op = [&](const deserialized_op_t &op) {
         return std::none_of(op.in_lts_.begin(), op.in_lts_.end(),
                 [&](const deserialized_lt_t &lt) {
-                    return !get_op_by_out_lt(lt.id_).empty();
-                });
+            return !get_op_by_out_lt(lt.id_).empty();
+        });
     };
 
     std::vector<std::reference_wrapper<const deserialized_op_t>> starter_ops;
@@ -720,7 +732,8 @@ bool deserialized_graph_t::detect_sdpa_fwd_impl() const {
 
     for (const auto &starter : starter_ops) {
         // find the first MatMul
-        auto cur_op_ref = find_next_until(starter.get(), "MatMul", {});
+        auto cur_op_ref
+                = find_next_until(starter.get(), "MatMul", mm1_pre_op_kind);
         if (cur_op_ref.empty()) {
             BENCHDNN_PRINT(8, "%s\n",
                     "[DETECT_SDPA_FWD]: failed due to no MatMul for QK");
@@ -738,7 +751,7 @@ bool deserialized_graph_t::detect_sdpa_fwd_impl() const {
 
         // find the second MatMul
         cur_op_ref = get_child_ops(cur_op_ref)[0];
-        cur_op_ref = find_next_until(cur_op_ref, "MatMul", {});
+        cur_op_ref = find_next_until(cur_op_ref, "MatMul", mm2_pre_op_kind);
         if (cur_op_ref.empty()) {
             BENCHDNN_PRINT(8, "%s\n",
                     "[DETECT_SDPA_FWD]: failed due to no MatMul for PV");
@@ -760,12 +773,13 @@ bool deserialized_graph_t::detect_sdpa_bwd_impl() const {
                     "GreaterEqual"};
     static const std::unordered_set<std::string> softmax_bwd_post_op_kind
             = {"Divide", "Multiply", "TypeCast"};
-    static const std::unordered_set<std::string> mm2_pre_op_kind = {"TypeCast"};
+    static const std::unordered_set<std::string> mm2_pre_op_kind
+            = {"TypeCast", "Dropout"};
     const auto is_root_op = [&](const deserialized_op_t &op) {
         return std::none_of(op.in_lts_.begin(), op.in_lts_.end(),
                 [&](const deserialized_lt_t &lt) {
-                    return !get_op_by_out_lt(lt.id_).empty();
-                });
+            return !get_op_by_out_lt(lt.id_).empty();
+        });
     };
 
     std::vector<std::reference_wrapper<const deserialized_op_t>> starter_ops;
@@ -799,17 +813,37 @@ bool deserialized_graph_t::detect_sdpa_bwd_impl() const {
             continue;
         }
 
-        // find SoftMaxBackward and MatMul for dV
+        // find softmax bwd decomposed chain and MatMul for dV
+        // The decomposed softmax bwd is: Multiply(O,dO)->ReduceSum->Subtract->Multiply(P,dp_corr)
+        // Exp's children: one branch is the final Multiply (P*dp_corr), the other leads to dV MatMul
         auto cur_op_refs = get_child_ops(cur_op_ref);
         if (cur_op_refs.size() != 2) continue;
+
+        // Identify which child is the final Multiply of the decomposed softmax bwd
+        // by verifying the full chain: its input comes from Subtract <- ReduceSum <- Multiply
+        const auto verify_softmax_bwd_chain
+                = [&](const deserialized_op_t &mul_op) -> bool {
+            if (mul_op.kind_ != "Multiply") return false;
+            for (const auto &mul_in : mul_op.in_lts_) {
+                const auto &sub_op = get_op_by_out_lt(mul_in.id_);
+                if (sub_op.kind_ != "Subtract") continue;
+                const auto &rs_op = get_op_by_out_lt(sub_op.in_lts_[1].id_);
+                if (rs_op.kind_ != "ReduceSum") continue;
+                const auto &odo_op = get_op_by_out_lt(rs_op.in_lts_[0].id_);
+                if (odo_op.kind_ == "Multiply") return true;
+            }
+            return false;
+        };
+
         size_t softmax_bwd_idx;
-        if (cur_op_refs[0].kind_ == "SoftMaxBackward") {
+        if (verify_softmax_bwd_chain(cur_op_refs[0])) {
             softmax_bwd_idx = 0;
-        } else if (cur_op_refs[1].kind_ == "SoftMaxBackward") {
+        } else if (verify_softmax_bwd_chain(cur_op_refs[1])) {
             softmax_bwd_idx = 1;
         } else {
             BENCHDNN_PRINT(8, "%s\n",
-                    "[DETECT_SDPA_BWD]: failed due to no SoftMaxBackward");
+                    "[DETECT_SDPA_BWD]: failed due to no decomposed softmax "
+                    "bwd chain (Multiply->ReduceSum->Subtract->Multiply)");
             continue;
         }
         // find MatMul for dV
@@ -822,9 +856,16 @@ bool deserialized_graph_t::detect_sdpa_bwd_impl() const {
         }
 
         // find MatMul for dQ or dV
-        cur_op_ref = get_child_ops(cur_op_refs[softmax_bwd_idx])[0];
+        cur_op_refs = get_child_ops(cur_op_refs[softmax_bwd_idx]);
+        // consider the case w/ & w/o gradients w.r.t. mask.
+        if (cur_op_refs.size() > 2) continue;
+        size_t matmul_idx = 0;
+        if (cur_op_refs.size() == 2 && cur_op_refs[0].kind_ == "End") {
+            matmul_idx = 1;
+        }
+
         cur_op_ref = find_next_until(
-                cur_op_ref, "MatMul", softmax_bwd_post_op_kind);
+                cur_op_refs[matmul_idx], "MatMul", softmax_bwd_post_op_kind);
         if (cur_op_ref.empty()) {
             BENCHDNN_PRINT(8, "%s\n",
                     "[DETECT_SDPA_BWD]: failed due to no MatMul for dQ or dK");
@@ -834,8 +875,88 @@ bool deserialized_graph_t::detect_sdpa_bwd_impl() const {
         // if we find a path that contains:
         //                      ->MatMul->[dV]
         // MatMul->Subtract->Exp
-        //                      ->SoftMaxBackward->MatMul->[dQ / dK]
+        //                      ->Multiply->MatMul->[dQ / dK]
+        // Mul->ReduceSum->Sub            ->End (optional)
         // It will be considered as a SDPA bwd implementation.
+        return true;
+    }
+
+    return false;
+}
+
+bool deserialized_graph_t::detect_gmlp_impl() const {
+    static const std::unordered_set<std::string> mm_gate_pre_op_kind
+            = {"Dequantize", "TypeCast", "DynamicDequantize"};
+    static const std::unordered_set<std::string> mm_down_pre_op_kind
+            = {"TypeCast"};
+    const auto is_root_op = [&](const deserialized_op_t &op) {
+        return std::none_of(op.in_lts_.begin(), op.in_lts_.end(),
+                [&](const deserialized_lt_t &lt) {
+            return !get_op_by_out_lt(lt.id_).empty();
+        });
+    };
+
+    std::vector<std::reference_wrapper<const deserialized_op_t>> starter_ops;
+    for (const auto &aop : ops_) {
+        if (is_root_op(aop)) starter_ops.emplace_back(aop);
+    }
+
+    for (const auto &starter : starter_ops) {
+        // find MatMul Gate
+        auto cur_op_ref
+                = find_next_until(starter.get(), "MatMul", mm_gate_pre_op_kind);
+        if (cur_op_ref.empty()) {
+            BENCHDNN_PRINT(8, "%s\n",
+                    "[DETECT_GMLP]: failed due to no MatMul for Gate");
+            continue;
+        }
+
+        // find any Unary
+        auto cur_op_refs = get_child_ops(cur_op_ref);
+        cur_op_ref = deserialized_op_t::dummy();
+        for (const auto &mm_child : cur_op_refs) {
+            if (!is_unary(mm_child.kind_)) continue;
+
+            cur_op_ref = mm_child;
+            break;
+        }
+
+        if (cur_op_ref.empty()) {
+            BENCHDNN_PRINT(8, "%s\n",
+                    "[DETECT_GMLP]: failed due to no Unary MatMul post-op");
+            continue;
+        }
+
+        // find Multiply after Unary
+        cur_op_ref = get_child_ops(cur_op_ref)[0];
+        if (cur_op_ref.kind_ != "Multiply") {
+            BENCHDNN_PRINT(8, "%s\n",
+                    "[DETECT_GMLP]: failed due to no Multiply after Unary");
+            continue;
+        }
+
+        // In theory, to have a precise pattern, MatMul Up should be identified.
+        // However, it seems, just following the Gate-Down side is enough so
+        // far...
+
+        cur_op_ref = get_child_ops(cur_op_ref)[0];
+        if (cur_op_ref.kind_ == "Multiply") {
+            // If one more Multiply is detected, it likely means Swiglu, thus,
+            // step over this Multiply.
+            cur_op_ref = get_child_ops(cur_op_ref)[0];
+        }
+
+        // find MatMul Down.
+        cur_op_ref = find_next_until(cur_op_ref, "MatMul", mm_down_pre_op_kind);
+        if (cur_op_ref.empty()) {
+            BENCHDNN_PRINT(
+                    8, "%s\n", "[DETECT_GMLP]: failed due to no MatMul Down");
+            continue;
+        }
+
+        // If a path that contains MatMul->Unary->Multiply->MatMul was found,
+        //                                 Matmul-^
+        // the graph will be considered as a GMLP implementation.
         return true;
     }
 
@@ -852,8 +973,8 @@ const std::vector<deserialized_op_t> &deserialized_graph_t::get_child_ops(
     }
 
     const auto out_id = op.out_lts_[0].id_;
-    static deserialized_op_t dummy;
-    static std::vector<deserialized_op_t> dummy_vec {dummy};
+    static std::vector<deserialized_op_t> dummy_vec {
+            deserialized_op_t::dummy()};
 
     if (in_lt_2_ops_.find(out_id) == in_lt_2_ops_.end()) return dummy_vec;
     return in_lt_2_ops_.at(out_id);
@@ -864,7 +985,8 @@ const deserialized_op_t &deserialized_graph_t::find_next_until(
         const std::unordered_set<std::string> &allowed_skips) const {
     const deserialized_op_t *cur_op_ptr = &start_op;
     while (!cur_op_ptr->empty() && cur_op_ptr->kind_ != target_kind) {
-        if (!allowed_skips.empty() && !allowed_skips.count(cur_op_ptr->kind_)) {
+        if (IMPLICATION(!allowed_skips.empty(),
+                    !allowed_skips.count(cur_op_ptr->kind_))) {
             break;
         }
         const auto &child_ops = get_child_ops(*cur_op_ptr);
@@ -872,8 +994,8 @@ const deserialized_op_t &deserialized_graph_t::find_next_until(
         cur_op_ptr = &child_ops[0];
     }
 
-    static deserialized_op_t dummy;
-    return (cur_op_ptr->kind_ == target_kind) ? *cur_op_ptr : dummy;
+    return (cur_op_ptr->kind_ == target_kind) ? *cur_op_ptr
+                                              : deserialized_op_t::dummy();
 }
 
 bool deserialized_graph_t::check_tensor_with_mb(size_t tensor_id,

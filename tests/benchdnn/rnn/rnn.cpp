@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2018-2025 Intel Corporation
+* Copyright 2018 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -296,15 +296,15 @@ int fill_memory(int exec_arg, const prb_t &prb, rnn_data_kind_t kind,
     if (prb.is_int8()) {
         auto quantize_chunk
                 = [&](const float *scales, int nscales, int idx_chunk) {
-                      int64_t idx_start = idx_chunk * chunk_size;
-                      int64_t idx_end = MIN2(idx_start + chunk_size, nelems);
-                      for (int64_t idx = idx_start; idx < idx_end; ++idx) {
-                          float current_scale = scales[idx % nscales];
-                          float val = ((float *)mem_fp)[idx];
-                          val = round(current_scale * val);
-                          mem_fp.set_f32_elem(idx, MAX2(MIN2(val, max), min));
-                      }
-                  };
+            int64_t idx_start = idx_chunk * chunk_size;
+            int64_t idx_end = MIN2(idx_start + chunk_size, nelems);
+            for (int64_t idx = idx_start; idx < idx_end; ++idx) {
+                float current_scale = scales[idx % nscales];
+                float val = ((float *)mem_fp)[idx];
+                val = round(current_scale * val);
+                mem_fp.set_f32_elem(idx, MAX2(MIN2(val, max), min));
+            }
+        };
         switch (kind) {
             case WEIGHTS_LAYER:
             case WEIGHTS_ITER:
@@ -468,14 +468,13 @@ int fill_weights(int exec_arg, const prb_t &prb, rnn_data_kind_t kind,
     // element in it across whole buffer.
     benchdnn_parallel_nd(
             L, D, G, O, [&](int64_t l, int64_t d, int64_t g, int64_t o) {
-                int64_t i_off = ((19 * o + 7 * g + 11 * d + 13 * l) % I);
-                int64_t off = (((l * D + d) * I + i_off) * G + g) * O + o;
-                float val = gate_factor;
-                mem_pure_fp.set_f32_elem(off, val);
-                if (prb.is_int8()) val *= scales[off % n_scales];
-                mem_fp.set_f32_elem(
-                        off, round_to_nearest_representable(dt, val));
-            });
+        int64_t i_off = ((19 * o + 7 * g + 11 * d + 13 * l) % I);
+        int64_t off = (((l * D + d) * I + i_off) * G + g) * O + o;
+        float val = gate_factor;
+        mem_pure_fp.set_f32_elem(off, val);
+        if (prb.is_int8()) val *= scales[off % n_scales];
+        mem_fp.set_f32_elem(off, round_to_nearest_representable(dt, val));
+    });
 
     // Pass rnn attributes to f32 -> s8 reorders only
     const_dnnl_primitive_attr_t reorder_attr = nullptr;
@@ -798,6 +797,18 @@ void skip_unimplemented_prb(const prb_t *prb_, res_t *res) {
             return;
         }
 #endif
+#if DNNL_CPU_RUNTIME == DNNL_RUNTIME_THREADPOOL
+        // RNN is not supported with async threadpool runtime.
+        auto *tp = dnnl::testing::get_threadpool();
+        if (tp
+                && (tp->get_flags()
+                        & dnnl::threadpool_interop::threadpool_iface::
+                                ASYNCHRONOUS)) {
+            res->state = SKIPPED;
+            res->reason = skip_reason::case_not_supported;
+            return;
+        }
+#endif
         const auto wei_tag
                 = normalize_tag(prb.tag[1], prb.ndims(WEIGHTS_LAYER));
         // cpu backward only supports `any` layout for weights.
@@ -1018,23 +1029,38 @@ void setup_cmp(compare::compare_t &cmp, const prb_t *prb, data_kind_t kind,
     //   as long as we get precise u8 intermediate results (and so far we do),
     //   the f32 result should be pretty accurate -- the dequantization is just
     //   two simple ops: f32 = scale * u8 + shift.
-    bool check_p2p = (prb->skip_nonlinear
-            || ((prb->n_layer == 1) && (prb->n_iter == 1)));
-    if (prb->is_int8() && rnn_kind == DST_ITER_C) check_p2p = false;
-    cmp.set_norm_validation_mode(!check_p2p);
+    const bool disallow_norm_check = prb->skip_nonlinear
+            || (prb->n_layer == 1 && prb->n_iter == 1)
+            || (prb->is_int8() && rnn_kind == DST_ITER_C);
+    cmp.set_allow_norm_check(!disallow_norm_check);
 
     const auto rnn_add_check =
             [&, prb](const compare::compare_t::driver_check_func_args_t &args) {
-                // Limitation from current filling.
-                // TODO: find a better filling to get rid of this...
-                if ((prb->alg == VANILLA_GRU || prb->alg == LBR_AUGRU
-                            || prb->alg == VANILLA_RNN || prb->alg == LBR_GRU
-                            || prb->alg == VANILLA_LSTM)
-                        && prb->prop == dnnl_backward) {
-                    return args.diff < args.trh;
-                }
-                return false;
-            };
+        // Limitation from current filling.
+        // TODO: find a better filling to get rid of this...
+        if ((prb->alg == VANILLA_GRU || prb->alg == LBR_AUGRU
+                    || prb->alg == VANILLA_RNN || prb->alg == LBR_GRU
+                    || prb->alg == VANILLA_LSTM)
+                && prb->prop == dnnl_backward) {
+            return args.diff < args.trh;
+        }
+
+        // When a problem uses int computations, DST_ITER(_C) is computed using
+        // DST_LAYER. However, the library part can compute LAYER and ITER in
+        // parallel, which can lead to off-by-1 issue for ITER part.
+        // Reconstruct original DST_LAYER values on got and exp sides and if
+        // they are off-by-1, let them through.
+        if (prb->cfg.is_int8()
+                && (args.dk == rnn_data_kind2data_kind(DST_ITER)
+                        || args.dk == rnn_data_kind2data_kind(DST_ITER_C))) {
+            const int exp_q = static_cast<int>(
+                    args.exp * prb->data_scale + prb->data_shift);
+            const int got_q = static_cast<int>(
+                    args.got * prb->data_scale + prb->data_shift);
+            return abs(got_q - exp_q) <= 1;
+        }
+        return false;
+    };
     cmp.set_driver_check_function(rnn_add_check);
 }
 
@@ -1082,7 +1108,7 @@ std::vector<int> supported_exec_args(dir_t dir) {
             DNNL_ARG_DIFF_BIAS,
     };
     return (dir & FLAG_FWD) ? exec_fwd_args : exec_bwd_args;
-};
+}
 
 int init_ref_memory_args(dnn_mem_map_t &ref_mem_map, dnn_mem_map_t &mem_map,
         dnnl_primitive_t prim, const prb_t *prb_, res_t *res,
@@ -1330,7 +1356,16 @@ int doit(const std::vector<benchdnn_dnnl_wrapper_t<dnnl_primitive_t>> &v_prim,
 
     args_t args(mem_map), ref_args(ref_mem_map);
 
-    SAFE(execute_and_wait(v_prim[0], args, res), WARN);
+#if DNNL_CPU_RUNTIME == DNNL_RUNTIME_THREADPOOL
+    auto st = run_execution(v_prim[0], args, res);
+    if (st == FAIL) {
+        skip_unimplemented_prb(&prb, res);
+        if (res->state == SKIPPED || res->state == DEFERRED) return OK;
+        return FAIL;
+    }
+#else
+    SAFE(run_execution(v_prim[0], args, res), WARN);
+#endif
 
     check_correctness(&prb, get_kinds_to_check(&prb, FLAG_FWD), args, ref_args,
             setup_cmp, res, FLAG_FWD);
@@ -1349,7 +1384,7 @@ int doit(const std::vector<benchdnn_dnnl_wrapper_t<dnnl_primitive_t>> &v_prim,
         args = args_t(mem_map);
         ref_args = args_t(ref_mem_map);
 
-        SAFE(execute_and_wait(v_prim[1], args, res), WARN);
+        SAFE(run_execution(v_prim[1], args, res), WARN);
 
         check_correctness(&prb, get_kinds_to_check(&prb, FLAG_BWD), args,
                 ref_args, setup_cmp, res, prb.dir);

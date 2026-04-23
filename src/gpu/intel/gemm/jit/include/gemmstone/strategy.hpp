@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -14,8 +14,8 @@
 * limitations under the License.
 *******************************************************************************/
 
-#ifndef GEMMSTONE_GUARD_STRATEGY_HPP
-#define GEMMSTONE_GUARD_STRATEGY_HPP
+#ifndef GEMMSTONE_INCLUDE_GEMMSTONE_STRATEGY_HPP
+#define GEMMSTONE_INCLUDE_GEMMSTONE_STRATEGY_HPP
 
 #include "gemmstone/config.hpp"
 
@@ -46,17 +46,17 @@ enum class AccessType : uint8_t {
 
 static inline bool isBlocklike(AccessType t)
 {
-    return one_of(t, AccessType::Block, AccessType::PseudoBlock);
+    return one_of(t, {AccessType::Block, AccessType::PseudoBlock});
 }
 
 static inline bool isBlock2D(AccessType t)
 {
-    return one_of(t, AccessType::Block2D, AccessType::Block2DTranspose, AccessType::Block2DVNNI);
+    return one_of(t, {AccessType::Block2D, AccessType::Block2DTranspose, AccessType::Block2DVNNI});
 }
 
 static inline bool isTransposing(AccessType t)
 {
-    return one_of(t, AccessType::Scattered, AccessType::ChannelScattered, AccessType::Block2DTranspose);
+    return one_of(t, {AccessType::Scattered, AccessType::ChannelScattered, AccessType::Block2DTranspose});
 }
 
 // Strategies for choosing scattered access SIMD width.
@@ -162,7 +162,7 @@ struct CommonStrategy {
     bool simulation = false;                    // For use in simulator?
     bool systolicAvailable = false;             // True if systolic array present.
     bool avoidIncConflicts = true;              // If true, duplicate address increments across banks to avoid bundle conflicts.
-                                    ZPAD(A, 1)
+    bool isDSLGenerator = false;
     ngen::HW raHW = ngen::HW::Unknown;          // Pretend to be a different GPU for register allocation purposes.
     ngen::ThreadArbitrationMode arbitrationMode
         = ngen::ThreadArbitrationMode::Default; // Thread arbitration policy to use.
@@ -260,6 +260,7 @@ struct GEMMStrategyPOD : public CommonStrategy {
     bool shrinkWGK = false;                      //   Shrink wgK automatically to try to fit dispatch in 1 wave (or smaller)?
                                     ZPAD(J, 3)
     int fillGoal = 0;                            //     With shrinkWGK, try to fill this fraction of available thread slots, measured in sixteenths (0 = default).
+    int cInterleaveChunk = 1;                    // Minimum chunk size for interleaving columns of C among threads
     bool kParallelVariable = false;              // If true, generate kernel that uses variable k-parallelization for load balancing.
     bool fuseBeta = false;                       //   Fuse beta scaling into kernel? (kParallel/kParallelVariable, requires linear ordering)
     bool fusePostOps = false;                    //   Fuse post-operations into kernel? (kParallel/kParallelVariable, requires linear ordering)

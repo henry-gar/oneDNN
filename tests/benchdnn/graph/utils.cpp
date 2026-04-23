@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@
 #include "cpu/platform.hpp"
 
 #include "allocator.hpp"
+#include "dnnl_common.hpp"
 #include "utils.hpp"
 #include "utils/timer.hpp"
 
@@ -183,8 +184,8 @@ inline int measure_perf_aggregate(timer::timer_t &t,
             int batch_times_heuristic = (ms_min == 0.0)
                     ? INT_MAX
                     : MAX2(1,
-                            (int)((max_ms_per_prb - t.total_ms()) / ms_min
-                                    / 5));
+                              (int)((max_ms_per_prb - t.total_ms()) / ms_min
+                                      / 5));
             cur_batch_times = MIN2(max_batch_times, batch_times_heuristic);
             is_first_loop = false;
         }
@@ -220,14 +221,15 @@ int measure_perf(timer::timer_t &t, std::vector<perf_function_t> &perf_func_v,
         const std::vector<std::vector<dnnl::graph::tensor>> &inputs_v,
         const std::vector<std::vector<dnnl::graph::tensor>> &outputs_v,
         res_t *res) {
+    const auto &engine = get_test_engine();
     if (has_bench_mode_bit(mode_bit_t::perf)) {
         // enable GPU profiling, Nvidia/AMD dose not support profiling.
         int ret = OK;
-        if (is_cpu() && !is_sycl_engine()) {
-            ret = measure_perf_individual(
+        if (is_async(engine)) {
+            ret = measure_perf_aggregate(
                     t, perf_func_v, inputs_v, outputs_v, res);
         } else {
-            ret = measure_perf_aggregate(
+            ret = measure_perf_individual(
                     t, perf_func_v, inputs_v, outputs_v, res);
         }
         return ret;
@@ -284,6 +286,7 @@ dnnl::graph::op::kind opstr2kind(const std::string &kind) {
                     dnnl::graph::op::kind::ConvTransposeBackwardWeights},
             {"Dequantize", dnnl::graph::op::kind::Dequantize},
             {"Divide", dnnl::graph::op::kind::Divide},
+            {"Dropout", dnnl::graph::op::kind::Dropout},
             {"DynamicDequantize", dnnl::graph::op::kind::DynamicDequantize},
             {"DynamicQuantize", dnnl::graph::op::kind::DynamicQuantize},
             {"Elu", dnnl::graph::op::kind::Elu},
@@ -330,6 +333,7 @@ dnnl::graph::op::kind opstr2kind(const std::string &kind) {
             {"ReLU", dnnl::graph::op::kind::ReLU},
             {"ReLUBackward", dnnl::graph::op::kind::ReLUBackward},
             {"Reorder", dnnl::graph::op::kind::Reorder},
+            {"RMSNorm", dnnl::graph::op::kind::RMSNorm},
             {"Round", dnnl::graph::op::kind::Round},
             {"Select", dnnl::graph::op::kind::Select},
             {"Sigmoid", dnnl::graph::op::kind::Sigmoid},
@@ -358,6 +362,39 @@ dnnl::graph::op::kind opstr2kind(const std::string &kind) {
         SAFE_V(FAIL);
     }
     return dnnl::graph::op::kind::LastSymbol;
+}
+
+// The list of operations considered Unary from documentation point of view.
+//
+// Note: this list is disconnected from the rest of driver internals.
+// TODO: come up with a single struct and provide different converters and
+// getters.
+bool is_unary(const std::string &kind) {
+    return is_unary(opstr2kind(kind));
+}
+bool is_unary(dnnl::graph::op::kind akind) {
+    using namespace dnnl::graph;
+    static const std::vector<op::kind> unary_ops {
+            op::kind::Abs,
+            op::kind::Clamp,
+            op::kind::Elu,
+            op::kind::Exp,
+            op::kind::GELU,
+            op::kind::HardSigmoid,
+            op::kind::HardSwish,
+            op::kind::LeakyReLU,
+            op::kind::Log,
+            op::kind::Mish,
+            op::kind::ReLU,
+            op::kind::Round,
+            op::kind::Sigmoid,
+            op::kind::SoftPlus,
+            op::kind::Sqrt,
+            op::kind::Square,
+            op::kind::Tanh,
+    };
+    return std::any_of(unary_ops.begin(), unary_ops.end(),
+            [akind](dnnl::graph::op::kind _kind) { return _kind == akind; });
 }
 
 dnnl::graph::op::attr attrstr2kind(const std::string &attr_name) {
@@ -510,33 +547,57 @@ std::string get_default_tag(size_t length) {
     return mtag;
 }
 
-std::string strides2memory_tag(const size_t ndims,
+// refer to the implementation of md2fmt_tag_str() in verbose.cpp.
+std::string strides2memory_tag(const dnnl::graph::logical_tensor::dims &dims,
         const dnnl::graph::logical_tensor::dims &strides, bool use_x_tag) {
+    const size_t ndims = dims.size();
     if (ndims == 0) return "";
-    std::string template_tag = "abcdefghijk";
-    std::vector<std::pair<int64_t, char>> vp;
-    bool valid_strides = ndims == strides.size();
+
+    const std::string template_tag = "abcdefghijk";
     std::string memory_tag;
 
-    // Inserting element in pair vector to keep track of indexes
+    // validate strides
+    bool valid_strides = ndims == strides.size();
     for (size_t i = 0; i < strides.size(); ++i) {
-        if (strides[i] > 0) {
-            vp.emplace_back(strides[i], template_tag.at(i));
-        } else {
-            valid_strides = false;
-        }
+        if (strides[i] <= 0) valid_strides = false;
     }
 
     if (valid_strides) {
-        // Sort the strides to descending order
-        std::sort(vp.begin(), vp.end(),
-                [](const std::pair<int64_t, char> &x,
-                        const std::pair<int64_t, char> &y) {
-                    return x.first > y.first;
-                });
-        for (size_t i = 0; i < strides.size(); ++i) {
-            memory_tag += vp[i].second;
+        struct sort_key_t {
+            uint64_t stride_order;
+            int64_t outer_block;
+            uint64_t idx;
+            char dim_char;
+        };
+
+        std::vector<sort_key_t> sort_keys(ndims);
+        for (size_t i = 0; i < ndims; ++i) {
+            sort_key_t key;
+            key.stride_order = strides[i];
+            key.outer_block = dims[i];
+            key.idx = i;
+            key.dim_char = template_tag.at(i);
+            sort_keys[i] = key;
         }
+
+        // Sort the strides to descending order
+        std::sort(sort_keys.begin(), sort_keys.end(),
+                [](const sort_key_t &left, const sort_key_t &right) {
+            if (left.stride_order < right.stride_order) return false;
+            if (left.stride_order == right.stride_order) {
+                if (left.outer_block < right.outer_block) return false;
+                if (left.outer_block == right.outer_block)
+                    return left.idx < right.idx;
+            }
+            return true;
+        });
+
+        char dim_chars[DNNL_MAX_NDIMS + 1];
+        for (size_t i = 0; i < ndims; ++i)
+            dim_chars[i] = sort_keys[i].dim_char;
+        dim_chars[ndims] = '\0';
+
+        memory_tag = std::string(dim_chars);
     } else {
         memory_tag = template_tag.substr(0, ndims);
     }
@@ -775,6 +836,17 @@ int get_prim_arg_name_from_graph_op_output_offset(
                 return -1;
             }
 
+        } break;
+        case dnnl::graph::op::kind::RMSNorm: {
+            // RMSNorm OP in oneDNN Graph API only have 1 output
+            if (output_offset == 0)
+                return DNNL_ARG_DST;
+            else {
+                BENCHDNN_PRINT(0, "Error: no matching ARG for offset %d",
+                        static_cast<int>(output_offset));
+                assert(false);
+                return -1;
+            }
         } break;
         case dnnl::graph::op::kind::SoftMax: {
             if (output_offset == 0)
@@ -1148,6 +1220,34 @@ int get_prim_arg_name_from_graph_op_input_offset(
                 return -1;
             }
         } break;
+        case dnnl::graph::op::kind::RMSNorm: {
+            if (input_offset == 0)
+                return DNNL_ARG_SRC;
+            else if (input_offset == 1)
+                return DNNL_ARG_SCALE; // gamma
+            else {
+                BENCHDNN_PRINT(0, "Error: no matching ARG for offset %zu",
+                        input_offset);
+                assert(false);
+                return -1;
+            }
+        } break;
+        case dnnl::graph::op::kind::Dropout: {
+            if (input_offset == 0)
+                return DNNL_ARG_SRC;
+            else if (input_offset == 1)
+                return DNNL_ARG_ATTR_DROPOUT_SEED;
+            else if (input_offset == 2)
+                return DNNL_ARG_ATTR_DROPOUT_OFFSET;
+            else if (input_offset == 3)
+                return DNNL_ARG_ATTR_DROPOUT_PROBABILITY;
+            else {
+                BENCHDNN_PRINT(0, "Error: no matching ARG for offset %zu",
+                        input_offset);
+                assert(false);
+                return -1;
+            }
+        } break;
         default: {
             return DNNL_ARG_SRC;
         } break;
@@ -1220,9 +1320,51 @@ dnnl_data_type_t convert_dt(const dnnl::graph::logical_tensor::data_type dt) {
         case graph_dt::f8_e4m3: return dnnl_f8_e4m3;
         case graph_dt::s4: return dnnl_s4;
         case graph_dt::u4: return dnnl_u4;
+        case graph_dt::s64: return dnnl_s64;
         case graph_dt::undef:
         default: return dnnl_data_type_undef;
     }
+}
+
+stream_staller_t::stream_staller_t(graph::cpp_stream_t &stream) {
+#if DNNL_CPU_THREADING_RUNTIME == DNNL_RUNTIME_THREADPOOL
+    const auto &eng = stream.get_engine();
+    auto eng_kind = eng.get_kind();
+    if (eng_kind != dnnl::engine::kind::cpu) return;
+
+    auto tp = dnnl::threadpool_interop::get_threadpool(stream);
+
+    // `tp` is not expected to be empty for CPU streams with threadpol runtime.
+    if (!tp) SAFE_V(FAIL);
+
+    // Only relevant for asynchronous threadpool, synchronous will
+    // deadlock.
+    if (tp->get_flags()
+            != dnnl::threadpool_interop::threadpool_iface::ASYNCHRONOUS)
+        return;
+
+    // Each thread from the threadpool should get the task to be stalled.
+    const int num_tasks = tp->get_num_threads();
+
+    // The main thread must be let through, otherwise it deadlocks as
+    // task submission won't happen.
+    std::thread::id main_thr_id = std::this_thread::get_id();
+
+    // Shared future allows to pass all waiting threads at once inside the
+    // palallel call.
+    std::shared_future<void> fut(prom_.get_future());
+
+    tp->parallel_for(num_tasks, [=](int, int) {
+        std::thread::id id_thr = std::this_thread::get_id();
+        if (id_thr != main_thr_id) fut.wait();
+    });
+#endif
+}
+
+void stream_staller_t::release() {
+#if DNNL_CPU_THREADING_RUNTIME == DNNL_RUNTIME_THREADPOOL
+    prom_.set_value();
+#endif
 }
 
 } // namespace graph

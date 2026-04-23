@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -209,8 +209,6 @@ private:
     int out_typesize_;
     int bia_typesize_;
 
-    int is_oc_scale_;
-
     using reg64_t = const Xbyak::Reg64;
 
     // Register decomposition
@@ -296,7 +294,7 @@ private:
             int tail_size, bool store, Xbyak::Opmask ktail_mask,
             bool skip_cvt2ps = false);
 
-    Vmm vector(int m, int n, int n_block) { return Vmm(m * n_block + n); };
+    Vmm vector(int m, int n, int n_block) { return Vmm(m * n_block + n); }
 
     void inject_attr_postops(int m_block, int n_block, int tail = 0);
     void apply_comp(int m_block, int n_block, int tail = 0);

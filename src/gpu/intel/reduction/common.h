@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2024-2025 Intel Corporation
+* Copyright 2024 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -31,7 +31,9 @@
     dt __attribute__((overloadable)) max(dt lhs, dt rhs) { \
         return fmax(lhs, rhs); \
     } \
-    dt __attribute__((overloadable)) abs(dt val) { return fabs(val); }
+    dt __attribute__((overloadable)) abs(dt val) { \
+        return fabs(val); \
+    }
 
 DEF_fp_minmax_abs(float);
 IF_HALF_SUPPORTED(DEF_fp_minmax_abs(half));
@@ -42,8 +44,8 @@ IF_DOUBLE_SUPPORTED(DEF_fp_minmax_abs(double));
 // *********** Generic reduction functions ************* //
 
 #define DEF_reduce(dt) \
-    dt __attribute__((overloadable)) \
-            reduce(int alg, dt lhs, dt rhs, float power) { \
+    dt __attribute__((overloadable)) reduce( \
+            int alg, dt lhs, dt rhs, float power) { \
         switch (alg) { \
             case (REDUCTION_MAX): return max(lhs, rhs); \
             case (REDUCTION_MIN): return min(lhs, rhs); \

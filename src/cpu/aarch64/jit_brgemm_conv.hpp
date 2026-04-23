@@ -1,7 +1,7 @@
 /*******************************************************************************
-* Copyright 2021-2023 Intel Corporation
+* Copyright 2021 Intel Corporation
 * Copyright 2024-2025 FUJITSU LIMITED
-* Copyright 2025 Arm Ltd. and affiliates
+* Copyright 2025-2026 Arm Ltd. and affiliates
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -19,23 +19,18 @@
 #ifndef CPU_AARCH64_JIT_BRGEMM_CONV_HPP
 #define CPU_AARCH64_JIT_BRGEMM_CONV_HPP
 
+#include <array>
+#include <map>
+#include <unordered_map>
+
 #include "common/c_types_map.hpp"
-#include "common/dnnl_thread.hpp"
 #include "common/memory_tracking.hpp"
 #include "common/primitive.hpp"
 #include "common/utils.hpp"
-
-#include "cpu/cpu_convolution_pd.hpp"
-#include "cpu/platform.hpp"
-
-#include "cpu/aarch64/brgemm/brgemm.hpp"
 #include "cpu/aarch64/brgemm/brgemm_containers.hpp"
-#include "cpu/aarch64/cpu_barrier.hpp"
-#include "cpu/aarch64/cpu_reducer.hpp"
-#include "cpu/aarch64/jit_brgemm_conv_comp_pad_kernel.hpp"
 #include "cpu/aarch64/jit_brgemm_conv_trans_kernel.hpp"
-#include "cpu/aarch64/jit_brgemm_conv_utils.hpp"
 #include "cpu/aarch64/jit_brgemm_post_ops.hpp"
+#include "cpu/cpu_convolution_pd.hpp"
 
 namespace dnnl {
 namespace impl {
@@ -70,23 +65,28 @@ struct brgemm_convolution_fwd_t : public primitive_t {
 
         // batch sizes info for unrolled kernels
         int bs_c;
-        std::vector<int> batchsizes;
-
-        inline size_t get_bs_idx(int kd_b, int kd_e, int kh_b, int kh_e) const {
-            assert(0 <= kd_b && kd_b < KD);
-            assert(1 <= kd_e && kd_e < KD + 1);
-            assert(0 <= kh_b && kh_b < KH);
-            assert(1 <= kh_e && kh_e < KH + 1);
-            return (((size_t)kd_b * KD + (kd_e - 1)) * KH + kh_b) * KH + kh_e
-                    - 1;
-        }
+        // need custom hasher to use array as key in unordered_map
+        struct hasher_t {
+            size_t operator()(const std::array<int, 4> &a) const {
+                size_t seed = 0;
+                for (auto e : a)
+                    seed = hash_combine(seed, e);
+                return seed;
+            }
+        };
+        std::unordered_map<std::array<int, 4>, int, hasher_t> batchsizes;
 
         inline size_t get_brg_idx(int m, bool do_initialization, bool is_N_tail,
                 bool is_K_tail, int kd_b, int kd_e, int kh_b, int kh_e) const {
-            auto bs_idx = jcp_.use_uker
-                    ? batchsizes[get_bs_idx(kd_b, kd_e, kh_b, kh_e)]
-                    : 0;
-            if (bs_idx < 0) return 0;
+            int bs_idx = 0;
+            if (jcp_.use_uker) {
+                const auto bs = batchsizes.find({kd_b, kd_e, kh_b, kh_e});
+                if (bs == batchsizes.end()) {
+                    assert(!"unregistered batch size");
+                    return 0;
+                }
+                bs_idx = bs->second;
+            }
             return (((m * bs_c + bs_idx) * 2
                             + static_cast<int>(do_initialization))
                                    * 2
@@ -106,10 +106,11 @@ struct brgemm_convolution_fwd_t : public primitive_t {
             for_(bool i_init : {false, true})
             for_(bool i_N_tail : {N_begin, N_end})
             for_(bool i_K_tail : {K_begin, K_end})
-            for_(int kd_b = 0; kd_b < KD; kd_b++)
-            for_(int kd_e = 1; kd_e <= KD; kd_e++)
-            for_(int kh_b = 0; kh_b < KH; kh_b++)
-            for (int kh_e = 1; kh_e <= KH; kh_e++) {
+            for (const auto &key_value_pair : batchsizes) {
+                const int kd_b = key_value_pair.first[0];
+                const int kd_e = key_value_pair.first[1];
+                const int kh_b = key_value_pair.first[2];
+                const int kh_e = key_value_pair.first[3];
                 const auto brg_idx = get_brg_idx(
                         m, i_init, i_N_tail, i_K_tail, kd_b, kd_e, kh_b, kh_e);
                 if ((*brgemm_descriptors_)[brg_idx]) return brg_idx;
@@ -119,7 +120,7 @@ struct brgemm_convolution_fwd_t : public primitive_t {
 
         inline int maybe_invert(int k, int K) const {
             return desc()->use_inversion ? K - 1 - k : k;
-        };
+        }
 
         void init_batch(int icc, const char *src_base, const char *wei_base,
                 int n_ic_blocks, int ic_block_s, int iid_b, int iih_b,
@@ -206,7 +207,7 @@ private:
 
     inline int maybe_invert_range(int k, int k_inv, int K) const {
         return pd()->desc()->use_inversion ? K - k_inv : k;
-    };
+    }
 
     void get_kw_range(
             int ow, int &kw_s, int &kw_full_s, int &kw_full_e, int &kw_e) const;
@@ -232,7 +233,7 @@ private:
             int last_n, int last_icc, int last_odb, int last_ohb,
             int last_owb) const;
 
-    status_t add_po_kernel(brgemm_t *bcfg, int ker_idx, bool is_init);
+    status_t add_po_kernel(brgemm_desc_t *bcfg, int ker_idx, bool is_init);
     void add_po_kernels(int i_N, int init_bcast_dim, int po_bcast_dim);
     status_t add_brg_kernel(int M, int i_N, int i_K, int i_init, int kd_b,
             int kd_e, int kh_b, int kh_e);
@@ -250,7 +251,8 @@ private:
 
     brgemm_containers::brgemm_kernel_container_t brgemm_kernels_;
 
-    std::vector<std::unique_ptr<jit_brgemm_kernel_post_ops_t<isa>>> kernels_po_;
+    std::map<size_t, std::unique_ptr<jit_brgemm_kernel_post_ops_t<isa>>>
+            kernels_po_;
     std::unique_ptr<jit_sve_core_brgemm_conv_trans_kernel::
                     jit_sve_core_brgemm_conv_trans_kernel_t>
             copy_to_pbuffer_;

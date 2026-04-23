@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -99,6 +99,9 @@ struct xe_t : public primitive_t {
                                      && src_md(1)->data_type == bf16
                                      && dst_md()->data_type == u8),
                     VERBOSE_UNSUPPORTED_POSTOP);
+
+            VDISPATCH_BINARY(
+                    !has_zero_dim_memory(), VERBOSE_EMPTY_TENSOR, "dst");
 
             CHECK(init_conf(engine));
             return status::success;

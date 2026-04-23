@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2024-2025 Intel Corporation
+* Copyright 2024 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -20,7 +20,7 @@
 #include <tuple>
 #include <vector>
 
-#include "common/utils.hpp"
+#include "common/verbose.hpp"
 
 // This file contains utility functionality for heterogeneous runtimes such
 // as OpenCL and SYCL.
@@ -99,6 +99,8 @@ struct runtime_version_t {
         return utils::format("%d.%d.%d", major, minor, build);
     }
 };
+
+void *find_symbol(const char *library_name, const char *symbol);
 
 } // namespace xpu
 } // namespace impl

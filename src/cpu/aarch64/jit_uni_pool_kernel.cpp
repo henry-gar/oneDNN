@@ -1,8 +1,8 @@
 /*******************************************************************************
-* Copyright 2017-2023 Intel Corporation
+* Copyright 2017 Intel Corporation
 * Copyright 2018 YANDEX LLC
 * Copyright 2020-2024 FUJITSU LIMITED
-* Copyright 2025 Arm Ltd. and affiliates
+* Copyright 2025-2026 Arm Ltd. and affiliates
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -17,13 +17,13 @@
 * limitations under the License.
 *******************************************************************************/
 
-#include <bitset>
-
 #include "common/dnnl_thread.hpp"
+#include "common/pooling_pd.hpp"
 
-#include "cpu/cpu_pooling_pd.hpp"
-
+#include <cstdint>
 #include "cpu/aarch64/jit_uni_pool_kernel.hpp"
+
+#include "xbyak_aarch64/xbyak_aarch64/xbyak_aarch64_util.h"
 
 namespace dnnl {
 namespace impl {
@@ -66,9 +66,9 @@ jit_uni_pool_kernel_t<isa>::jit_uni_pool_kernel_t(
         const binary_injector::static_params_t bsp {
                 reg_param, get_supported_bcast_strategies(), rhs_sp};
 
-        postops_injector_
-                = utils::make_unique<injector::jit_uni_postops_injector_t<isa>>(
-                        this, jpp.post_ops, bsp);
+        postops_injector_ = utils::make_unique<
+                injector::jit_uni_postops_injector_t<to_vla_sve(isa)>>(
+                this, jpp.post_ops, bsp);
     }
 }
 
@@ -123,18 +123,26 @@ status_t jit_uni_pool_kernel_t<isa>::init_conf(jit_pool_conf_t &jpp,
     jpp.ndims = ndims;
     jpp.mb = src_d.dims()[0];
     jpp.c_without_padding = src_d.dims()[1];
-    switch (isa) {
-        case sve_512: jpp.c_block = 16; break;
-        default: jpp.c_block = 8; break;
-    }
+
+    jpp.c_block = simd_bytes(isa) / 4;
 
     jpp.alg = pd.alg_kind;
     jpp.tmp_md = memory_desc_t();
 
     using namespace format_tag;
-    const auto blocked_fmt_tag = utils::one_of(isa, sve_512)
-            ? utils::pick(ndims - 3, nCw16c, nChw16c, nCdhw16c)
-            : utils::pick(ndims - 3, nCw8c, nChw8c, nCdhw8c);
+    dnnl_format_tag_t blocked_fmt_tag = dnnl_format_tag_undef;
+    switch (simd_bytes(isa)) {
+        case util::SVE_512:
+            blocked_fmt_tag = utils::pick(ndims - 3, nCw16c, nChw16c, nCdhw16c);
+            break;
+        case util::SVE_256:
+            blocked_fmt_tag = utils::pick(ndims - 3, nCw8c, nChw8c, nCdhw8c);
+            break;
+        case util::SVE_128:
+            blocked_fmt_tag = utils::pick(ndims - 3, nCw4c, nChw4c, nCdhw4c);
+            break;
+        default: assert(!"unreachable isa");
+    }
 
     // src_d.data_type() is equal to dst_d.data_type(). This is checked in init
     auto ncsp_fmt_tag = format_tag::undef;
@@ -161,8 +169,7 @@ status_t jit_uni_pool_kernel_t<isa>::init_conf(jit_pool_conf_t &jpp,
                                     && block_size > L3_cache_size_per_core)));
 
     ncsp_fmt_tag
-            = ((forward_ncsp_allowed || backward_ncsp_allowed)
-                      && utils::one_of(isa, sve_512, sve_256) && ndims <= 5)
+            = ((forward_ncsp_allowed || backward_ncsp_allowed) && ndims <= 5)
             ? utils::pick(ndims - 3, ncw, nchw, ncdhw)
             : format_tag::undef;
 
@@ -272,7 +279,7 @@ status_t jit_uni_pool_kernel_t<isa>::init_conf(jit_pool_conf_t &jpp,
     // select jpp.ur_bc
     if (jpp.tag_kind == jit_memory_tag_kind_t::nspc) {
         auto min_ur_w = nstl::max(1, utils::div_up(jpp.l_pad, jpp.stride_w));
-        int min_ur_w1 = utils::div_up(right_pad, jpp.stride_w);
+        int min_ur_w1 = utils::div_up(nstl::max(0, right_pad), jpp.stride_w);
         if (min_ur_w < min_ur_w1) { min_ur_w = min_ur_w1; }
         jpp.ur_bc = nstl::min(jpp.nb_c, nstl::max(1, jpp.ur / min_ur_w));
         //take into account threading - to have enough work for parallelization
@@ -331,7 +338,7 @@ status_t jit_uni_pool_kernel_t<isa>::init_conf(jit_pool_conf_t &jpp,
 
 static int reg_ind(int shift, int bc, int j, int ur_bc, int ur_w) noexcept {
     return shift * ur_bc * ur_w + bc * ur_w + j;
-};
+}
 
 template <cpu_isa_t isa>
 inline void jit_uni_pool_kernel_t<isa>::prepare_tail_mask() {
@@ -345,8 +352,8 @@ inline void jit_uni_pool_kernel_t<isa>::prepare_tail_mask() {
 template <cpu_isa_t isa>
 inline void jit_uni_pool_kernel_t<isa>::load(const int idx,
         const xreg_t &reg_ptr, const int offset,
-        const bool is_c_tail_proccessing) {
-    if (is_c_tail_proccessing && !jpp.is_c_padded) {
+        const bool is_c_tail_processing) {
+    if (is_c_tail_processing && !jpp.is_c_padded) {
         add_imm(X_DEFAULT_ADDR, reg_ptr, offset, X_TMP_0);
         ld1w(ZRegS(idx), k_c_tail_mask_s / T_z, ptr(X_DEFAULT_ADDR));
     } else {
@@ -358,10 +365,10 @@ inline void jit_uni_pool_kernel_t<isa>::load(const int idx,
 template <cpu_isa_t isa>
 inline void jit_uni_pool_kernel_t<isa>::store(const int idx,
         const xreg_t &reg_ptr, const int offset,
-        const bool is_c_tail_proccessing) {
+        const bool is_c_tail_processing) {
     add_imm(X_DEFAULT_ADDR, reg_ptr, offset, X_TMP_0);
 
-    if (is_c_tail_proccessing) {
+    if (is_c_tail_processing) {
         if (!jpp.is_c_padded) {
             st1w(ZRegS(idx), k_c_tail_mask_s, ptr(X_DEFAULT_ADDR));
         } else {
@@ -450,7 +457,7 @@ void jit_uni_pool_kernel_t<isa>::apply_postops(int ur_bc, int ur_w, int c_block,
 
 template <cpu_isa_t isa>
 inline void jit_uni_pool_kernel_t<isa>::maybe_recalculate_divisor(
-        int jj, int ur_w, int pad_l, int pad_r, bool with_c_tail_proccessing) {
+        int jj, int ur_w, int pad_l, int pad_r, bool with_c_tail_processing) {
     if (jpp.alg == pooling_avg_exclude_padding) {
         int kw = jpp.kw;
         int stride_w = jpp.stride_w;
@@ -471,7 +478,7 @@ inline void jit_uni_pool_kernel_t<isa>::maybe_recalculate_divisor(
 
 template <cpu_isa_t isa>
 inline void jit_uni_pool_kernel_t<isa>::avg_step(int ur_w, int ur_bc, int pad_l,
-        int pad_r, bool with_c_tail_proccessing) {
+        int pad_r, bool with_c_tail_processing) {
 
     auto iw = jpp.iw;
     auto kw = jpp.kw;
@@ -480,16 +487,16 @@ inline void jit_uni_pool_kernel_t<isa>::avg_step(int ur_w, int ur_bc, int pad_l,
     auto dt_size = jpp.dt_size;
     const int c_off
             = (jpp.tag_kind == jit_memory_tag_kind_t::nspc) ? jpp.c : c_block;
-    Label kd_label, kh_label;
+    Label kd_label;
 
     const auto is_tail_processing = [&](int bc) {
-        return with_c_tail_proccessing && bc == (ur_bc - 1);
+        return with_c_tail_processing && bc == (ur_bc - 1);
     };
 
     for (int jj = 0; jj < ur_w; jj++) {
         if (jpp.is_backward)
             maybe_recalculate_divisor(
-                    jj, ur_w, pad_l, pad_r, with_c_tail_proccessing);
+                    jj, ur_w, pad_l, pad_r, with_c_tail_processing);
         for (int bci = 0; bci < ur_bc; bci++) {
             const auto accr_i = reg_ind(0, bci, jj, ur_bc, ur_w);
             auto accvr = vreg(accr_i);
@@ -516,11 +523,10 @@ inline void jit_uni_pool_kernel_t<isa>::avg_step(int ur_w, int ur_bc, int pad_l,
         mov(aux_reg_input, reg_input);
     }
 
-    eor(kj, kj, kj);
-    L(kh_label);
-    {
+    mov(kj, reg_kh);
+    asm_do_while(kj, [&]() {
         for (int ki = 0; ki < kw; ki++) {
-            int jj_start = nstl::max(0, utils::div_up(pad_l - ki, stride_w));
+            int jj_start = utils::div_up(nstl::max(0, pad_l - ki), stride_w);
             int jj_end = ur_w
                     - utils::div_up(
                             nstl::max(0, ki + pad_r - (kw - 1)), stride_w);
@@ -555,12 +561,10 @@ inline void jit_uni_pool_kernel_t<isa>::avg_step(int ur_w, int ur_bc, int pad_l,
                 }
             }
         }
+
         add_imm(aux_reg_input, aux_reg_input, (jpp.dt_size * iw * c_off),
                 X_TMP_0);
-        adds(kj, kj, 1);
-        cmp(kj, reg_kh);
-        b(LT, kh_label);
-    }
+    });
 
     if (jpp.simple_alg && jpp.ndims == 5) {
         add_imm(aux_reg_input_d, aux_reg_input_d,
@@ -575,7 +579,7 @@ inline void jit_uni_pool_kernel_t<isa>::avg_step(int ur_w, int ur_bc, int pad_l,
     if (!jpp.is_backward) {
         for (int jj = 0; jj < ur_w; jj++) {
             maybe_recalculate_divisor(
-                    jj, ur_w, pad_l, pad_r, with_c_tail_proccessing);
+                    jj, ur_w, pad_l, pad_r, with_c_tail_processing);
             for (int bci = 0; bci < ur_bc; bci++) {
                 const auto accr_i = reg_ind(0, bci, jj, ur_bc, ur_w);
                 const auto accvr = vreg(accr_i);
@@ -600,17 +604,17 @@ inline void jit_uni_pool_kernel_t<isa>::avg_step(int ur_w, int ur_bc, int pad_l,
 
 template <cpu_isa_t isa>
 inline void jit_uni_pool_kernel_t<isa>::max_step_fwd(int ur_w, int ur_bc,
-        int pad_l, int pad_r, bool with_c_tail_proccessing) {
+        int pad_l, int pad_r, bool with_c_tail_processing) {
     int iw = jpp.iw;
     int kw = jpp.kw;
     int stride_w = jpp.stride_w;
     int c_block = jpp.c_block;
     const int c_off
             = (jpp.tag_kind == jit_memory_tag_kind_t::nspc) ? jpp.c : c_block;
-    Label kd_label, kh_label;
+    Label kd_label;
 
     auto is_tail_processing = [&](int bc) {
-        return with_c_tail_proccessing && bc == (ur_bc - 1);
+        return with_c_tail_processing && bc == (ur_bc - 1);
     };
 
     mov_imm(W_TMP_0, float2int(nstl::numeric_limits<float>::lowest()));
@@ -639,11 +643,11 @@ inline void jit_uni_pool_kernel_t<isa>::max_step_fwd(int ur_w, int ur_bc,
     } else {
         mov(aux_reg_input, reg_input);
     }
-    eor(kj, kj, kj);
-    L(kh_label);
-    {
+
+    mov(kj, reg_kh);
+    asm_do_while(kj, [&]() {
         for (int ki = 0; ki < kw; ki++) {
-            int jj_start = nstl::max(0, utils::div_up(pad_l - ki, stride_w));
+            int jj_start = utils::div_up(nstl::max(0, pad_l - ki), stride_w);
             int jj_end = ur_w
                     - utils::div_up(
                             nstl::max(0, ki + pad_r - (kw - 1)), stride_w);
@@ -671,10 +675,7 @@ inline void jit_uni_pool_kernel_t<isa>::max_step_fwd(int ur_w, int ur_bc,
 
         add_imm(aux_reg_input, aux_reg_input, (jpp.dt_size * iw * c_off),
                 X_TMP_0);
-        adds(kj, kj, 1);
-        cmp(kj, reg_kh);
-        b(LT, kh_label);
-    }
+    });
 
     if (jpp.ndims == 5) {
         add_imm(aux_reg_input_d, aux_reg_input_d,
@@ -733,7 +734,7 @@ inline void jit_uni_pool_kernel_t<isa>::max_step_fwd(int ur_w, int ur_bc,
 
 template <cpu_isa_t isa>
 inline void jit_uni_pool_kernel_t<isa>::max_step_bwd(int ur_w, int ur_bc,
-        int pad_l, int pad_r, bool with_c_tail_proccessing) {
+        int pad_l, int pad_r, bool with_c_tail_processing) {
 
     int iw = jpp.iw;
     int kw = jpp.kw;
@@ -741,10 +742,10 @@ inline void jit_uni_pool_kernel_t<isa>::max_step_bwd(int ur_w, int ur_bc,
     int c_block = jpp.c_block;
     const int c_off
             = (jpp.tag_kind == jit_memory_tag_kind_t::nspc) ? jpp.c : c_block;
-    Label kd_label, kh_label;
+    Label kd_label;
 
     const auto is_tail_processing = [&](int bc) {
-        return with_c_tail_proccessing && bc == (ur_bc - 1);
+        return with_c_tail_processing && bc == (ur_bc - 1);
     };
 
     for_(int jj = 0; jj < ur_w; jj++)
@@ -785,11 +786,10 @@ inline void jit_uni_pool_kernel_t<isa>::max_step_bwd(int ur_w, int ur_bc,
         mov(aux_reg_input, reg_input);
     }
 
-    eor(kj, kj, kj);
-    L(kh_label);
-    {
+    mov(kj, reg_kh);
+    asm_do_while(kj, [&]() {
         for (int ki = 0; ki < kw; ki++) {
-            int jj_start = nstl::max(0, utils::div_up(pad_l - ki, stride_w));
+            int jj_start = utils::div_up(nstl::max(0, pad_l - ki), stride_w);
             int jj_end = ur_w
                     - utils::div_up(
                             nstl::max(0, ki + pad_r - (kw - 1)), stride_w);
@@ -813,12 +813,11 @@ inline void jit_uni_pool_kernel_t<isa>::max_step_bwd(int ur_w, int ur_bc,
 
             add(vmm_k_offset, vmm_k_offset, vmm_one);
         }
+
         add_imm(aux_reg_input, aux_reg_input, (jpp.dt_size * iw * c_off),
                 X_TMP_0);
-        adds(kj, kj, 1);
-        cmp(kj, reg_kh);
-        b(LT, kh_label);
-    }
+    });
+
     if (jpp.simple_alg && jpp.ndims == 5) {
         add_imm(aux_reg_input_d, aux_reg_input_d,
                 (jpp.dt_size * jpp.ih * iw * c_off), X_TMP_0);
@@ -836,16 +835,25 @@ inline void jit_uni_pool_kernel_t<isa>::max_step_bwd(int ur_w, int ur_bc,
 
 template <cpu_isa_t isa>
 void jit_uni_pool_kernel_t<isa>::zero_diff_src(
-        int ur_bc, bool with_c_tail_proccessing) {
+        int ur_bc, bool with_c_tail_processing) {
     const int c_off = (jpp.tag_kind == jit_memory_tag_kind_t::nspc)
             ? jpp.c
             : jpp.c_block;
 
-    Label l_skip, l_ih_loop, l_id_loop;
+    Label l_skip;
 
     auto is_tail_processing = [&](int bc) {
-        return with_c_tail_proccessing && bc == (ur_bc - 1);
+        return with_c_tail_processing && bc == (ur_bc - 1);
     };
+
+    TReg vzero = vmm_tmp;
+    eor(vzero.d, vzero.d, vzero.d);
+
+    const int width_size = jpp.iw * c_off * jpp.dt_size;
+
+    auto aux_reg_zero_ptr = tmp_gpr;
+
+    ldr(reg_zero_ptr, ptr(reg_param, GET_OFF(zero_ptr)));
 
     ldr(reg_zero_id, ptr(reg_param, GET_OFF(zero_id)));
     cmp(reg_zero_id, 0);
@@ -855,21 +863,11 @@ void jit_uni_pool_kernel_t<isa>::zero_diff_src(
     cmp(reg_zero_ih, 0);
     b(EQ, l_skip);
 
-    ldr(reg_zero_ptr, ptr(reg_param, GET_OFF(zero_ptr)));
-
-    TReg vzero = vmm_tmp;
-    eor(vzero.d, vzero.d, vzero.d);
-
-    const int width_size = jpp.iw * c_off * jpp.dt_size;
-
-    auto aux_reg_zero_ptr = tmp_gpr;
-
-    L(l_id_loop);
-    {
+    asm_do_while(reg_zero_id, [&]() {
         mov(aux_reg_zero_ptr, reg_zero_ptr);
         mov(aux_reg_zero_ih, reg_zero_ih);
-        L(l_ih_loop);
-        {
+
+        asm_do_while(aux_reg_zero_ih, [&]() {
             const int step = c_off * jpp.dt_size;
 
             // TODO: maybe a big code generated here
@@ -879,15 +877,13 @@ void jit_uni_pool_kernel_t<isa>::zero_diff_src(
                 store(vzero.getIdx(), reg_zero_ptr, offs,
                         is_tail_processing(bci));
             }
+
             add_imm(reg_zero_ptr, reg_zero_ptr, width_size, X_TMP_0);
-            subs(aux_reg_zero_ih, aux_reg_zero_ih, 1);
-            b(NE, l_ih_loop);
-        }
+        });
+
         mov(reg_zero_ptr, aux_reg_zero_ptr);
         add_imm(reg_zero_ptr, reg_zero_ptr, (width_size * jpp.ih), X_TMP_0);
-        subs(reg_zero_id, reg_zero_id, 1);
-        b(NE, l_id_loop);
-    }
+    });
 
     L(l_skip);
 }
@@ -897,7 +893,7 @@ void jit_uni_pool_kernel_t<isa>::generate() {
 
     this->preamble();
 
-    size_t simd_w_ = cpu_isa_traits<isa>::vlen / sizeof(float);
+    size_t simd_w_ = simd_elems(data_type_t::dnnl_f32, isa);
 
     if (simd_w_ != cpu_sveLen / sizeof(float))
         set_preg(P_ALL_ONE.s, simd_w_, X_TMP_0, X_TMP_1);
@@ -925,10 +921,10 @@ void jit_uni_pool_kernel_t<isa>::generate() {
     ldr(reg_ker_area_h, ptr(reg_param, GET_OFF(ker_area_h)));
     ldr(reg_nbc, ptr(reg_param, GET_OFF(ur_bc)));
 
-    auto process_oi = [&](int ur_w, int ur_bc, int lpad, int rpad,
-                              bool with_c_tail_proccessing,
-                              bool inc_reg = true) {
-        step(ur_w, ur_bc, lpad, rpad, with_c_tail_proccessing);
+    auto process_oi
+            = [&](int ur_w, int ur_bc, int lpad, int rpad,
+                      bool with_c_tail_processing, bool inc_reg = true) {
+        step(ur_w, ur_bc, lpad, rpad, with_c_tail_processing);
 
         if (!inc_reg) return;
 
@@ -1030,13 +1026,13 @@ void jit_uni_pool_kernel_t<isa>::generate() {
         ldr(tmp_gpr, ptr(reg_param, GET_OFF(b_c)));
         add(tmp_gpr, tmp_gpr, reg_nbc);
         cmp(tmp_gpr, jpp.nb_c);
-        b(Xbyak_aarch64::EQ, c_tail_processing_label);
+        b(EQ, c_tail_processing_label);
     }
 
     perform_ker(jpp.ur_bc, false);
 
     if (jpp.ur_bc_tail > 0) {
-        bl(finish_label);
+        b(finish_label);
 
         // If ur_bc_tail exists then we know that this is
         // last set of blocks to process and we need
@@ -1048,7 +1044,7 @@ void jit_uni_pool_kernel_t<isa>::generate() {
 
         L(finish_label);
     } else if (jpp.c_tail != 0) {
-        bl(finish_label);
+        b(finish_label);
 
         L(c_tail_processing_label);
         prepare_tail_mask();
@@ -1057,14 +1053,13 @@ void jit_uni_pool_kernel_t<isa>::generate() {
         L(finish_label);
     }
 
-    this->postamble();
+    postamble();
 
     if (jpp.with_eltwise && postops_injector_)
         postops_injector_->prepare_table();
 }
 
-template struct jit_uni_pool_kernel_t<sve_512>;
-template struct jit_uni_pool_kernel_t<sve_256>;
+template struct jit_uni_pool_kernel_t<sve>;
 
 } // namespace aarch64
 } // namespace cpu

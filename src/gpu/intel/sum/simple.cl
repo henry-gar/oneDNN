@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -17,7 +17,7 @@
 __kernel void simple_sum(
         __global float *input, __global float *output, float scale, int a) {
 
-    const int c = get_global_id(0);
+    const off_t c = get_global_id(0);
     if (a == 0)
         output[c] = (scale * input[c]);
     else

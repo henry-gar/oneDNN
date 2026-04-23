@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -282,13 +282,13 @@ status_t brgemm_desc_init(brgemm_desc_t *brg, cpu_isa_t isa,
 status_t brgemv_desc_init(brgemm_desc_t *brg, cpu_isa_t isa,
         brgemm_batch_kind_t type, impl::data_type_t dt_a,
         impl::data_type_t dt_x, bool transA, float alpha, float beta, dim_t LDA,
-        dim_t INCY, dim_t M, dim_t N) {
+        dim_t INCY, dim_t M, dim_t N, bool treat_y_as_row) {
 
     // Only f32 is supported for now.
     if (!utils::everyone_is(data_type::f32, dt_a, dt_x))
         return status::unimplemented;
 
-    // y = x*A^t is not yet implemented.
+    // y = A^t * x is not yet implemented.
     if (transA) return status::unimplemented;
 
     CHECK(brgemm_desc_init(brg, isa, type, dt_a, dt_x, transA, false,
@@ -296,6 +296,7 @@ status_t brgemv_desc_init(brgemm_desc_t *brg, cpu_isa_t isa,
             false));
 
     brg->is_gemv = true;
+    brg->treat_y_as_row = treat_y_as_row;
 
     return status::success;
 }
@@ -352,8 +353,8 @@ status_t brgemm_desc_set_postops(brgemm_desc_t *brg,
         return status::unimplemented;
     if (!IMPLICATION(one_of(data_type::f8_e5m2, dt_bias, dt_d)
                         || one_of(data_type::f8_e4m3, dt_bias, dt_d),
-                utils::one_of(true, mayiuse(avx512_core_amx_fp16),
-                        mayiuse(avx10_2_512))))
+                utils::one_of(
+                        true, mayiuse(avx512_core_amx_fp16), mayiuse(avx10_2))))
         return status::unimplemented;
     // check that combination of data types is allowed
     if ((brg->dt_a == data_type::u8 && brg->dt_b == data_type::s8)
@@ -373,12 +374,14 @@ status_t brgemm_desc_set_postops(brgemm_desc_t *brg,
             && (!one_of(dt_bias, data_type::undef, data_type::f32, dt_d)))
         return status::unimplemented;
     if (!IMPLICATION(brg->is_bf16,
-                one_of(dt_d, data_type::f32, data_type::bf16, data_type::f16)
+                one_of(dt_d, data_type::f32, data_type::bf16, data_type::f16,
+                        data_type::u8, data_type::s8)
                         && one_of(dt_bias, data_type::undef, data_type::f32,
                                 data_type::bf16, data_type::f16)))
         return status::unimplemented;
     if (!IMPLICATION(brg->is_f16,
-                one_of(dt_d, data_type::f32, data_type::f16)
+                one_of(dt_d, data_type::f32, data_type::f16, data_type::u8,
+                        data_type::s8)
                         && one_of(dt_bias, data_type::undef, data_type::f32,
                                 data_type::bf16, data_type::f16)))
         return status::unimplemented;
@@ -590,7 +593,7 @@ status_t brgemm_desc_set_attr(
     if (brg->is_fp8
             && !utils::one_of(true,
                     is_superset(brg->isa_impl, avx512_core_amx_fp16),
-                    is_superset(brg->isa_impl, avx10_2_512)))
+                    is_superset(brg->isa_impl, avx10_2)))
         return status::unimplemented;
 
     return status::success;
@@ -615,6 +618,15 @@ status_t brgemm_desc_finalize(brgemm_desc_t *brg) {
         if ((max_vpad > min_bd_block)) return status::unimplemented;
     }
 
+    // Required for EVEX encoding for offsets
+    // The kernel brgemm_amx_uker_t has support of large offsets in post-ops
+    if (!brg->can_dispatch_uker()) {
+        const dim_t max_d_stride
+                = brg->LDD * types::data_type_size(brg->dt_d) * brg->bcast_dim;
+        if (max_d_stride > std::numeric_limits<int32_t>::max())
+            return status::unimplemented;
+    }
+
     return status::success;
 }
 
@@ -636,7 +648,7 @@ status_t brgemm_kernel_create(
             CHECK(safe_ptr_assign<brgemm_kernel_t>(
                     *brg_kernel, new brdgmm_kernel_t<Xbyak::Ymm>(brg)));
         }
-    } else if (can_dispatch_uker(&brg)) {
+    } else if (brg.can_dispatch_uker()) {
         CHECK(safe_ptr_assign<brgemm_kernel_t>(
                 *brg_kernel, new brgemm_amx_uker_t(brg)));
     } else {

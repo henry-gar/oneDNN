@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2025 Intel Corporation
+* Copyright 2021 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -146,11 +146,13 @@ private:
             mapped_ptr_t<b_dt> &b_mem_reordered) const {
         static constexpr int k_pack = 4 / sizeof(b_dt);
 
-        dnnl::impl::parallel_nd(p.K, p.N, [&](int64_t k, int64_t n) {
+        const b_dt *b_mem_data = b_mem;
+        b_dt *b_mem_reordered_data = b_mem_reordered;
+        dnnl::impl::parallel_nd(p.K, p.N, [=](int64_t k, int64_t n) {
             size_t b_off = k * p.ldb + n;
             size_t b_reordered_off
                     = (k / k_pack) * p.ldb * k_pack + n * k_pack + k % k_pack;
-            b_mem_reordered[b_reordered_off] = b_mem[b_off];
+            b_mem_reordered_data[b_reordered_off] = b_mem_data[b_off];
         });
     }
 

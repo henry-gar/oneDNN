@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2025 Intel Corporation
+* Copyright 2021 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -194,7 +194,7 @@ bool node_inputs_matcher_t::match_input_by_offset(
     }
 
     return true;
-};
+}
 
 bool node_inputs_matcher_t::match_commutative_inputs() {
     // commutative ops need to consider switching inputs
@@ -685,9 +685,9 @@ std::vector<value_t::consumer_t> sort_op_consumers(
     std::vector<value_t::consumer_t> sorted_consumers = cons;
     std::sort(sorted_consumers.begin(), sorted_consumers.end(),
             [&](value_t::consumer_t con_1, value_t::consumer_t con_2) {
-                return con_1.get_op().get_attr<int64_t>(op_attr::op_depth)
-                        > con_2.get_op().get_attr<int64_t>(op_attr::op_depth);
-            });
+        return con_1.get_op().get_attr<int64_t>(op_attr::op_depth)
+                > con_2.get_op().get_attr<int64_t>(op_attr::op_depth);
+    });
 
     return sorted_consumers;
 }
@@ -927,8 +927,8 @@ bool match_graph_helper(const binding_t &local_bind, match_context_t *ctx,
 
         if (!match_node(local_bind, ctx, matched_op_map)) {
             matched_op_map.erase(local_bind.bind_op);
-            ctx->in_port_map = saved_in_map;
-            ctx->out_port_map = saved_out_map;
+            ctx->in_port_map = std::move(saved_in_map);
+            ctx->out_port_map = std::move(saved_out_map);
             return false;
         }
     }

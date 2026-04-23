@@ -1,7 +1,7 @@
 /*******************************************************************************
-* Copyright 2021-2023 Intel Corporation
+* Copyright 2021 Intel Corporation
 * Copyright 2024 FUJITSU LIMITED
-* Copyright 2024-2025 Arm Ltd. and affiliates
+* Copyright 2024-2026 Arm Ltd. and affiliates
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -19,7 +19,6 @@
 #include "common/c_types_map.hpp"
 #include "common/dnnl_thread.hpp"
 #include "common/memory_tracking.hpp"
-#include "common/tag_traits.hpp"
 #include "common/type_helpers.hpp"
 #include "common/utils.hpp"
 
@@ -120,7 +119,7 @@ status_t brgemm_matmul_t<isa>::pd_t::init(engine_t *engine) {
                 && !attr()->scales_.has_default_values(DNNL_ARG_WEIGHTS)
                 && attr()->scales_.get_mask(DNNL_ARG_WEIGHTS) > 0) {
             // This case requires scratchpad
-            if (N() == DNNL_RUNTIME_DIM_VAL) ok = false;
+            if (is_runtime_value(N())) ok = false;
         }
 
         if (!attr()->post_ops_.sum_with_default_dt()) return false;
@@ -152,6 +151,8 @@ status_t brgemm_matmul_t<isa>::pd_t::init(engine_t *engine) {
     VDISPATCH_MATMUL(is_dense_format_kind(), VERBOSE_NONTRIVIAL_STRIDE);
     VDISPATCH_MATMUL(mayiuse(isa), VERBOSE_UNSUPPORTED_ISA);
     VDISPATCH_MATMUL(problem_dt_correct, VERBOSE_UNSUPPORTED_DT);
+    VDISPATCH_MATMUL(
+            IMPLICATION(is_bf16, mayiuse_bf16()), VERBOSE_UNSUPPORTED_ISA);
     VDISPATCH_MATMUL(!has_zero_dim_memory(), VERBOSE_EMPTY_TENSOR, "");
     VDISPATCH_MATMUL(
             no_dynamic_strides_for_B_and_C, VERBOSE_RUNTIMEDIM_UNSUPPORTED);
@@ -178,7 +179,6 @@ status_t brgemm_matmul_t<isa>::pd_t::init(engine_t *engine) {
     const int max_m_ker_idx
             = bgmmc_.is_runtime_M ? max_num_dynamic_m_tails + 1 : 2;
 
-    assert(!is_bf16);
     const auto backup_isa = isa;
     for_(int i_bs = 0; i_bs < 2; i_bs++)
     for_(int i_init = 0; i_init < 2; i_init++)
@@ -194,14 +194,19 @@ status_t brgemm_matmul_t<isa>::pd_t::init(engine_t *engine) {
 
         int idx = get_brg_kernel_idx(i_bs, i_init, i_M, i_N, i_K);
         if (idx < 0) continue;
-        brgemm_t &brg = brg_descs_[idx];
+        brgemm_desc_t &brg = brg_descs_[idx];
         auto LDA = i_K && bgmmc_.use_buffer_a_tail_only
                 ? (dim_t)bgmmc_.wei_k_blk
                 : bgmmc_.LDA;
         const auto kernel_isa = i_M == max_m_ker_idx - 1 ? backup_isa : isa;
+        // In the case of BA 1xK gemmv, we set the layout to column major, so there is no
+        // need to transpose the weights.
+        const auto layout = (one_of(bgmmc_.wei_tag, ba) && bgmmc_.M == 1)
+                ? brgemm_col_major
+                : brgemm_row_major;
         CHECK(brgemm_desc_init(&brg, kernel_isa, bgmmc_.brg_type, bgmmc_.src_dt,
-                bgmmc_.wei_dt, false, false, brgemm_row_major, alpha, vbeta,
-                LDA, bgmmc_.LDB, bgmmc_.LDC, vM, vN, vK));
+                bgmmc_.wei_dt, false, false, layout, alpha, vbeta, LDA,
+                bgmmc_.LDB, bgmmc_.LDC, vM, vN, vK));
 
         auto LDD = bgmmc_.LDD;
         CHECK(brgemm_desc_set_postops(
@@ -255,8 +260,9 @@ status_t brgemm_matmul_t<isa>::init(engine_t *engine) {
         CHECK(safe_ptr_assign(brg_kernels_[idx], ker));
     }
 
-    if (bgmmc.use_buffer_b)
+    if (bgmmc.use_buffer_b) {
         CHECK(create_brgemm_matmul_copy_b(copy_B_kernel_, &bgmmc));
+    }
 
     if (bgmmc.use_buffer_a || bgmmc.use_buffer_a_tail_only)
         CHECK(create_brgemm_matmul_copy_a(copy_A_kernel_, &bgmmc));
@@ -285,7 +291,7 @@ status_t brgemm_matmul_t<isa>::execute_body(const exec_ctx_t &ctx) const {
     const auto dst_d = ctx.memory_mdw(DNNL_ARG_DST, pd()->dst_md());
     matmul_helper_t helper(src_d, weights_d, dst_d);
 
-    auto &scratchpad = ctx.get_scratchpad_grantor();
+    const auto &scratchpad = ctx.get_scratchpad_grantor();
     const float *oscales = precompute_scales(
             scratchpad, src_scales, wei_scales, pd()->N(), pd()->attr());
 
@@ -747,23 +753,23 @@ struct brgemm_matmul_t<isa>::brg_matmul_exec_ctx_t {
 
         zero_point_a_negative_val_ = src_zero_points
                 ? -cpu::io::load_int_value(
-                        pd->attr()->zero_points_.get_data_type(DNNL_ARG_SRC),
-                        src_zero_points, 0)
+                          pd->attr()->zero_points_.get_data_type(DNNL_ARG_SRC),
+                          src_zero_points, 0)
                 : 0;
         const int zero_point_b_val = wei_zero_points
                 ? cpu::io::load_int_value(
-                        pd->attr()->zero_points_.get_data_type(
-                                DNNL_ARG_WEIGHTS),
-                        wei_zero_points, 0)
+                          pd->attr()->zero_points_.get_data_type(
+                                  DNNL_ARG_WEIGHTS),
+                          wei_zero_points, 0)
                 : 0;
         zero_point_b_negative_val_ = -zero_point_b_val;
         zero_point_c_val_ = dst_zero_points
                 ? cpu::io::load_int_value(
-                        pd->attr()->zero_points_.get_data_type(DNNL_ARG_DST),
-                        dst_zero_points, 0)
+                          pd->attr()->zero_points_.get_data_type(DNNL_ARG_DST),
+                          dst_zero_points, 0)
                 : 0;
 
-        memory_tracking::grantor_t scratchpad = ctx.get_scratchpad_grantor();
+        const auto &scratchpad = ctx.get_scratchpad_grantor();
         const auto &bgmmc = pd->get_brgemm_matmul_conf();
 
         batch_element_ptr_ = scratchpad.template get<brgemm_batch_element_t>(
@@ -792,22 +798,22 @@ struct brgemm_matmul_t<isa>::brg_matmul_exec_ctx_t {
                 * (weights_d.size() - weights_d.additional_buffer_size());
         s8s8_compensation_ptr_ = (bgmmc.s8s8_compensation_required)
                 ? ((bgmmc.use_buffer_b)
-                                ? scratchpad.template get<int32_t>(
-                                        key_brgemm_primitive_buffer_comp)
-                                : const_cast<int32_t *>(
-                                        reinterpret_cast<const int32_t *>(
-                                                &data_B_ptr_[comp_offset])))
+                                  ? scratchpad.template get<int32_t>(
+                                            key_brgemm_primitive_buffer_comp)
+                                  : const_cast<int32_t *>(
+                                            reinterpret_cast<const int32_t *>(
+                                                    &data_B_ptr_[comp_offset])))
                 : nullptr;
         assert(IMPLICATION(bgmmc.s8s8_compensation_required,
                 bgmmc_.b_dt_sz == bgmmc_.tr_b_dt_sz));
 
         zero_point_a_compensations_ptr_ = bgmmc.has_zero_point_a
                 ? scratchpad.template get<int32_t>(
-                        key_brgemm_primitive_zp_comp_a)
+                          key_brgemm_primitive_zp_comp_a)
                 : nullptr;
         zero_point_b_compensations_ptr_ = bgmmc.has_zero_point_b
                 ? scratchpad.template get<int32_t>(
-                        key_brgemm_primitive_zp_comp_b)
+                          key_brgemm_primitive_zp_comp_b)
                 : nullptr;
 
         zero_point_mixed_ab_compensation_component_
@@ -830,6 +836,8 @@ struct brgemm_matmul_t<isa>::brg_matmul_exec_ctx_t {
                     = weights_d.size() - weights_d.additional_buffer_size();
             const size_t b_batch
                     = get_bb_idx(bgmmc.batch - 1, bgmmc_.bcast_B_desc) + 1;
+            assert(IMPLICATION(bgmmc.s8s8_compensation_required,
+                    !is_runtime_value(bgmmc.s8s8_comp_b_str)));
             const size_t s8s8_buffer_sz = bgmmc.s8s8_compensation_required
                     ? sizeof(int32_t) * b_batch * bgmmc.s8s8_comp_b_str
                     : 0;
@@ -1127,11 +1135,15 @@ struct brgemm_matmul_t<isa>::brg_matmul_exec_ctx_t {
     }
 
     // Auxiliary functions for getting offsets with pre-calculated memory
-    // strides for each tensor to get general sulution for all possible
+    // strides for each tensor to get general solution for all possible
     // dimension without significant overhead
     dim_t get_data_A_off(int b, int m, int k) const {
         using namespace format_tag;
-        if (bgmmc_.src_tag == acbd || bgmmc_.src_tag == adbc) {
+        if (one_of(bgmmc_.src_tag, acbd, adbc)
+                /* this is a special case when src can be represented
+                   by plain and transposed tags due to a batch dim equal to 1 */
+                || (one_of(bgmmc_.src_tag, abcd, abdc)
+                        && bgmmc_.A_ptr_shift_b != 0)) {
             dim_t b_off = 0;
             if (!bgmmc_.bcast_A_desc.bcast_mask) { // no broadcast
                 const dim_t batch_dim1 = bgmmc_.bcast_A_desc.batch_dims[1];
@@ -1148,7 +1160,11 @@ struct brgemm_matmul_t<isa>::brg_matmul_exec_ctx_t {
 
     dim_t get_data_B_off(int b, int k, int n) const {
         using namespace format_tag;
-        if (bgmmc_.wei_tag == acbd || bgmmc_.wei_tag == adbc) {
+        if (one_of(bgmmc_.wei_tag, acbd, adbc)
+                /* this is a special case when weights can be represented
+                   by plain and transposed tags due to a batch dim equal to 1 */
+                || (one_of(bgmmc_.wei_tag, abcd, abdc)
+                        && bgmmc_.B_ptr_shift_b != 0)) {
             dim_t b_off = 0;
             if (!bgmmc_.bcast_B_desc.bcast_mask) { // no broadcast
                 const dim_t batch_dim1 = bgmmc_.bcast_B_desc.batch_dims[1];
@@ -1185,7 +1201,9 @@ struct brgemm_matmul_t<isa>::brg_matmul_exec_ctx_t {
     dim_t get_data_C_off(int b, int m, int n) const {
         using namespace format_tag;
         assert(bgmmc_.dst_tag != adbc);
-        if (bgmmc_.dst_tag == acbd) {
+        if (bgmmc_.dst_tag == acbd
+                || (one_of(bgmmc_.dst_tag, abcd, abdc)
+                        && bgmmc_.C_ptr_shift_b != 0)) {
             const dim_t batch_dim1 = bgmmc_.bcast_A_desc.batch_dims[1];
             dim_t b_off = bgmmc_.C_strides[2] * (b % batch_dim1)
                     + (b / batch_dim1) * bgmmc_.C_ptr_shift_b;
@@ -1208,6 +1226,7 @@ struct brgemm_matmul_t<isa>::brg_matmul_exec_ctx_t {
         const int n_blk_local = bgmmc_.use_buffer_b
                 ? n_blk_idx % bgmmc_.N_chunk_size
                 : n_blk_idx;
+        assert(!is_runtime_value(bgmmc_.s8s8_comp_b_str));
         return s8s8_compensation_ptr_ + ithr * bgmmc_.s8s8_comp_ithr_str
                 + get_bb_idx(b, bgmmc_.bcast_B_desc) * bgmmc_.s8s8_comp_b_str
                 + n_blk_local * bgmmc_.s8s8_comp_n_str;
@@ -1498,8 +1517,10 @@ private:
     std::vector<tail_processing_t> m_tail_processing_;
 };
 
+template struct brgemm_matmul_t<sme>;
 template struct brgemm_matmul_t<sve_512>;
 template struct brgemm_matmul_t<sve_256>;
+template struct brgemm_matmul_t<sve_128>;
 
 } // namespace matmul
 } // namespace aarch64

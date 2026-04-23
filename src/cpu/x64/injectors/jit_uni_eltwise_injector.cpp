@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -566,12 +566,12 @@ void jit_uni_eltwise_injector_t<isa, Wmm>::tanh_compute_vector_fwd(
             case avx512_core_fp16:
             case avx512_core_bf16:
             case avx512_core:
-            case avx10_2_512: break;
+            case avx10_2: break;
             default: assert(!"unimplemented");
         }
     };
-    auto gather_coefficient = [&](Vmm vmm_coeff, int coeff_idx,
-                                      Vmm vmm_pol_idx) {
+    auto gather_coefficient
+            = [&](Vmm vmm_coeff, int coeff_idx, Vmm vmm_pol_idx) {
         switch (isa) {
             case sse41:
                 for (int idx = 0; idx < 4; ++idx) {
@@ -606,7 +606,7 @@ void jit_uni_eltwise_injector_t<isa, Wmm>::tanh_compute_vector_fwd(
             case avx512_core_fp16:
             case avx512_core_bf16:
             case avx512_core:
-            case avx10_2_512:
+            case avx10_2:
                 // we use vpermt2ps to not override the indices
                 // this also enables to save a register for table loading
                 {
@@ -1051,8 +1051,8 @@ void jit_uni_eltwise_injector_t<isa, Wmm>::log_compute_vector_fwd(
     }
     const auto table_start_idx = (*it).second.off;
 
-    auto gather_table_values = [&](const Vmm &vmm_dst, const Vmm &vmm_idxs,
-                                       size_t offt = 0) {
+    auto gather_table_values
+            = [&](const Vmm &vmm_dst, const Vmm &vmm_idxs, size_t offt = 0) {
         Xbyak::Address table_idx = h->ptr[p_table_ + table_start_idx + offt
                 + vmm_idxs * sizeof(float)];
         if (is_avx512_) {
@@ -1192,8 +1192,8 @@ void jit_uni_eltwise_injector_t<isa, Wmm>::pow_compute_vector_fwd(
     } else { // general path
         // caller obligation to save gprs as callee may use them
         size_t gpr_size = 8;
-        Xbyak::Operand gprs_to_save[] = {h->r8, h->r9, h->r10, h->r11, h->rax,
-                h->rcx, h->rdx, h->rdi, h->rsi, h->rbp, h->rbx};
+        Xbyak::Operand gprs_to_save[] = {h->r8, h->r9, h->r10, h->r11, h->r12,
+                h->rax, h->rcx, h->rdx, h->rdi, h->rsi, h->rbx};
         size_t n_gprs_to_save = sizeof(gprs_to_save) / sizeof(gprs_to_save[0]);
 
         h->sub(h->rsp, n_gprs_to_save * gpr_size);
@@ -1227,7 +1227,7 @@ void jit_uni_eltwise_injector_t<isa, Wmm>::pow_compute_vector_fwd(
         h->uni_vmovups(h->ptr[reg_vmm_stack_ptr_ + 1 * vlen_], vmm_src); // beta
 
         // save function address in gpr to pass in in call instruction
-        h->mov(h->rbp, reinterpret_cast<uintptr_t>(powf));
+        h->mov(h->r12, reinterpret_cast<uintptr_t>(powf));
 
         // The 64-bit Windows ABI requires the caller to allocate 32 bytes of
         // a so called "shadow space" for the callee.  It also requires that
@@ -1252,7 +1252,7 @@ void jit_uni_eltwise_injector_t<isa, Wmm>::pow_compute_vector_fwd(
             h->uni_vmovss(xmm0, source);
             h->uni_vmovss(xmm1, h->ptr[reg_vmm_stack_ptr_ + vlen_]); // beta
             h->uni_vzeroupper(); // eliminate performance penalties on avx
-            h->call(h->rbp);
+            h->call(h->r12);
             // eliminate performance penalties on sse isa
             if (isa == sse41) h->uni_vzeroupper();
             h->uni_vmovss(source, xmm0);
@@ -1305,8 +1305,8 @@ void jit_uni_eltwise_injector_t<isa,
         return table_val(
                 gelu_erf_minimax_pol, coeff_off * gelu_erf_n_polynomials + off);
     };
-    auto gather_coefficient = [&](Vmm vmm_coeff, int coeff_idx,
-                                      Vmm vmm_pol_idx) {
+    auto gather_coefficient
+            = [&](Vmm vmm_coeff, int coeff_idx, Vmm vmm_pol_idx) {
         Zmm zmm_coeff(vmm_coeff.getIdx());
         Zmm zmm_pol_idx(vmm_pol_idx.getIdx());
         h->uni_vmovups(zmm_coeff, coeffs_address(coeff_idx, 0));
@@ -1812,7 +1812,7 @@ size_t jit_uni_eltwise_injector_t<isa, Wmm>::aux_gprs_count(
         default: ret = 0;
     }
     return ret + need_vmm_stack_ptr(alg, is_fwd, alpha);
-};
+}
 
 template <cpu_isa_t isa, typename Wmm>
 bool jit_uni_eltwise_injector_t<isa, Wmm>::need_vmm_stack_ptr(
@@ -2925,9 +2925,9 @@ void jit_uni_eltwise_injector_t<isa, Wmm>::register_table_entries() {
     }
 }
 
-template struct jit_uni_eltwise_injector_t<avx10_2_512>;
-template struct jit_uni_eltwise_injector_t<avx10_2_512, Xbyak::Ymm>;
-template struct jit_uni_eltwise_injector_t<avx10_2_512, Xbyak::Xmm>;
+template struct jit_uni_eltwise_injector_t<avx10_2>;
+template struct jit_uni_eltwise_injector_t<avx10_2, Xbyak::Ymm>;
+template struct jit_uni_eltwise_injector_t<avx10_2, Xbyak::Xmm>;
 template struct jit_uni_eltwise_injector_t<avx512_core_fp16>;
 template struct jit_uni_eltwise_injector_t<avx512_core_fp16, Xbyak::Ymm>;
 template struct jit_uni_eltwise_injector_t<avx512_core_fp16, Xbyak::Xmm>;

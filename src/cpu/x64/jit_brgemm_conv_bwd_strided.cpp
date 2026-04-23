@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -53,10 +53,10 @@ static bool impl_supports_datatype(data_type_t data_type) {
             return x64::mayiuse(x64::avx512_core_fp16)
                     || x64::mayiuse(x64::avx2_vnni_2);
         case data_type::f8_e5m2:
-            return x64::mayiuse(x64::avx10_2_512_amx_2)
+            return x64::mayiuse(x64::avx10_2_amx_2)
                     || x64::mayiuse(x64::avx512_core_amx_fp16);
         case data_type::f8_e4m3:
-            return x64::mayiuse(x64::avx10_2_512)
+            return x64::mayiuse(x64::avx10_2)
                     || x64::mayiuse(x64::avx512_core_amx_fp16);
         case data_type::f32:
         case data_type::s32:
@@ -698,7 +698,7 @@ status_t brgemm_convolution_bwd_strided_t<isa>::execute(
     const void *dst_scales
             = CTX_IN_MEM(const void *, DNNL_ARG_ATTR_SCALES | DNNL_ARG_DST);
 
-    const memory_tracking::grantor_t scratchpad = ctx.get_scratchpad_grantor();
+    const auto &scratchpad = ctx.get_scratchpad_grantor();
 
     brgemm_bwd_exec_ctx_t brgemm_ctx(ctx, _pd);
 
@@ -727,7 +727,7 @@ status_t brgemm_convolution_bwd_strided_t<isa>::execute(
             = (jcp.brg_type == brgemm_strd && jcp.exec_type != exec_vpad)
             ? nullptr
             : scratchpad.template get<brgemm_batch_element_t>(
-                    key_brgemm_primitive_batch);
+                      key_brgemm_primitive_batch);
     char *const __restrict c_buffer_global = (jcp.use_buffer)
             ? scratchpad.template get<char>(key_brgemm_primitive_buffer)
             : nullptr;
@@ -745,12 +745,12 @@ status_t brgemm_convolution_bwd_strided_t<isa>::execute(
 
     int32_t *src_zp_comp_base = jcp.src_zero_point
             ? (jcp.req_cal_comp_pad ? scratchpad.template get<int32_t>(
-                       key_brgemm_primitive_zp_comp_a)
+                                              key_brgemm_primitive_zp_comp_a)
                                     : zp_compensation)
             : nullptr;
     int32_t *s8s8_comp_base = jcp.s8s8_compensation_required
             ? (jcp.req_cal_comp_pad ? scratchpad.template get<int32_t>(
-                       key_brgemm_primitive_buffer_comp)
+                                              key_brgemm_primitive_buffer_comp)
                                     : s8s8_compensation)
             : nullptr;
 
@@ -763,7 +763,7 @@ status_t brgemm_convolution_bwd_strided_t<isa>::execute(
     const dim_t work_amount = static_cast<dim_t>(jcp.mb) * jcp.ngroups
             * jcp.nb_ic * jcp.nb_id * jcp.nb_ih * jcp.nb_iw;
 
-    parallel(jcp.nthr, [&](const int ithr, const int nthr) {
+    parallel(jcp.nthr, [= COMPAT_THIS_CAPTURE](const int ithr, const int nthr) {
         if (ithr >= work_amount) return;
 
         brgemm_batch_element_t *const __restrict brg_batch = brg_batch_global
@@ -779,14 +779,6 @@ status_t brgemm_convolution_bwd_strided_t<isa>::execute(
                 = (jcp.exec_type == exec_trans && jcp.has_uneven_iw)
                 ? out_p_buffer + dst_dsz * ithr * jcp.out_buffer_size
                 : nullptr;
-
-        if (is_amx && inp_buffer) {
-            // Workaround: for some machines SEGFAULT possible on tile load
-            // if the page was not touched before it
-            for (dim_t i = 0; i < jcp.inp_buffer_size;
-                    i += brgemm_convolution_bwd_utils::P4K)
-                inp_buffer[i] = 0;
-        }
 
         uint8_t *__restrict inp_buffer_mask = (jcp.exec_type == exec_trans)
                 ? inp_p_buffer_mask + ithr * jcp.inp_buffer_mask_size
@@ -938,7 +930,7 @@ void brgemm_convolution_bwd_strided_t<isa>::cal_compensation(
                     <= platform::get_per_core_cache_size(1));
     const int nthr = is_small_shape ? 1 : jcp.nthr;
 
-    parallel(nthr, [&](const int ithr, const int nthr) {
+    parallel(nthr, [= COMPAT_THIS_CAPTURE](const int ithr, const int nthr) {
         if (ithr >= work_amount) return;
 
         dim_t start {0}, end {0};
@@ -965,9 +957,9 @@ void brgemm_convolution_bwd_strided_t<isa>::cal_compensation(
 
                 jit_brgemm_conv_comp_pad_args_t p;
 
-                p.kd_l = div_up(kd_e - kd_b, SD);
-                p.kh_l = div_up(kh_e - kh_b, SH);
-                p.kw_l = div_up(kw_e - kw_b, SW);
+                p.kd_l = div_up(nstl::max((dim_t)0, kd_e - kd_b), SD);
+                p.kh_l = div_up(nstl::max((dim_t)0, kh_e - kh_b), SH);
+                p.kw_l = div_up(nstl::max((dim_t)0, kw_e - kw_b), SW);
                 p.use_inversion = false;
 
                 p.ptr_in = &weights[wei_offs];
@@ -1047,14 +1039,20 @@ void brgemm_convolution_bwd_strided_t<isa>::perform_outwork(char *dst_base,
                     + dst_dsz
                             * (id * dst_h_sz + ih * dst_w_sz
                                     + iw_pw_s * jcp.ic_without_padding);
-            p.ptr_in = static_cast<void *>(
-                    jcp.use_buffer ? (c_buffer
-                            + acc_dsz * div_up(iw_pw_s - iw, SW) * jcp.LDC)
-                                   : p.ptr_out);
+            p.ptr_in = static_cast<void *>(jcp.use_buffer
+                            ? (c_buffer
+                                      + acc_dsz
+                                              * div_up(nstl::max(
+                                                               0, iw_pw_s - iw),
+                                                      SW)
+                                              * jcp.LDC)
+                            : p.ptr_out);
         } else {
             p.apply_comp = has_postcomp;
             char *const ptr_Cz = jcp.use_buffer
-                    ? (c_buffer + acc_dsz * div_up(iw_pw_s - iw, SW) * jcp.LDC)
+                    ? (c_buffer
+                              + acc_dsz * div_up(nstl::max(0, iw_pw_s - iw), SW)
+                                      * jcp.LDC)
                     : dst_base
                             + dst_dsz
                                     * (id * dst_h_sz + ih * dst_w_sz
@@ -1351,9 +1349,9 @@ void brgemm_convolution_bwd_strided_t<isa>::ker_base(
                 && btc.occ == (oc_chunks - 1);
         if (iw_e - iw_b <= 0 && !do_init && !do_postwork) return;
 
-        const int kd_l = div_up(kd_e - kd_b, SD);
-        const int kh_l = div_up(kh_e - kh_b, SH);
-        const int kw_l = div_up(kw_e - kw_b, SW);
+        const int kd_l = div_up(nstl::max(0, kd_e - kd_b), SD);
+        const int kh_l = div_up(nstl::max(0, kh_e - kh_b), SH);
+        const int kw_l = div_up(nstl::max(0, kw_e - kw_b), SW);
         k_l = kd_l * kh_l * kw_l;
         const auto iw_l = iw_e - iw_b;
 
@@ -1362,9 +1360,10 @@ void brgemm_convolution_bwd_strided_t<isa>::ker_base(
                         * (btc.id * dst_h_sz + btc.ih * dst_w_sz
                                 + iw_b * jcp.ic_without_padding);
 
-        ptr_C = (jcp.use_buffer)
-                ? btc.c_buffer + acc_dsz * div_up((iw_b - iw), SW) * jcp.LDC
-                : static_cast<char *>(ptr_D);
+        ptr_C = (jcp.use_buffer) ? btc.c_buffer
+                        + acc_dsz * div_up(nstl::max((dim_t)0, iw_b - iw), SW)
+                                * jcp.LDC
+                                 : static_cast<char *>(ptr_D);
 
         assert(0 <= iw_l && iw_l <= jcp.iw_block);
 
@@ -1450,7 +1449,7 @@ void brgemm_convolution_bwd_strided_t<isa>::ker_base(
                 do_init, do_postwork, false, btc.src_scales, btc.wei_scales,
                 btc.dst_scales);
     }
-};
+}
 
 template <cpu_isa_t isa>
 void brgemm_convolution_bwd_strided_t<isa>::ker_trans(
@@ -1518,7 +1517,7 @@ void brgemm_convolution_bwd_strided_t<isa>::ker_trans(
                     * (need_out_buffer
                                     ? btc.sw * jcp.ic_without_padding
                                     : (id * dst_h_sz + ih * dst_w_sz
-                                            + iw_b * jcp.ic_without_padding));
+                                              + iw_b * jcp.ic_without_padding));
 
     ptr_C = (jcp.use_buffer) ? btc.c_buffer : static_cast<char *>(ptr_D);
 
@@ -1605,14 +1604,14 @@ void brgemm_convolution_bwd_strided_t<isa>::ker_trans(
         const auto do_postwork = need_postwork && btc.occ == (oc_chunks - 1)
                 && kd_e == kd_f && kh_e == kh_f;
 
-        const int kd_l = div_up(kd_e - kd_b, SD);
-        const int kh_l = div_up(kh_e - kh_b, SH);
-        const int kw_l = div_up(kw_f - kw_s, SW);
+        const int kd_l = div_up(nstl::max(0, kd_e - kd_b), SD);
+        const int kh_l = div_up(nstl::max(0, kh_e - kh_b), SH);
+        const int kw_l = div_up(nstl::max(0, kw_f - kw_s), SW);
         k_l = kd_l * kh_l * kw_l;
 
         const auto comp_ker_offs = kd_l * kh_l > 0
                 ? get_comp_offset(
-                        btc.g, btc.icb, iw, kd_s, kd_f, kh_s, kh_f, 0, KW)
+                          btc.g, btc.icb, iw, kd_s, kd_f, kh_s, kh_f, 0, KW)
                 : get_comp_offset(btc.g, btc.icb, iw, 0, 0, 0, 0, 0, 0);
 
         if (nb_oc_b > 0) {
@@ -1656,8 +1655,8 @@ template struct brgemm_convolution_bwd_strided_t<avx512_core>;
 template struct brgemm_convolution_bwd_strided_t<avx512_core_vnni>;
 template struct brgemm_convolution_bwd_strided_t<avx512_core_bf16>;
 template struct brgemm_convolution_bwd_strided_t<avx512_core_fp16>;
-template struct brgemm_convolution_bwd_strided_t<avx10_2_512>;
-template struct brgemm_convolution_bwd_strided_t<avx10_2_512_amx_2>;
+template struct brgemm_convolution_bwd_strided_t<avx10_2>;
+template struct brgemm_convolution_bwd_strided_t<avx10_2_amx_2>;
 
 } // namespace x64
 

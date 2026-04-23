@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2018-2024 Intel Corporation
+* Copyright 2018 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -53,7 +53,7 @@ status_t ncsp_batch_normalization_fwd_t<d_type>::execute_forward(
     auto scale = CTX_IN_MEM(const acc_data_t *, DNNL_ARG_SCALE);
     auto shift = CTX_IN_MEM(const acc_data_t *, DNNL_ARG_SHIFT);
 
-    auto scratchpad = ctx.get_scratchpad_grantor();
+    const auto &scratchpad = ctx.get_scratchpad_grantor();
     auto *ws_reduce = scratchpad.template get<acc_data_t>(key_bnorm_reduction);
 
     acc_data_t *mean, *variance;
@@ -79,10 +79,6 @@ status_t ncsp_batch_normalization_fwd_t<d_type>::execute_forward(
 
     const float eps = pd()->desc()->batch_norm_epsilon;
     const bool with_relu = pd()->with_relu_post_op(is_training);
-    auto maybe_post_op = [&](acc_data_t res) {
-        if (with_relu) return math::relu_fwd(res, pd()->alpha());
-        return res;
-    };
 
     const dim_t SP = pd()->H() * pd()->W() * pd()->D();
     const dim_t simd_w = 16;
@@ -94,7 +90,7 @@ status_t ncsp_batch_normalization_fwd_t<d_type>::execute_forward(
     size_t data_size = N * C * SP * sizeof(data_t);
     bool do_blocking = (data_size >= l3_size_ / 2 && l3_size_ > 0);
 
-    parallel(nthr, [&](const int ithr, const int nthr) {
+    parallel(nthr, [= COMPAT_THIS_CAPTURE](const int ithr, const int nthr) {
         int C_ithr = 0, C_nthr = 0;
         int N_ithr = 0, N_nthr = 0;
         int S_ithr = 0, S_nthr = 0;
@@ -277,7 +273,9 @@ status_t ncsp_batch_normalization_fwd_t<d_type>::execute_forward(
                                 if (is_training) ws[d_off] = 1;
                             }
                         }
-                        _dst[sp] = maybe_post_op(bn_res);
+                        _dst[sp] = with_relu
+                                ? math::relu_fwd(bn_res, pd()->alpha())
+                                : bn_res;
                     }
                     if (utils::one_of(d_type, bf16, f16)) {
                         // convert dst from f32 to xf16
@@ -313,7 +311,7 @@ status_t ncsp_batch_normalization_bwd_t<d_type>::execute_backward(
     auto diff_scale = CTX_OUT_MEM(acc_data_t *, DNNL_ARG_DIFF_SCALE);
     auto diff_shift = CTX_OUT_MEM(acc_data_t *, DNNL_ARG_DIFF_SHIFT);
 
-    auto scratchpad = ctx.get_scratchpad_grantor();
+    const auto &scratchpad = ctx.get_scratchpad_grantor();
     auto *ws_reduce = scratchpad.template get<acc_data_t>(key_bnorm_reduction);
     acc_data_t *tmp_data_ = scratchpad.template get<acc_data_t>(key_bnorm_cvt);
 
@@ -338,7 +336,7 @@ status_t ncsp_batch_normalization_bwd_t<d_type>::execute_backward(
     size_t data_size = N * C * SP * sizeof(data_t);
     bool do_blocking = (data_size >= l3_size_ / 2 && l3_size_ > 0);
 
-    parallel(nthr, [&](const int ithr, const int nthr) {
+    parallel(nthr, [=](const int ithr, const int nthr) {
         int C_ithr = 0, C_nthr = 0;
         int N_ithr = 0, N_nthr = 0;
         int S_ithr = 0, S_nthr = 0;

@@ -36,11 +36,11 @@ struct conf_t {
 
     bool is_fwd;
     dim_idx_t ndims;
-    dim_idx_t norm_axis;
-    dim_idx_t across_axis;
+    dim_t norm_axis;
+    dim_t across_axis;
     int norm_block;
     int num_norm_blocks;
-    int norm_block_fused;
+    dim_t norm_block_fused;
     int num_norm_blocks_fused;
     int across_block;
     int num_across_blocks;
@@ -68,6 +68,7 @@ struct conf_t {
     int vector_size_scaleshift;
     bool use_src_buffer;
     bool skip_mean;
+    bool require_stateless_addressing;
 
     compute::dispatch_t dispatch_scaleshift;
     compute::dispatch_t dispatch_scaleshift_finalize;

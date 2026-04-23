@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2018-2025 Intel Corporation
+* Copyright 2018 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -17,8 +17,11 @@
 /// @example rnn_training_f32.cpp
 /// > Annotated version: @ref rnn_training_f32_cpp
 
+/// @page rnn_training_f32_cpp_brief
+/// @brief This C++ API example demonstrates how to build GNMT model training.
+
 /// @page rnn_training_f32_cpp RNN f32 training example
-/// This C++ API example demonstrates how to build GNMT model training.
+/// \copybrief rnn_training_f32_cpp_brief
 ///
 /// @include rnn_training_f32.cpp
 
@@ -169,8 +172,8 @@ void simple_net(engine::kind engine_kind) {
 
     // Create auxiliary f32 memory descriptor
     // based on user- supplied dimensions and layout.
-    auto formatted_md = [=](const memory::dims &dimensions,
-                                memory::format_tag layout) {
+    auto formatted_md
+            = [=](const memory::dims &dimensions, memory::format_tag layout) {
         return memory::desc {{dimensions}, memory::data_type::f32, layout};
     };
     // Create auxiliary generic f32 memory descriptor

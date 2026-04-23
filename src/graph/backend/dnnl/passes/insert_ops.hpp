@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright 2021-2025 Intel Corporation
+ * Copyright 2021 Intel Corporation
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -62,6 +62,14 @@ status_t insert_reshape_for_ndx2d_matmul(std::shared_ptr<subgraph_t> &sg);
 /// 1) reshape Q/K/V/scale/mask from 5D to 4D
 /// 2) reshape output from 4D to 5D
 status_t insert_reshape_for_sdpa(std::shared_ptr<subgraph_t> &sg);
+
+/// Insert reshape for 5D sdpa_bwd. sdpa_bwd only supports 4D input/output
+/// 1) reshape Q/K/V/dst/diff_dst/scale/mask from 5D to 4D
+/// 2) reshape diff_query/diff_key/diff_value from 4D to 5D
+status_t insert_reshape_for_sdpa_bwd(std::shared_ptr<subgraph_t> &sg);
+
+/// Insert permute for dQ,dK,dV based on whether Q,K,V are permuted or not.
+status_t insert_permute_for_sdpa_bwd(std::shared_ptr<subgraph_t> &sg);
 
 // Insert an unsqueeze-squeeze pair for matmul
 //

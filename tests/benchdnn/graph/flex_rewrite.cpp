@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -269,9 +269,9 @@ int flex_rewrite_t::linked_shape_and_attr_rewrite(
 
             bool input_shape_rewrite = std::any_of(aop.in_lts_.begin(),
                     aop.in_lts_.end(), [&](const deserialized_lt_t &in_lt) {
-                        return in_shapes_.count(in_lt.id_)
-                                && in_shapes_[in_lt.id_] != "default";
-                    });
+                return in_shapes_.count(in_lt.id_)
+                        && in_shapes_[in_lt.id_] != "default";
+            });
             bool group_shape_rewrite = op_attrs_.count(aop.id_)
                     && parse_attrs(op_attrs_.at(aop.id_)).count("group_shape");
 
@@ -406,7 +406,7 @@ int flex_rewrite_t::linked_shape_and_attr_rewrite(
                     SAFE(FAIL, WARN);
                 }
 
-                std::vector<int64_t> new_group_shape(src_lt.shape_.size(), 1);
+                group_shape = std::vector<int64_t>(src_lt.shape_.size(), 1);
                 for (size_t idx = 0; idx < src_lt.shape_.size(); ++idx) {
                     if (src_lt.shape_[idx] % scale_lt.shape_[idx] != 0) {
                         BENCHDNN_PRINT(0,
@@ -418,11 +418,9 @@ int flex_rewrite_t::linked_shape_and_attr_rewrite(
                                 (long long)src_lt.shape_[idx]);
                         SAFE(FAIL, WARN);
                     }
-                    new_group_shape[idx]
+                    group_shape[idx]
                             = src_lt.shape_[idx] / scale_lt.shape_[idx];
                 }
-
-                group_shape = new_group_shape;
             }
         }
     }
@@ -504,6 +502,7 @@ int flex_rewrite_t::infer_output_shape(
             case dnnl::graph::op::kind::ReLU:
             case dnnl::graph::op::kind::ReLUBackward:
             case dnnl::graph::op::kind::Reorder:
+            case dnnl::graph::op::kind::RMSNorm:
             case dnnl::graph::op::kind::Round:
             case dnnl::graph::op::kind::Sigmoid:
             case dnnl::graph::op::kind::SigmoidBackward:
@@ -516,6 +515,7 @@ int flex_rewrite_t::infer_output_shape(
             case dnnl::graph::op::kind::Tanh:
             case dnnl::graph::op::kind::TanhBackward:
             case dnnl::graph::op::kind::TypeCast:
+            case dnnl::graph::op::kind::Dropout:
             // infer_bias_add_output_shape
             case dnnl::graph::op::kind::BiasAdd:
                 in0 = aop.in_lts_[0].id_;
@@ -858,9 +858,7 @@ int flex_rewrite_t::infer_output_shape(
                     gi[out0] = y;
                 } else if (y.size() == 1) {
                     assert(x[x.size() - 1] == y[0]);
-                    n = x[x.size() - 1];
                     x.pop_back();
-                    x[x.size() - 1] = n;
                     gi[out0] = x;
                 } else {
                     // Check that K is consistent in updated inputs.
@@ -1240,8 +1238,8 @@ int flex_rewrite_t::inports_shape_rewrite(
                 }
 
                 change_stride = true;
-                std::string tmp_mtag = strides2memory_tag(
-                        lt.shape_.size(), new_stride_dims, false);
+                std::string tmp_mtag
+                        = strides2memory_tag(lt.shape_, new_stride_dims, false);
                 if (!is_contiguous_memory(
                             new_stride_dims, lt.shape_, tmp_mtag)) {
                     dgraph.lt_2_mtag_[lt.id_] = "not_available";
@@ -1420,8 +1418,8 @@ int flex_rewrite_t::dt_rewrite(deserialized_graph_t &dgraph) {
             dt_rewrite_select(aop, str_dt);
         } else if (std::any_of(norm_ops.begin(), norm_ops.end(),
                            [&aop](const std::string &k) {
-                               return aop.kind_ == k;
-                           })) {
+            return aop.kind_ == k;
+        })) {
             dt_rewrite_norm(aop, str_dt);
         } else if (aop.kind_ == "GenIndex") {
             // GenIndex: only rewrite src dtype
@@ -1430,8 +1428,8 @@ int flex_rewrite_t::dt_rewrite(deserialized_graph_t &dgraph) {
             // GreaterEqual: only rewrite src dtype when it's floating-point
             if (std::any_of(fp_dts.begin(), fp_dts.end(),
                         [&aop](const dnnl_data_type_t &fp_dt) {
-                            return aop.in_lts_[0].data_type_ == dt2str(fp_dt);
-                        })) {
+                return aop.in_lts_[0].data_type_ == dt2str(fp_dt);
+            })) {
                 aop.in_lts_[0].data_type_ = str_dt;
                 aop.in_lts_[1].data_type_ = str_dt;
             }
@@ -1439,8 +1437,8 @@ int flex_rewrite_t::dt_rewrite(deserialized_graph_t &dgraph) {
             // Add/Sub: only rewrite dtype when it's floating-point
             if (std::any_of(fp_dts.begin(), fp_dts.end(),
                         [&aop](const dnnl_data_type_t &fp_dt) {
-                            return aop.in_lts_[0].data_type_ == dt2str(fp_dt);
-                        })) {
+                return aop.in_lts_[0].data_type_ == dt2str(fp_dt);
+            })) {
                 aop.in_lts_[0].data_type_ = str_dt;
                 aop.in_lts_[1].data_type_ = str_dt;
                 aop.out_lts_[0].data_type_ = str_dt;
@@ -1464,16 +1462,21 @@ int flex_rewrite_t::op_kind_rewrite(deserialized_graph_t &dgraph) {
     if (op_kind_map_.size() == 1 && op_kind_map_.begin()->second == "default")
         return OK;
 
-    for_(auto &aop : dgraph.ops_)
     for (const auto &v : op_kind_map_) {
-        if (aop.id_ != v.first) continue;
-
-        if (aop.empty()) {
+        // find the op with the matched ID in dgraph.ops_
+        auto it = std::find_if(dgraph.ops_.begin(), dgraph.ops_.end(),
+                [&v](const deserialized_op_t &aop) {
+            return aop.id_ == v.first;
+        });
+        if (it == dgraph.ops_.end()) {
             BENCHDNN_PRINT(0,
-                    "graph: rewrite: ID `%zd` is not found in the graph\n",
+                    "graph: rewrite: operation with ID `%zd` is not found in "
+                    "the graph\n",
                     v.first);
             SAFE(FAIL, WARN);
         }
+
+        auto &aop = *it;
         auto op_driver = aop.opkind2driver();
 
         auto target_kind = opstr2kind(v.second);
@@ -1736,7 +1739,6 @@ int flex_rewrite_t::update_output_info(deserialized_op_t &aop,
         default:
             BENCHDNN_PRINT(0, "%s is not supported\n", aop.kind_.c_str());
             SAFE(FAIL, WARN);
-            break;
     }
 
     return OK;

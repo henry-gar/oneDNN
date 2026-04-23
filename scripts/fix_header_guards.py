@@ -116,7 +116,7 @@ def get_file_guard(path):
     if path.startswith("src/gpu/intel/gemm/jit/"):
         base = os.path.basename(path)
         if path != "src/gpu/intel/gemm/jit/" + base:
-            path = "src/gemmstone_guard/" + os.path.basename(path)
+            path = path.replace("gpu/intel/gemm/jit", "gemmstone")
     elif path.startswith("src/gpu/intel/microkernels"):
         path = path.replace("intel/", "")
     guard = path
@@ -465,8 +465,7 @@ def find_files(basepath, options):
 
 
 def print_help(prog: str):
-    print(
-        f"""usage: {prog} [OPTIONS] files...
+    print(f"""usage: {prog} [OPTIONS] files...
 
 description:
     Checks the files (or directories) given for correct header guards in each
@@ -482,8 +481,7 @@ options:
     --pedantic, -p
           warn about repetitive parts in file names
     --help, -h
-          print this help and exit"""
-    )
+          print this help and exit""")
 
 
 def to_long_name(field: str):

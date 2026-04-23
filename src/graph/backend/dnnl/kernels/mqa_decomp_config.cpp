@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2024-2025 Intel Corporation
+* Copyright 2024 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -98,8 +98,7 @@ status_t mqa_decomp_config_t::construct_params(std::shared_ptr<subgraph_t> &sg,
     memory::data_type dt_inter = quantized
             ? dt
             : static_cast<memory::data_type>(
-                    ltw(mqa_op[1]->get_output_value(0)->get_logical_tensor())
-                            .data_type());
+                      ltw(mqa_op[1]->get_output_logical_tensor(0)).data_type());
 
     ////////////////////////////////////////////////////////////////////////
     ////////////// Start Creating primitives ///////////////////////////////
@@ -138,7 +137,7 @@ status_t mqa_decomp_config_t::construct_params(std::shared_ptr<subgraph_t> &sg,
 
     auto original_matmul1 = mqa_op[1];
     auto wei_md = make_dnnl_memory_desc(
-            original_matmul1->get_input_value(1)->get_logical_tensor());
+            original_matmul1->get_input_logical_tensor(1));
     sub_wei1_user_md = memory::desc(
             sub_wei1_dims, dt_wei_user, {1, seq_len * num_head, 1});
     // Flip the format to have `ba` weights MBI item in per thread loop.
@@ -187,7 +186,7 @@ status_t mqa_decomp_config_t::construct_params(std::shared_ptr<subgraph_t> &sg,
     const auto mode = mqa_op[2]->get_attr<std::string>(op_attr::mode);
     const dnnl::algorithm algo = mode == "inf_as_zero"
             ? static_cast<dnnl::algorithm>(
-                    dnnl::impl::alg_kind::softmax_accurate_inf_as_zero)
+                      dnnl::impl::alg_kind::softmax_accurate_inf_as_zero)
             : dnnl::algorithm::softmax_accurate;
     auto sub_softmax_pd = softmax_forward::primitive_desc(p_engine,
             prop_kind::forward_inference, algo, sub_mm1_dst_md,
@@ -395,7 +394,7 @@ status_t mqa_decomp_config_t::record_input_offset(
 status_t mqa_decomp_config_t::record_mqa_ops(std::shared_ptr<subgraph_t> &sg) {
     op_ptr reorder1, reorder2, matmul1, softmax, matmul2;
     for (const auto &cur_op : sg->get_ops()) {
-        if (cur_op->get_kind() != op_kind::dnnl_matmul) continue;
+        if (cur_op->get_kind() != op_kind::_matmul) continue;
         if (get_post_op(cur_op) != nullptr) {
             matmul1 = cur_op;
             auto reshape = get_post_op(cur_op);
@@ -450,7 +449,7 @@ dnnl::primitive_attr mqa_decomp_config_t::make_primitive_attr(
                 = op->get_attr<fusion_info_t>(op_attr::fusion_info);
         attr = make_dnnl_primitive_attr(op, fusion_info);
     }
-    if (op && op->get_kind() == op_kind::dnnl_reorder) {
+    if (op && op->get_kind() == op_kind::_reorder) {
         // generate mask
         int mask = 0;
         if (op->has_attr(op_attr::axis) && op->has_attr(op_attr::qtype)) {
@@ -469,31 +468,6 @@ dnnl::primitive_attr mqa_decomp_config_t::make_primitive_attr(
     }
     attr.set_scratchpad_mode(dnnl::scratchpad_mode::user);
     return attr;
-}
-
-#define DECLARE_RESET_ENGINE(primitive_name, primitive_type) \
-    { \
-        const auto desc_t = (primitive_name).get_primitive_desc()->impl(); \
-        dnnl_primitive_desc new_pd_t(desc_t, p_engine.get()); \
-        primitive_type::primitive_desc new_pd(&new_pd_t); \
-        (primitive_name) = primitive_type(new_pd); \
-    }
-
-impl::status_t mqa_decomp_config_t::reset_engine(const dnnl::engine &p_engine) {
-#if DNNL_CPU_RUNTIME == DNNL_RUNTIME_OMP
-    omp_set_num_threads(1);
-#endif
-    DECLARE_RESET_ENGINE(sub_mm1_prim, matmul);
-    DECLARE_RESET_ENGINE(sub_mm2_prim, matmul);
-    DECLARE_RESET_ENGINE(sub_softmax_prim, softmax_forward);
-    sub_reorder0.reset_engine(p_engine);
-    sub_reorder1.reset_engine(p_engine);
-    sub_reorder2.reset_engine(p_engine);
-    sub_reorder3.reset_engine(p_engine);
-#if DNNL_CPU_RUNTIME == DNNL_RUNTIME_OMP
-    omp_set_num_threads(nthr);
-#endif
-    return dnnl_success;
 }
 
 template status_t

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -17,7 +17,7 @@
 #ifndef GPU_INTEL_JIT_IR_V2_REQS_HPP
 #define GPU_INTEL_JIT_IR_V2_REQS_HPP
 
-#include "gpu/intel/jit/ir/ir.hpp"
+#include "gpu/intel/jit/ir/legacy.hpp"
 #include "gpu/intel/jit/ir/problem.hpp"
 
 #include <iostream>
@@ -100,7 +100,7 @@ public:
     void parse(std::istream &in);
     std::string str() const;
 
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
 private:
     // Single requirement, represented as an expression.
@@ -114,7 +114,7 @@ private:
         const req_impl_t &impl() const { return *impl_; }
         req_impl_t &impl() { return *impl_; }
         std::string str() const;
-        IR_DEFINE_DUMP()
+        XE_DEFINE_DUMP()
 
     private:
         std::unique_ptr<req_impl_t> impl_;

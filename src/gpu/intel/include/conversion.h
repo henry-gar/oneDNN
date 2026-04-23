@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2024-2025 Intel Corporation
+* Copyright 2024 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -29,7 +29,9 @@
 
 // Identity conversions
 #define def_identity_into(dt) \
-    dt __attribute__((overloadable)) CONCAT2(into_, dt)(dt val) { return val; }
+    dt __attribute__((overloadable)) CONCAT2(into_, dt)(dt val) { \
+        return val; \
+    }
 
 def_identity_into(float);
 def_identity_into(char);
@@ -51,13 +53,13 @@ def_identity_into(f8_e4m3);
 
 // Standard-standard conversions, utilizing convert_* builtins
 #define def_std_into(out_type, in_type) \
-    out_type __attribute__((overloadable)) \
-            CONCAT2(into_, out_type)(in_type val) { \
+    out_type __attribute__((overloadable)) CONCAT2(into_, out_type)( \
+            in_type val) { \
         return CONCAT2(convert_, out_type)(val); \
     }
 #define def_std_into_sat(out_type, in_type) \
-    out_type __attribute__((overloadable)) \
-            CONCAT2(into_, out_type)(in_type val) { \
+    out_type __attribute__((overloadable)) CONCAT2(into_, out_type)( \
+            in_type val) { \
         return CONCAT3(convert_, out_type, _sat_rte)(val); \
     }
 
@@ -94,8 +96,8 @@ IF_DOUBLE_SUPPORTED(def_std_into(double, int));
 IF_DOUBLE_SUPPORTED(IF_HALF_SUPPORTED(def_std_into(double, half)));
 
 #define def_undef_into(out_type) \
-    out_type __attribute__((overloadable)) \
-            CONCAT2(into_, out_type)(undef_data val) { \
+    out_type __attribute__((overloadable)) CONCAT2(into_, out_type)( \
+            undef_data val) { \
         DEBUG_PRINT("Error: unexpected conversion from undefined data"); \
         return 0xbadbad; \
     }
@@ -113,8 +115,8 @@ IF_DOUBLE_SUPPORTED(def_undef_into(double));
 // - mid_type into_<mid_type>(in_type)
 // - out_type into_<out_type>(mid_type)
 #define def_two_step_conversion(out_type, in_type, mid_type) \
-    out_type __attribute__((overloadable)) \
-            CONCAT2(into_, out_type)(in_type val) { \
+    out_type __attribute__((overloadable)) CONCAT2(into_, out_type)( \
+            in_type val) { \
         return CONCAT2(into_, out_type)(CONCAT2(into_, mid_type)(val)); \
     }
 
@@ -230,11 +232,8 @@ IF_DOUBLE_SUPPORTED(def_two_step_conversion(double, f4_e3m0, float));
 #endif // MATH_UTILS_DECLARE_F4_E3M0
 
 #ifdef MATH_UTILS_DECLARE_E8M0
-// Copy-paste from `cvt_e8m0_to_f32`.
 float __attribute__((overloadable)) into_float(e8m0 b) {
-    if (b.data == (char)0xff) return as_float(0xffc00000);
-    uint bits = b.data << 23;
-    return as_float(bits);
+    return cvt_e8m0_to_f32(b.data);
 }
 #endif
 

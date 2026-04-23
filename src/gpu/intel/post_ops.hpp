@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2024-2025 Intel Corporation
+* Copyright 2024 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -18,8 +18,15 @@
 
 #include "common/math_utils.hpp"
 #include "common/primitive_attr.hpp"
-#include "gpu/intel/block_structure.hpp"
-#include "gpu/intel/primitive_conf.hpp"
+#include "gpu/intel/utils.hpp"
+
+namespace gemmstone {
+namespace dsl {
+namespace ir {
+class expr_t;
+}
+} // namespace dsl
+} // namespace gemmstone
 
 namespace dnnl {
 namespace impl {
@@ -31,10 +38,6 @@ const alg_kind_t binary_prelu = eltwise_relu;
 
 namespace gpu {
 namespace intel {
-
-namespace jit {
-class expr_t;
-} // namespace jit
 
 namespace post_op {
 
@@ -143,9 +146,14 @@ struct relative_idx_t {
     constexpr relative_idx_t(int8_t v) : value_(v) {};
     constexpr bool operator==(const relative_idx_t &o) const {
         return value_ == o.value_;
-    };
+    }
     constexpr bool is_innermost() const { return value_ == 0; }
     constexpr bool is_unset() const { return value_ < 0; }
+    std::string str() const {
+        if (is_unset()) return "(unset)";
+        char name[2] = {into<char>(value_ + 'a'), 0};
+        return name;
+    }
 
 protected:
     friend struct relative_md_t;
@@ -178,6 +186,14 @@ struct relative_md_t {
 
         bool empty() const { return idxs[0].is_unset(); }
 
+        std::string str() const {
+            ostringstream_t oss;
+            for (int i = max_dims - 1; i >= 0; i--) {
+                if (idxs[i].is_unset()) continue;
+                oss << int(blocks[i]) << idxs[i].str();
+            }
+            return oss.str();
+        }
 #if __cplusplus >= 202002L
         bool operator==(const blocking_t &) const = default;
 #endif
@@ -188,6 +204,16 @@ struct relative_md_t {
     };
 
     relative_md_t() = default;
+    relative_md_t(int md_broadcast_mask, int md_inner_dim, int ndims,
+            data_type_t dt, const ndim_normalizer_t &ndim_normalizer)
+        : dt(dt)
+        , broadcast_mask(uint16_t(0xFFFFu << ndims))
+        , inner_dim(from_md_idx(md_inner_dim, ndims, ndim_normalizer)) {
+        for (int i = 0; i < ndims; i++) {
+            auto rmd_idx = from_md_idx(i, ndims, ndim_normalizer).as_int();
+            broadcast_mask |= ((md_broadcast_mask >> i) & 1) << rmd_idx;
+        }
+    }
     static status_t make(relative_md_t &rmd, const memory_desc_t &md,
             const ndim_normalizer_t &ndim_normalizer) {
         if (md.format_kind != format_kind::blocked)
@@ -197,13 +223,17 @@ struct relative_md_t {
 
         auto ndims = ndim_normalizer.ndims(md);
 
-        auto layout = block_layout_t(md, true);
-        gpu_assert(layout.size() <= blocking_t::max_dims);
+        memory_desc_wrapper mdw(md);
+        gpu_assert(mdw.is_blocking_desc());
+        auto &blocking = mdw.blocking_desc();
+        gpu_assert(blocking.inner_nblks <= blocking_t::max_dims);
 
-        for (size_t i = 0; i < layout.size(); i++) {
-            rmd.inner_layout.idxs[i]
-                    = from_md_idx(layout[i].dim_idx, ndims, ndim_normalizer);
-            rmd.inner_layout.blocks[i] = into<uint8_t>(layout[i].block);
+        for (dim_t i = 0; i < blocking.inner_nblks; i++) {
+            auto rmd_i = blocking.inner_nblks - 1 - i;
+            rmd.inner_layout.idxs[rmd_i] = from_md_idx(
+                    into<int>(blocking.inner_idxs[i]), ndims, ndim_normalizer);
+            rmd.inner_layout.blocks[rmd_i]
+                    = into<uint8_t>(blocking.inner_blks[i]);
         }
 
         // Default all dimensions to broadcast
@@ -232,8 +262,9 @@ struct relative_md_t {
     std::string ocl_defines(const std::string &prefix,
             const std::array<std::string, MAX_NDIMS> &strides, int ndims) const;
 
-    jit::expr_t get_offset(const std::vector<jit::expr_t> &dim_idxs,
-            const std::vector<jit::expr_t> &strides) const;
+    gemmstone::dsl::ir::expr_t get_offset(
+            const std::vector<gemmstone::dsl::ir::expr_t> &dim_idxs,
+            const std::vector<gemmstone::dsl::ir::expr_t> &strides) const;
 
     bool is_broadcast(int idx, int ndims) const {
         idx_t norm = from_md_idx(idx, ndims, {});
@@ -252,6 +283,27 @@ struct relative_md_t {
         return math::ilog2q(dim_mask) + 1;
     }
 
+    std::string str() const {
+        if (broadcast_mask == 0xFFFF) {
+            gpu_assert(inner_layout.empty());
+            return std::string("{scalar}.") + dnnl_dt2str(dt);
+        }
+
+        // Use reverse ordering to align with oneDNN format tag semantics
+        ostringstream_t oss;
+        const char *prefix = "{";
+        for (int i = 15; i >= 0; i--) {
+            if (broadcast_mask & (1 << i)) continue;
+            std::cout << prefix;
+            oss << idx_t(into<int8_t>(i)).str();
+            prefix = "";
+        }
+        oss << "}:";
+        if (!inner_dim.is_unset()) oss << inner_dim.str();
+        if (!inner_layout.empty()) oss << inner_layout.str();
+        oss << "." << dnnl_dt2str(dt);
+        return oss.str();
+    }
 #if __cplusplus >= 202002L
     bool operator==(const relative_md_t &) const = default;
 #endif
@@ -399,10 +451,16 @@ struct binary_t {
             const specializations_t::binary_t &s,
             const ndim_normalizer_t &ndim_normalizer) {
         if (s.src1_desc_layout.is_inlined()) {
-            memory_desc_t prelu_md;
-            CHECK(get_prelu_md(
-                    op.mask, dst_md.dims(), prelu_md, dst_md.ndims()));
-            CHECK(relative_md_t::make(b.src1_desc, prelu_md, ndim_normalizer));
+            auto bcast_mask = ~op.mask;
+            int inner_dim = 0;
+            for (int i = 0; i < dst_md.ndims(); i++) {
+                // Normalize size 1 dimensions to broadcasts.
+                if (dst_md.dims()[i] == 1) bcast_mask |= 1 << i;
+                // Prelu layout is axb, so b dimension is innermost
+                if ((~bcast_mask & (1 << i)) && inner_dim != 1) inner_dim = i;
+            }
+            b.src1_desc = relative_md_t(bcast_mask, inner_dim, dst_md.ndims(),
+                    data_type::f32, ndim_normalizer);
         } else {
             b.src1_desc.dt = data_type::f32;
         }
@@ -628,7 +686,7 @@ struct gpu_post_ops_t {
 #else
     bool operator==(const gpu_post_ops_t &other) const {
         return serialization_stream_t(*this) == serialization_stream_t(other);
-    };
+    }
 #endif
 
     size_t len() const { return ops_.size(); }

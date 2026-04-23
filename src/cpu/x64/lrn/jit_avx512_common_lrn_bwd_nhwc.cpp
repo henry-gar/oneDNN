@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -30,7 +30,7 @@ jit_avx512_common_lrn_kernel_bwd_nhwc_t<
         d_type>::jit_avx512_common_lrn_kernel_bwd_nhwc_t(unsigned C,
         float alpha, float beta, int local_size)
     : jit_avx512_common_lrn_kernel_bwd_t<d_type>(
-            alpha, beta, local_size, jit_name())
+              alpha, beta, local_size, jit_name())
     , tmp_mask_prev_ {[this]() {
         std::vector<int> v(this->local_size_ / 2);
         std::iota(v.begin(), v.end(), this->zdiffsrc_ + 2);
@@ -301,16 +301,16 @@ void jit_avx512_common_lrn_kernel_bwd_nhwc_t<d_type>::load_compute_data(
     static constexpr int acc_size = utils::one_of(d_type, bf16, f16) ? 2 : 4;
     const auto load_shifted_padded_with_zeros
             = [this](int dstIdx, int srcIdx, int maskTmpIdx, int offset) {
-                  this->uni_vpxor(this->zreg(0, dstIdx), this->zreg(0, dstIdx),
-                          this->zreg(0, dstIdx));
-                  this->load_data(this->zreg(0, maskTmpIdx),
-                          this->EVEX_compress_addr(this->mask_, offset), true);
-                  this->vpermt2ps(this->zreg(0, dstIdx),
-                          this->zreg(0, maskTmpIdx), this->zreg(0, srcIdx));
-              };
+        this->uni_vpxor(this->zreg(0, dstIdx), this->zreg(0, dstIdx),
+                this->zreg(0, dstIdx));
+        this->load_data(this->zreg(0, maskTmpIdx),
+                this->EVEX_compress_addr(this->mask_, offset), true);
+        this->vpermt2ps(this->zreg(0, dstIdx), this->zreg(0, maskTmpIdx),
+                this->zreg(0, srcIdx));
+    };
 
-    const auto load_ws_diffdst = [&, this](int dstIdx, int offset,
-                                         tail_mode tail_proc) {
+    const auto load_ws_diffdst
+            = [&, this](int dstIdx, int offset, tail_mode tail_proc) {
         if (tail_proc == tail_mode::NoTail) {
             IRB_LOOP(this->load_data(this->zreg(irb, dstIdx),
                     this->EVEX_compress_addr(

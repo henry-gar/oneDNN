@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2018-2025 Intel Corporation
+* Copyright 2018 Intel Corporation
 * Copyright 2023 Arm Ltd. and affiliates
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
@@ -423,6 +423,8 @@ std::string rt_mds2str(primitive_kind_t prim_kind, const memory_desc_t *src_md,
         const memory_desc_t *dst_md);
 // Returns a verbose string for primitive attributes. Used in ukernel API.
 std::string attr2str(const primitive_attr_t *attr);
+
+std::string md2fmt_tag_str(const memory_desc_t *md);
 
 } // namespace impl
 } // namespace dnnl

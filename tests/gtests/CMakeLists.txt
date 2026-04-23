@@ -1,5 +1,5 @@
 #===============================================================================
-# Copyright 2016-2025 Intel Corporation
+# Copyright 2016 Intel Corporation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -95,6 +95,11 @@ file(GLOB PRIM_TEST_CASES_SRC
                               test_prelu.cpp
                               test_group_normalization.cpp
                               )
+
+# Add grouped tests if experimental grouped memory is enabled
+if(DNNL_EXPERIMENTAL_GROUPED_MEMORY)
+    list(APPEND PRIM_TEST_CASES_SRC test_iface_grouped.cpp)
+endif()
 
 if(DNNL_CPU_RUNTIME STREQUAL "NONE")
     list(APPEND PRIM_TEST_CASES_SRC test_iface_gpu_only.cpp)
@@ -262,6 +267,10 @@ if(NOT DNNL_ENABLE_STACK_CHECKER)
 
     if(DNNL_WITH_SYCL)
         add_subdirectory(sycl)
+    endif()
+
+    if(DNNL_GPU_RUNTIME STREQUAL "ZE")
+        add_subdirectory(ze)
     endif()
 
     if(ONEDNN_BUILD_GRAPH)

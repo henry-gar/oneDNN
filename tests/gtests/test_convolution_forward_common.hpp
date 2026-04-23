@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2016-2025 Intel Corporation
+* Copyright 2016 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -34,80 +34,76 @@ void compute_ref_conv_fwd(const test_convolution_sizes_t &c,
         const memory::desc &weights_d, const memory::desc &bias_d,
         const memory::desc &dst_d, const memory &src, const memory &weights,
         const memory &bias, const memory &dst) {
-    const bool w_bias = bias_d.get_ndims() != 0;
-    auto src_data = map_memory<data_t_src>(src);
-    auto weights_data = map_memory<data_t_wei>(weights);
-
-    auto bias_data = w_bias ? map_memory<data_t_dst>(bias) : nullptr;
-    auto dst_data = map_memory<data_t_dst>(dst);
+    auto src_mapped = map_memory<data_t_src>(src);
+    data_t_src *src_data = src_mapped;
+    auto weights_mapped = map_memory<data_t_wei>(weights);
+    data_t_wei *weights_data = weights_mapped;
+    auto bias_mapped = map_memory<data_t_dst>(bias);
+    data_t_dst *bias_data = bias_mapped;
+    auto dst_mapped = map_memory<data_t_dst>(dst);
+    data_t_dst *dst_data = dst_mapped;
 
     auto padded_ic = src_d.get_padded_dims()[1];
     auto padded_oc = dst_d.get_padded_dims()[1];
 
-    const dnnl::impl::memory_desc_wrapper src_mdw(src_d.get());
-    const dnnl::impl::memory_desc_wrapper dst_mdw(dst_d.get());
-    const dnnl::impl::memory_desc_wrapper weights_mdw(weights_d.get());
-    const dnnl::impl::memory_desc_wrapper bias_mdw(bias_d.get());
-
     dnnl::impl::parallel_nd(c.mb, c.ng, c.oc / c.ng, c.oh, c.ow,
-            [&](memory::dim n, memory::dim g, memory::dim oc, memory::dim oh,
+            [=](memory::dim n, memory::dim g, memory::dim oc, memory::dim oh,
                     memory::dim ow) {
-                data_t_acc a = 0;
-                for (memory::dim ic = 0; ic < c.ic / c.ng; ic++) {
-                    for (memory::dim kh = 0; kh < c.kh; kh++) {
-                        for (memory::dim kw = 0; kw < c.kw; kw++) {
-                            memory::dim iw
-                                    = ow * c.strw - c.padw + kw * (1 + c.dilw);
-                            memory::dim ih
-                                    = oh * c.strh - c.padh + kh * (1 + c.dilh);
-                            if (iw < 0 || iw >= c.iw) continue;
-                            if (ih < 0 || ih >= c.ih) continue;
-                            memory::dim iidx = n * padded_ic * c.ih * c.iw
-                                    + g * padded_ic / c.ng * c.ih * c.iw
-                                    + ic * c.ih * c.iw + ih * c.iw + iw;
-                            memory::dim widx = g * padded_oc / c.ng * padded_ic
-                                            / c.ng * c.kh * c.kw
-                                    + oc * padded_ic / c.ng * c.kh * c.kw
-                                    + ic * c.kh * c.kw + kh * c.kw + kw;
-                            a += ((data_t_acc)src_data[src_mdw.off_l(
-                                         iidx, true)])
-                                    * weights_data[weights_mdw.off_l(
-                                            widx, true)];
-                        }
-                    }
-                }
+        const dnnl::impl::memory_desc_wrapper src_mdw(src_d.get());
+        const dnnl::impl::memory_desc_wrapper dst_mdw(dst_d.get());
+        const dnnl::impl::memory_desc_wrapper weights_mdw(weights_d.get());
+        const dnnl::impl::memory_desc_wrapper bias_mdw(bias_d.get());
 
-                float a_fp = (float)a;
+        data_t_acc a = 0;
+        for_(memory::dim ic = 0; ic < c.ic / c.ng; ic++)
+        for_(memory::dim kh = 0; kh < c.kh; kh++)
+        for (memory::dim kw = 0; kw < c.kw; kw++) {
+            memory::dim iw = ow * c.strw - c.padw + kw * (1 + c.dilw);
+            memory::dim ih = oh * c.strh - c.padh + kh * (1 + c.dilh);
+            if (iw < 0 || iw >= c.iw) continue;
+            if (ih < 0 || ih >= c.ih) continue;
+            memory::dim iidx = n * padded_ic * c.ih * c.iw
+                    + g * padded_ic / c.ng * c.ih * c.iw + ic * c.ih * c.iw
+                    + ih * c.iw + iw;
+            memory::dim widx
+                    = g * padded_oc / c.ng * padded_ic / c.ng * c.kh * c.kw
+                    + oc * padded_ic / c.ng * c.kh * c.kw + ic * c.kh * c.kw
+                    + kh * c.kw + kw;
+            a += ((data_t_acc)src_data[src_mdw.off_l(iidx, true)])
+                    * weights_data[weights_mdw.off_l(widx, true)];
+        }
 
-                if (attr.src_scale.is_def()) {
-                    const auto &s = attr.src_scale;
-                    using P = test_convolution_attr_t::scale_t;
-                    if (s.policy == P::policy_t::COMMON) { a_fp *= s.scale; }
-                }
+        float a_fp = (float)a;
 
-                if (attr.wei_scale.is_def()) {
-                    const auto &s = attr.wei_scale;
-                    using P = test_convolution_attr_t::scale_t;
-                    if (s.policy == P::policy_t::COMMON) { a_fp *= s.scale; }
-                }
+        if (attr.src_scale.is_def()) {
+            const auto &s = attr.src_scale;
+            using P = test_convolution_attr_t::scale_t;
+            if (s.policy == P::policy_t::COMMON) { a_fp *= s.scale; }
+        }
 
-                a_fp += (float)(bias_data ? bias_data[bias_mdw.off_l(
-                                        g * c.oc / c.ng + oc, true)]
-                                          : 0);
+        if (attr.wei_scale.is_def()) {
+            const auto &s = attr.wei_scale;
+            using P = test_convolution_attr_t::scale_t;
+            if (s.policy == P::policy_t::COMMON) { a_fp *= s.scale; }
+        }
 
-                if (attr.dst_scale.is_def()) {
-                    const auto &s = attr.dst_scale;
-                    using P = test_convolution_attr_t::scale_t;
-                    if (s.policy == P::policy_t::COMMON) { a_fp /= s.scale; }
-                }
+        a_fp += (float)(bias_data
+                        ? bias_data[bias_mdw.off_l(g * c.oc / c.ng + oc, true)]
+                        : 0);
 
-                a_fp = out_round<data_t_dst>(a_fp);
+        if (attr.dst_scale.is_def()) {
+            const auto &s = attr.dst_scale;
+            using P = test_convolution_attr_t::scale_t;
+            if (s.policy == P::policy_t::COMMON) { a_fp /= s.scale; }
+        }
 
-                memory::dim oidx = n * padded_oc * c.oh * c.ow
-                        + g * padded_oc / c.ng * c.oh * c.ow + oc * c.oh * c.ow
-                        + oh * c.ow + ow;
-                dst_data[dst_mdw.off_l(oidx, true)] = (data_t_dst)a_fp;
-            });
+        a_fp = out_round<data_t_dst>(a_fp);
+
+        memory::dim oidx = n * padded_oc * c.oh * c.ow
+                + g * padded_oc / c.ng * c.oh * c.ow + oc * c.oh * c.ow
+                + oh * c.ow + ow;
+        dst_data[dst_mdw.off_l(oidx, true)] = (data_t_dst)a_fp;
+    });
 }
 
 template <typename data_t_src, typename data_t_wei, typename data_t_acc,
@@ -239,9 +235,9 @@ protected:
                 p.formats.src_format);
         auto c_weights_desc = cd.ng > 1
                 ? create_md({cd.ng, cd.oc / cd.ng, cd.ic / cd.ng, cd.kh, cd.kw},
-                        data_type_wei, p.formats.weights_format)
+                          data_type_wei, p.formats.weights_format)
                 : create_md({cd.oc, cd.ic, cd.kh, cd.kw}, data_type_wei,
-                        p.formats.weights_format);
+                          p.formats.weights_format);
         auto c_dst_desc = create_md({cd.mb, cd.oc, cd.oh, cd.ow}, data_type_dst,
                 p.formats.dst_format);
         auto c_bias_desc = with_bias
@@ -302,12 +298,12 @@ protected:
 
         auto conv_primitive_desc = with_bias
                 ? convolution_forward::primitive_desc(eng, aprop_kind,
-                        p.aalgorithm, c_src_desc, c_weights_desc, c_bias_desc,
-                        c_dst_desc, strides, dilations, padL, padR,
-                        attr.dnnl_attr)
+                          p.aalgorithm, c_src_desc, c_weights_desc, c_bias_desc,
+                          c_dst_desc, strides, dilations, padL, padR,
+                          attr.dnnl_attr)
                 : convolution_forward::primitive_desc(eng, aprop_kind,
-                        p.aalgorithm, c_src_desc, c_weights_desc, c_dst_desc,
-                        strides, dilations, padL, padR, attr.dnnl_attr);
+                          p.aalgorithm, c_src_desc, c_weights_desc, c_dst_desc,
+                          strides, dilations, padL, padR, attr.dnnl_attr);
 
         conv_primitive_desc = convolution_forward::primitive_desc(
                 conv_primitive_desc.get()); // test construction from a C pd
@@ -333,18 +329,18 @@ protected:
         ASSERT_EQ(conv_primitive_desc.get_padding_r(), padR);
 
         EXPECT_ANY_THROW(convolution_forward(conv_primitive_desc, {}));
-        convolution_forward(conv_primitive_desc)
-                .execute(strm,
-                        {{DNNL_ARG_SRC, c_src.get()},
-                                {DNNL_ARG_WEIGHTS, c_weights.get()},
-                                {DNNL_ARG_BIAS, c_bias.get()},
-                                {DNNL_ARG_DST, c_dst.get()},
-                                {DNNL_ARG_ATTR_SCALES | DNNL_ARG_SRC,
-                                        c_src_scales.get()},
-                                {DNNL_ARG_ATTR_SCALES | DNNL_ARG_WEIGHTS,
-                                        c_wei_scales.get()},
-                                {DNNL_ARG_ATTR_SCALES | DNNL_ARG_DST,
-                                        c_dst_scales.get()}});
+        convolution_forward prim(conv_primitive_desc);
+        prim.execute(strm,
+                {{DNNL_ARG_SRC, c_src.get()},
+                        {DNNL_ARG_WEIGHTS, c_weights.get()},
+                        {DNNL_ARG_BIAS, c_bias.get()},
+                        {DNNL_ARG_DST, c_dst.get()},
+                        {DNNL_ARG_ATTR_SCALES | DNNL_ARG_SRC,
+                                c_src_scales.get()},
+                        {DNNL_ARG_ATTR_SCALES | DNNL_ARG_WEIGHTS,
+                                c_wei_scales.get()},
+                        {DNNL_ARG_ATTR_SCALES | DNNL_ARG_DST,
+                                c_dst_scales.get()}});
         strm.wait();
 
         auto ref_memory = test::make_memory(c_dst_desc, eng);

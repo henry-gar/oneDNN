@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -212,16 +212,17 @@ struct conv_t : public primitive_t {
         args[DNNL_ARG_DST] = {c.get(), false};
         if (bias) args[DNNL_ARG_BIAS] = {bias.get(), true};
 
-        auto exec_ctx = ctx.into_exec_ctx_t(std::move(args));
-
-        nested_scratchpad_t ns(
-                exec_ctx, memory_tracking::names::key_nested, conv_);
-        exec_ctx.set_scratchpad_grantor(ns.grantor());
+        impl::exec_ctx_t exec_ctx {ctx, std::move(args)};
+        auto *nested_grantor
+                = create_nested_grantor(exec_ctx.get_scratchpad_grantor(),
+                        memory_tracking::names::key_nested,
+                        conv_->pd()->scratchpad_registry());
+        exec_ctx.set_scratchpad_grantor(nested_grantor);
 
         CHECK(conv_->execute(exec_ctx));
 
         return status::success;
-    };
+    }
 
 private:
     const pd_t *pd() const { return (const pd_t *)primitive_t::pd().get(); }

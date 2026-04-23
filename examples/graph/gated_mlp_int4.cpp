@@ -78,6 +78,12 @@ const char *get_type_string(logical_tensor::data_type dt) {
     return type_string;
 }
 
+fpmath_mode get_fpmath_mode(logical_tensor::data_type dt) {
+    if (dt == logical_tensor::data_type::f16) return fpmath_mode::f16;
+    if (dt == logical_tensor::data_type::bf16) return fpmath_mode::bf16;
+    return fpmath_mode::strict;
+}
+
 void print_test_case(logical_tensor::data_type dt, const mlp_dims_t &p) {
     std::cout << '[' << std::setw(4) << get_type_string(dt);
     std::cout << " mb = " << p.mb << ", ic = " << p.ic << ", oc = " << p.oc
@@ -113,6 +119,9 @@ void bench_gated_mlp(engine::kind ekind, logical_tensor::data_type dt,
     // Incremental IDs used to create logical tensors and operations.
     size_t id = 0;
 
+    // Intermediate data type
+    const logical_tensor::data_type dt_inter = logical_tensor::data_type::f32;
+
     // dequantize for fc_gate weights
     auto wei0_int4 = logical_tensor(
             id++, data_type::u4, wei0_sz, layout_type::strided);
@@ -130,7 +139,7 @@ void bench_gated_mlp(engine::kind ekind, logical_tensor::data_type dt,
 
     // fc_gate
     auto src = logical_tensor(id++, dt, src_sz, layout_type::strided);
-    auto out0 = logical_tensor(id++, dt, hd_sz, layout_type::strided);
+    auto out0 = logical_tensor(id++, dt_inter, hd_sz, layout_type::strided);
     auto fc_gate = op(id++, op::kind::MatMul, "fc_gate");
     fc_gate.add_inputs({src, wei0_dt});
     fc_gate.add_outputs({out0});
@@ -151,28 +160,37 @@ void bench_gated_mlp(engine::kind ekind, logical_tensor::data_type dt,
     deq_up.add_outputs({wei1_dt});
 
     // fc_up
-    auto out1 = logical_tensor(id++, dt, hd_sz, layout_type::strided);
+    auto out1 = logical_tensor(id++, dt_inter, hd_sz, layout_type::strided);
     auto fc_up = op(id++, op::kind::MatMul, "fc_up");
     fc_up.add_inputs({src, wei1_dt});
     fc_up.add_outputs({out1});
 
     // activation swish: sigmoid
-    auto out2 = logical_tensor(id++, dt, hd_sz, layout_type::strided);
+    auto out2 = logical_tensor(id++, dt_inter, hd_sz, layout_type::strided);
     auto swi_sig = op(id++, op::kind::Sigmoid, "swish/sigmoid");
     swi_sig.add_inputs({out0});
     swi_sig.add_outputs({out2});
 
     // activation swish: multiply
-    auto out3 = logical_tensor(id++, dt, hd_sz, layout_type::strided);
+    auto out3 = logical_tensor(id++, dt_inter, hd_sz, layout_type::strided);
     auto swi_mul = op(id++, op::kind::Multiply, "swish/multiply");
     swi_mul.add_inputs({out0, out2});
     swi_mul.add_outputs({out3});
 
     // multiplication
-    auto out4 = logical_tensor(id++, dt, hd_sz, layout_type::strided);
+    auto out4 = logical_tensor(id++, dt_inter, hd_sz, layout_type::strided);
     auto mul = op(id++, op::kind::Multiply, "mul");
     mul.add_inputs({out3, out1});
     mul.add_outputs({out4});
+
+    // downconversion when needed
+    auto out4_dt = out4;
+    auto typecast = op(id++, op::kind::TypeCast, "typecast");
+    if (dt != dt_inter) {
+        out4_dt = logical_tensor(id++, dt, hd_sz, layout_type::strided);
+        typecast.add_inputs({out4});
+        typecast.add_outputs({out4_dt});
+    }
 
     // dequantize for fc_down weights
     auto wei2_int4 = logical_tensor(
@@ -192,12 +210,12 @@ void bench_gated_mlp(engine::kind ekind, logical_tensor::data_type dt,
     // fc_down
     auto dst = logical_tensor(id++, dt, out_sz, layout_type::strided);
     auto fc_down = op(id++, op::kind::MatMul, "fc_down");
-    fc_down.add_inputs({out4, wei2_dt});
+    fc_down.add_inputs({out4_dt, wei2_dt});
     fc_down.add_outputs({dst});
 
     // Construct a gated mlp graph with engine kind and operations.
     dnnl::graph::graph mlp(ekind);
-    mlp.set_fpmath_mode(fpmath_mode::strict, true);
+    mlp.set_fpmath_mode(get_fpmath_mode(dt), true);
     mlp.add_op(deq_gate);
     mlp.add_op(deq_up);
     mlp.add_op(fc_gate);
@@ -205,6 +223,7 @@ void bench_gated_mlp(engine::kind ekind, logical_tensor::data_type dt,
     mlp.add_op(swi_sig);
     mlp.add_op(swi_mul);
     mlp.add_op(mul);
+    if (dt != dt_inter) { mlp.add_op(typecast); }
     mlp.add_op(deq_down);
     mlp.add_op(fc_down);
     mlp.finalize();

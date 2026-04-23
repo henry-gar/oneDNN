@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -43,17 +43,17 @@ static int compare(const dnn_mem_t &test_mem, res_t *res) {
 
     const auto increment
             = [&](dnnl_dims_t &pos, dnnl_dim_t &idx, bool &done, int stop_dim) {
-                  for (int i = test_mem.ndims() - 1; i >= stop_dim; i--) {
-                      pos[i]++;
-                      if (pos[i] < test_mem.dims()[i]) {
-                          break;
-                      } else {
-                          pos[i] = 0;
-                          if (i == stop_dim) done = true;
-                      }
-                  }
-                  idx = md_off_v(test_mem, pos);
-              };
+        for (int i = test_mem.ndims() - 1; i >= stop_dim; i--) {
+            pos[i]++;
+            if (pos[i] < test_mem.dims()[i]) {
+                break;
+            } else {
+                pos[i] = 0;
+                if (i == stop_dim) done = true;
+            }
+        }
+        idx = md_off_v(test_mem, pos);
+    };
 
     benchdnn_parallel_nd(test_mem.dims()[0], [&](dnnl_dim_t dim0) {
         dnnl_dims_t pos = {0};
@@ -145,7 +145,7 @@ int doit(const prb_t *prb, res_t *res) {
     args.set(0, test_mem);
     perf_function_t perf_func_ = &perf_func;
 
-    execute_and_wait(perf_func_, test_engine, args, res);
+    SAFE(run_execution(perf_func_, test_engine, args, res), WARN);
 
     if (has_bench_mode_bit(mode_bit_t::corr)) {
         SAFE(compare(test_mem, res), WARN);
@@ -159,10 +159,7 @@ int doit(const prb_t *prb, res_t *res) {
         res->obytes = dnnl_memory_desc_get_size(data_md)
                 - dnnl_memory_desc_get_size(plain_data_md);
     }
-
-    measure_perf(default_thr_ctx, res, perf_func_, args);
-
-    return OK;
+    return measure_perf(default_thr_ctx, res, perf_func_, args);
 }
 
 } // namespace zeropad

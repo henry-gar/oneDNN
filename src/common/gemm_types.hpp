@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -77,22 +77,30 @@ struct gemm_desc_t : public op_desc_t {
     // Simplified accessors that comply to GEMM API
     static transpose_t get_trans(const memory_desc_t &md) {
         if (!md.ndims) return transpose::notrans; // arbitrary
-        return md.dims[md.ndims - 1] != 1
-                        && md.format_desc.blocking.strides[md.ndims - 1] != 1
-                ? transpose::trans
-                : transpose::notrans;
+
+        // Leading dimension must be byte-aligned
+        using namespace data_type;
+        bool is_4bit = utils::one_of(md.data_type, f4_e2m1, f4_e3m0, s4, u4);
+        dim_t last_dim = md.dims[md.ndims - 1];
+        auto strides = md.format_desc.blocking.strides;
+        dim_t notranspose_ld
+                = md.dims[md.ndims - 2] > 1 ? strides[md.ndims - 2] : last_dim;
+        if (is_4bit && notranspose_ld % 2 != 0) return transpose::trans;
+
+        return last_dim != 1 && strides[md.ndims - 1] != 1 ? transpose::trans
+                                                           : transpose::notrans;
     }
-    transpose_t transa() const { return get_trans(b_desc); };
-    transpose_t transb() const { return get_trans(a_desc); };
-    transpose_t transc() const { return get_trans(c_desc); };
+    transpose_t transa() const { return get_trans(b_desc); }
+    transpose_t transb() const { return get_trans(a_desc); }
+    transpose_t transc() const { return get_trans(c_desc); }
     transpose_t trans_bias() const { return get_trans(bias_desc); }
 
     dnnl_dim_t batch() const {
         // if ndims < 3, it should return 1
         int64_t batch = 1;
         for (int i = 0; i < c_desc.ndims - 2; ++i) {
-            if (c_desc.dims[i] == DNNL_RUNTIME_DIM_VAL)
-                return DNNL_RUNTIME_DIM_VAL;
+            if (is_runtime_value(c_desc.dims[i]))
+                return runtime_value_for<dnnl_dim_t>();
             batch *= c_desc.dims[i];
         }
         return batch;
@@ -112,11 +120,11 @@ struct gemm_desc_t : public op_desc_t {
     }
 
     /** Stride between 2 matrices A in a batch. */
-    dnnl_dim_t stride_a(int dim = 0) const { return get_stride(b_desc, dim); };
+    dnnl_dim_t stride_a(int dim = 0) const { return get_stride(b_desc, dim); }
     /** Stride between 2 matrices B in a batch. */
-    dnnl_dim_t stride_b(int dim = 0) const { return get_stride(a_desc, dim); };
+    dnnl_dim_t stride_b(int dim = 0) const { return get_stride(a_desc, dim); }
     /** Stride between 2 matrices C in a batch. */
-    dnnl_dim_t stride_c(int dim = 0) const { return get_stride(c_desc, dim); };
+    dnnl_dim_t stride_c(int dim = 0) const { return get_stride(c_desc, dim); }
 
     // This assumes that one of the dimensions has strides 1
     static dnnl_dim_t get_ld(const memory_desc_t &md) {

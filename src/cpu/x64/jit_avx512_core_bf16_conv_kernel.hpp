@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -192,16 +192,16 @@ private:
     }
 
     int get_ow_start(int ki, int pad_l) {
-        return nstl::max(0,
-                utils::div_up(pad_l - ki * (jcp.dilate_w + 1), jcp.stride_w));
+        return utils::div_up(
+                nstl::max(0, pad_l - ki * (jcp.dilate_w + 1)), jcp.stride_w);
     }
 
     int get_ow_end(int ur_w, int ki, int pad_r) {
         return ur_w
-                - nstl::max(0,
-                        utils::div_up(
-                                pad_r - (jcp.kw - 1 - ki) * (jcp.dilate_w + 1),
-                                jcp.stride_w));
+                - utils::div_up(
+                        nstl::max(0,
+                                pad_r - (jcp.kw - 1 - ki) * (jcp.dilate_w + 1)),
+                        jcp.stride_w);
     }
     inline bool is_src_layout_nxc() {
         return utils::one_of(jcp.src_tag, format_tag::ndhwc, format_tag::nhwc,
@@ -672,8 +672,8 @@ private:
         dim_t iw_str = jcp.is_1stconv || jcp.transpose_src
                 ? 1
                 : (is_src_layout_nxc()
-                                ? static_cast<dim_t>(jcp.ngroups) * jcp.ic
-                                : jcp.ic_block);
+                                  ? static_cast<dim_t>(jcp.ngroups) * jcp.ic
+                                  : jcp.ic_block);
         dim_t ihid_str = static_cast<dim_t>(jcp.tr_iw)
                 * (jcp.transpose_src ? jcp.ic_block : iw_str);
         // jcp.transpose_src w_idx might be greater than jcp.tr_iw as right zero

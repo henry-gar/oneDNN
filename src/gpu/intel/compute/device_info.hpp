@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -30,13 +30,30 @@
 
 #include "oneapi/dnnl/dnnl_config.h"
 
+// NOLINTBEGIN(readability-identifier-naming)
+namespace ngen {
+enum class Core;
+using HW = Core;
+struct Product;
+} // namespace ngen
+// NOLINTEND(readability-identifier-naming)
+
 namespace dnnl {
 namespace impl {
 namespace gpu {
 namespace intel {
 namespace compute {
 
-enum class gpu_arch_t { unknown, xe_lp, xe_hp, xe_hpg, xe_hpc, xe2, xe3 };
+enum class gpu_arch_t {
+    unknown,
+    xe_lp,
+    xe_hp,
+    xe_hpg,
+    xe_hpc,
+    xe2,
+    xe3,
+    xe3p,
+};
 
 // Memory for storing ngen::Product to avoid directly including nGEN because of
 // header dependencies outside of src/gpu/intel.
@@ -44,7 +61,7 @@ struct alignas(int) gpu_product_t {
     unsigned char data[12];
 };
 
-static inline std::string to_string(gpu_arch_t arch) {
+static inline const char *to_string(gpu_arch_t arch) {
 #define CASE(_case) \
     if (arch == gpu_arch_t::_case) return STRINGIFY(_case)
     CASE(xe_lp);
@@ -53,6 +70,7 @@ static inline std::string to_string(gpu_arch_t arch) {
     CASE(xe_hpc);
     CASE(xe2);
     CASE(xe3);
+    CASE(xe3p);
     return "unknown";
 #undef CASE
 }
@@ -66,6 +84,7 @@ static inline gpu_arch_t str2gpu_arch(const char *str) {
     CASE(xe_hpc);
     CASE(xe2);
     CASE(xe3);
+    CASE(xe3p);
     return gpu_arch_t::unknown;
 #undef CASE
 }
@@ -139,18 +158,17 @@ static inline const char *ext2cl_str(device_ext_t ext) {
 }
 
 enum class native_ext_t : uint64_t {
-    // clang-format off
     // OpenCL data types
-    fp32_atomic_add = 1ull << 0,                   
-    fp32_atomic_min_max = 1ull << 1, 
-    fp32_atomic_load_store = 1ull << 2,  
-    fp16_atomic_add = 1ull << 3,                   
-    fp16_atomic_min_max = 1ull << 4,              
-    fp16_atomic_load_store = 1ull << 5,  
+    fp32_atomic_add = 1ull << 0,
+    fp32_atomic_min_max = 1ull << 1,
+    fp32_atomic_load_store = 1ull << 2,
+    fp16_atomic_add = 1ull << 3,
+    fp16_atomic_min_max = 1ull << 4,
+    fp16_atomic_load_store = 1ull << 5,
     fp64_atomic_add = 1ull << 6,
     fp64_atomic_min_max = 1ull << 7,
-    fp64_atomic_load_store = 1ull << 8,  
-    last
+    fp64_atomic_load_store = 1ull << 8,
+    last,
 };
 
 // Needed workaround for future HW extensions
@@ -161,35 +179,19 @@ struct device_info_t {
 public:
     virtual ~device_info_t() = default;
 
-    status_t init(
-            impl::engine_t *engine, const std::vector<uint8_t> &cache_blob = {}) {
-        if (!cache_blob.empty()) {
-            CHECK(init_from_cache_blob(cache_blob));
-            return init_serialized_device_info(cache_blob);
-        }
-
-        CHECK(init_device_name(engine));
-        CHECK(init_arch(engine));
-        CHECK(init_runtime_version(engine));
-        CHECK(init_extensions(engine));
-        CHECK(init_attributes(engine));
-        fixup_l3_cache_size();
-
-        CHECK(init_attributes_common(engine));
-
-        if (dnnl_version()->gpu_runtime == DNNL_RUNTIME_OCL) {
-            CHECK(init_serialized_device_info());
-        }
-
-        return status::success;
-    }
+    status_t init(impl::engine_t *engine,
+            const std::vector<uint8_t> &cache_blob = {});
 
     std::string get_cl_ext_options() const;
 
     bool has(device_ext_t ext) const { return extensions_ & (uint64_t)ext; }
-    bool has_native(native_ext_t ext) const { return native_extensions_ & (uint64_t)ext; }
+    bool has_native(native_ext_t ext) const {
+        return native_extensions_ & (uint64_t)ext;
+    }
     gpu_arch_t gpu_arch() const { return gpu_arch_; }
-    const gpu_product_t &gpu_product() const {return gpu_product_;}
+    const gpu_product_t &gpu_product() const { return gpu_product_; }
+    static const ngen::Product &ngen_product(gpu_product_t &product);
+    ngen::HW ngen_hw() const;
     int stepping_id() const;
     uint64_t native_extensions() const { return native_extensions_; }
     bool is_integrated() const;
@@ -203,7 +205,7 @@ public:
     int max_subgroup_size(data_type_t type = data_type::undef) const;
     static int max_subgroup_size(gpu_arch_t gpu_arch);
     static int grf_size(gpu_arch_t gpu_arch);
-    int grf_size() const { return grf_size(gpu_arch_); };
+    int grf_size() const { return grf_size(gpu_arch_); }
     int min_subgroup_size() const;
     size_t max_wg_size(bool large_grf_mode, size_t subgroup_size = 0) const;
     int eu_count() const { return eu_count_; }
@@ -212,14 +214,16 @@ public:
         return hw_threads_[large_grf_mode ? 1 : 0];
     }
     static int threads_per_eu(gpu_arch_t gpu_arch, bool large_grf_mode = false);
-    static int max_slm_size(gpu_arch_t gpu_arch);
-    static int max_slm_size_per_tg(gpu_arch_t gpu_arch);
+    static int max_slm_size(gpu_product_t product);
+    static int max_slm_size_per_tg(gpu_product_t product);
     static int max_slm_size_per_tg(
-            gpu_arch_t gpu_arch, int tg_size, bool large_grf_mode = false);
+            int tg_size, bool large_grf_mode, gpu_product_t product);
+    size_t memory_size() const { return memory_size_; }
     size_t l3_cache_size() const { return l3_cache_size_; }
     size_t icache_size() const;
     size_t max_kernel_param_size() const { return max_kernel_param_size_; }
     uint32_t device_address_bits() const { return device_address_bits_; }
+    uint64_t max_allocation_size() const { return max_allocation_size_; }
 
     const xpu::runtime_version_t &runtime_version() const {
         return runtime_version_;
@@ -244,6 +248,8 @@ public:
     bool mayiuse_float_atomic_add(data_type_t type) const;
 
     bool has_native(data_type_t type) const;
+
+    bool is_efficient_64bit() const { return is_efficient_64bit_; }
 
     const std::vector<uint8_t> &get_cache_blob() const {
         return serialized_device_info_.get_data();
@@ -274,6 +280,7 @@ protected:
     bool mayiuse_systolic_ = false;
     bool mayiuse_ngen_kernels_ = false;
     bool mayiuse_system_memory_allocators_ = false;
+    bool is_efficient_64bit_ = false; // Efficient 64 bit addressing available
 
     std::string name_;
     xpu::runtime_version_t runtime_version_;
@@ -287,9 +294,11 @@ protected:
     int32_t max_subgroup_size_ = 16;
     int max_exec_size_ = 0;
     size_t max_wg_size_ = 0;
+    size_t memory_size_ = 0;
     size_t l3_cache_size_ = 0;
     size_t max_kernel_param_size_ = 1024;
     uint32_t device_address_bits_ = 64;
+    uint64_t max_allocation_size_ = UINT32_MAX;
 
     // extensions_ and gpu_arch_ describe effective extensions and GPU architecture.
     uint64_t extensions_ = 0;

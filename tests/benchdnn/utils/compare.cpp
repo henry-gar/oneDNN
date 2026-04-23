@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -17,7 +17,6 @@
 #include <algorithm>
 #include <cmath>
 #include <mutex>
-#include <sstream>
 #include <string>
 #include <thread>
 
@@ -32,28 +31,8 @@
 namespace compare {
 
 namespace {
-struct dump_point_ctx_t {
-    dump_point_ctx_t(const_dnnl_memory_desc_t md, int64_t l_offset,
-            float exp_f32, float exp, float got, float diff, float rel_diff)
-        : md(md)
-        , l_offset(l_offset)
-        , exp_f32(exp_f32)
-        , exp(exp)
-        , got(got)
-        , diff(diff)
-        , rel_diff(rel_diff) {}
-
-    const_dnnl_memory_desc_t md;
-    int64_t l_offset;
-    float exp_f32;
-    float exp;
-    float got;
-    float diff;
-    float rel_diff;
-};
-
 void dump_point_values(
-        const std::string &kind_str, const dump_point_ctx_t &ctx) {
+        const std::string &kind_str, const compare_t::dump_point_ctx_t &ctx) {
     dnnl::impl::stringstream_t ss;
     dims_t l_dims = md2dims(ctx.md);
     dims_t dims_idx = off2dims_idx(l_dims, ctx.l_offset);
@@ -95,8 +74,8 @@ bool has_binary_po_algs(const attr_t &attr,
 
         if (std::any_of(algs.cbegin(), algs.cend(),
                     [&](const attr_t::post_ops_t::kind_t alg) {
-                        return e.kind == alg;
-                    }))
+            return e.kind == alg;
+        }))
             return true;
     }
     return false;
@@ -137,8 +116,8 @@ bool negative_converts_to_zero(const attr_t &attr, dnnl_data_type_t target_dt) {
 
         if (std::any_of(non_neg_alpha_0_po.cbegin(), non_neg_alpha_0_po.cend(),
                     [k, alpha](const po_kind_t alg) {
-                        return alg == k && alpha == 0;
-                    }))
+            return alg == k && alpha == 0;
+        }))
             return true;
     }
     // Check for u8 dst
@@ -146,6 +125,7 @@ bool negative_converts_to_zero(const attr_t &attr, dnnl_data_type_t target_dt) {
 
     return false;
 }
+
 } // namespace
 
 bool compare_extreme_values(float a, float b) {
@@ -157,7 +137,7 @@ bool compare_extreme_values(float a, float b) {
 
 compare_t::driver_check_func_args_t::driver_check_func_args_t(
         const dnn_mem_t &exp_mem, const dnn_mem_t &got_f32, const int64_t i,
-        const dnnl_data_type_t data_type, const float trh)
+        const dnnl_data_type_t data_type, const float trh, data_kind_t dk)
     : dt(data_type)
     , idx(i)
     , exp_f32(exp_mem.get_f32_elem(idx))
@@ -165,7 +145,8 @@ compare_t::driver_check_func_args_t::driver_check_func_args_t(
     , got(got_f32.get_f32_elem(idx))
     , diff(fabsf(exp - got))
     , rel_diff(diff / (fabsf(exp) > FLT_MIN ? fabsf(exp) : 1))
-    , trh(trh) {}
+    , trh(trh)
+    , dk(dk) {}
 
 int compare_t::compare_norm(const dnn_mem_t &exp_mem, const dnn_mem_t &got_mem,
         const attr_t &attr, res_t *res) const {
@@ -196,7 +177,8 @@ int compare_t::compare_norm(const dnn_mem_t &exp_mem, const dnn_mem_t &got_mem,
 
         // Specifiers to keep data accumulated over several `i`.
         static thread_local diff_norm_t diff_norm_ithr;
-        driver_check_func_args_t args(exp_mem, got_f32, i, dt, trh_);
+        driver_check_func_args_t args(
+                exp_mem, got_f32, i, dt, trh_norm_, kind_);
 
         if ((std::isnan(args.exp_f32)) || std::isinf(args.exp)) {
             // Don't include nan inf values into norm as they make it
@@ -227,28 +209,24 @@ int compare_t::compare_norm(const dnn_mem_t &exp_mem, const dnn_mem_t &got_mem,
 
     diff_norm.done();
 
-    // Serial point dump with enabled dumping when needed for nicer output.
-    if (need_dump) {
-        for (int64_t i = 0; i < nelems; ++i) {
-            driver_check_func_args_t args(exp_mem, got_f32, i, dt, trh_);
-            dump_point_values(get_kind_str(),
-                    {got_mem.md_, i, args.exp_f32, args.exp, args.got,
-                            args.diff, args.rel_diff});
-        }
-    }
-
-    bool ok = diff_norm.rel_diff(norm_t::L2) <= trh_;
+    bool ok = diff_norm.rel_diff(norm_t::L2) <= trh_norm_;
     if (!ok) res->errors = 1;
 
     const bool dump = need_dump || !ok;
-    if (dump) dump_norm_values(diff_norm, get_kind_str());
+    if (dump) {
+        if (!need_dump) {
+            // Forced dump was printed in p2p.
+            dump_p2p_errors();
+        }
+        dump_norm_values(diff_norm, get_kind_str());
+    }
 
     if (res->errors) res->state = FAILED;
 
     // Status may be propagated from previous tensor. Use stats from cur tensor.
     BENCHDNN_PRINT((res->errors ? 0 : 6),
             "[COMPARE_STATS]%s: trh=%g (compare against [L2] rel_diff)\n",
-            get_kind_str().c_str(), trh_);
+            get_kind_str().c_str(), trh_norm_);
 
     if (res->state == EXECUTED) res->state = PASSED;
 
@@ -284,6 +262,7 @@ int compare_t::compare_p2p(const dnn_mem_t &exp_mem, const dnn_mem_t &got_mem,
             dnnl_f16, dnnl_e8m0, dnnl_f8_e5m2, dnnl_f8_e4m3};
     const bool output_has_nans = op_output_has_nans_
             || eltwise::eltwise_alg_returns_nan_or_inf(attr)
+            || has_binary_po_algs(attr, {attr_t::post_ops_t::kind_t::DIV})
             || std::any_of(dt_with_nan.begin(), dt_with_nan.end(),
                     [&](dnnl_data_type_t dt) { return got_mem.dt() == dt; });
     const bool has_exp_eltwise
@@ -313,7 +292,7 @@ int compare_t::compare_p2p(const dnn_mem_t &exp_mem, const dnn_mem_t &got_mem,
     static struct {
         struct data_t {
             int64_t n_errors;
-            std::vector<dump_point_ctx_t> dumps;
+            std::vector<compare_t::dump_point_ctx_t> dumps;
         };
 
         data_t &get() {
@@ -356,7 +335,8 @@ int compare_t::compare_p2p(const dnn_mem_t &exp_mem, const dnn_mem_t &got_mem,
 
         static thread_local driver_check_func_args_t args;
         for (int z = ok; z < 1; z++) {
-            args = driver_check_func_args_t(exp_f32, got_f32, i, dt, trh_);
+            args = driver_check_func_args_t(
+                    exp_f32, got_f32, i, dt, trh_, kind_);
 
             if (std::isnan(args.exp_f32) && is_integral_dt(dt)) {
                 // Relax output requirements for this case, since different
@@ -521,7 +501,8 @@ int compare_t::compare_p2p(const dnn_mem_t &exp_mem, const dnn_mem_t &got_mem,
         if (dump) {
             // Need to initialize `args` in case they weren't.
             if (args.dt == dnnl_data_type_undef)
-                args = driver_check_func_args_t(exp_f32, got_f32, i, dt, trh_);
+                args = driver_check_func_args_t(
+                        exp_f32, got_f32, i, dt, trh_, kind_);
 
             out_data.dumps.emplace_back(got_mem.md_, i, args.exp_f32, args.exp,
                     got_val, args.diff, args.rel_diff);
@@ -566,20 +547,19 @@ int compare_t::compare_p2p(const dnn_mem_t &exp_mem, const dnn_mem_t &got_mem,
     }
     // serial comparison with enabled dumping when needed for nicer output.
     if (n_errors > 0 || need_dump) {
-        std::vector<dump_point_ctx_t> dumps;
         for (auto &d : thread_data.data) {
-            dumps.insert(
-                    dumps.end(), d.second.dumps.begin(), d.second.dumps.end());
+            p2p_dumps_.insert(p2p_dumps_.end(), d.second.dumps.begin(),
+                    d.second.dumps.end());
         }
-        std::sort(dumps.begin(), dumps.end(),
-                [](const dump_point_ctx_t &a, const dump_point_ctx_t &b) {
-                    return a.l_offset < b.l_offset;
-                });
-        size_t max_dump_size
-                = (verbose >= 10 || dumps.size() < 10) ? dumps.size() : 10;
-        for (size_t i = 0; i < max_dump_size; i++) {
-            dump_point_values(get_kind_str(), dumps[i]);
-        }
+        std::sort(p2p_dumps_.begin(), p2p_dumps_.end(),
+                [](const compare_t::dump_point_ctx_t &a,
+                        const compare_t::dump_point_ctx_t &b) {
+            return a.l_offset < b.l_offset;
+        });
+        // If norm fallback is allowed, these dumps will be printed there.
+        // This is done to avoid an output disturbance if p2p check fails but
+        // norm passes.
+        if (need_dump || !allow_norm_check_) dump_p2p_errors();
     }
 
     // Set state to FAILED in case of any errors.
@@ -616,15 +596,58 @@ int compare_t::compare_p2p(const dnn_mem_t &exp_mem, const dnn_mem_t &got_mem,
     return res->state == FAILED ? FAIL : OK;
 }
 
+void compare_t::dump_p2p_errors() const {
+    size_t max_dump_size = (verbose >= 10 || p2p_dumps_.size() < 10)
+            ? p2p_dumps_.size()
+            : 10;
+    for (size_t i = 0; i < max_dump_size; i++) {
+        dump_point_values(get_kind_str(), p2p_dumps_[i]);
+    }
+}
+
 int compare_t::compare(const dnn_mem_t &exp_mem, const dnn_mem_t &got_mem,
         const attr_t &attr, res_t *res) const {
-    std::string add_args = std::string(use_norm_ ? "use_norm:true;" : "")
+    std::string add_args
+            = std::string(allow_norm_check_ ? "allow_norm:true;" : "")
             + std::string(op_output_has_nans_ ? "has_nans:true;" : "")
             + std::string(has_prim_ref_ ? "has_prim_ref:true;" : "");
     BENCHDNN_PRINT(6, "[COMPARE]%s: zero_trust%%=%.2f%% extra=%s\n",
             get_kind_str().c_str(), zero_trust_percent_, add_args.c_str());
-    if (use_norm_) return compare_norm(exp_mem, got_mem, attr, res);
-    return compare_p2p(exp_mem, got_mem, attr, res);
+    auto st = compare_p2p(exp_mem, got_mem, attr, res);
+    if (st != OK && allow_norm_check_) {
+        bool call_norm_check = true;
+        // Note: the following code specifies additional driver's individual
+        // desires when to enable norm check. This one purely depends on the
+        // result of p2p comparison. So far graph is the only driver needing
+        // such. When this becomes a trend, move it to a registered function
+        // mechanism.
+        if (driver_name == "graph") {
+            // For graph driver there's additional runtime check based on the
+            // number of failed points. This is done to limit the risk of hiding
+            // issues. If the number of failed points is reasonably low, let it
+            // try the norm approach.
+            const size_t allowed_error_points = res->total / 1024;
+            const bool norm_check_allowed = allowed_error_points >= res->errors;
+
+            BENCHDNN_PRINT(0,
+                    "[COMPARE_STATS] Norm check is %s; error_to_total_ratio: "
+                    "%zu/%zu; allowed_ratio: %zu/%zu;\n",
+                    norm_check_allowed ? "allowed" : "prohibited", res->errors,
+                    res->total, allowed_error_points, res->total);
+
+            call_norm_check = norm_check_allowed;
+        }
+
+        if (call_norm_check) {
+            res->reset_stats(EXECUTED);
+            st = compare_norm(exp_mem, got_mem, attr, res);
+        } else {
+            // Can be triggered by graph only if output wasn't requested.
+            const bool need_dump = verbose >= 99;
+            if (!need_dump) dump_p2p_errors();
+        }
+    }
+    return st;
 }
 
 } // namespace compare

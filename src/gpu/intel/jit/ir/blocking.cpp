@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -324,6 +324,7 @@ const tiler_params_t &tiler_params() {
         auto s_opts = gpu_utils::dev_getenv("tiler", std::string());
         if (s_opts.empty()) return ret;
         auto opts = gpu_utils::split(s_opts, ",");
+        const std::string sep = ":";
         for (auto &opt : opts) {
             if (opt.empty()) continue;
             if (opt == "list") {
@@ -342,7 +343,7 @@ const tiler_params_t &tiler_params() {
                 ret.mode = tiler_mode_t::tune;
                 continue;
             }
-            auto sub_opts = gpu_utils::split(opt, ":");
+            auto sub_opts = gpu_utils::split(opt, sep);
             gpu_assert((int)sub_opts.size() == 2);
             auto &key = sub_opts[0];
             auto &value = sub_opts[1];

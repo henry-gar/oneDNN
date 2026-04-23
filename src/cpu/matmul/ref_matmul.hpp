@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -64,9 +64,10 @@ struct ref_matmul_t : public primitive_t {
                                      || utils::one_of(wei_type, bf16, f16, u8,
                                              s8, u4, s4, f4_e3m0)),
                     VERBOSE_UNSUPPORTED_DT);
-            /* int8 weights decompression support */
-            VDISPATCH_MATMUL(IMPLICATION(utils::one_of(wei_type, u8, s8),
-                                     attr_.mayiconvert(wei_type, src_type)),
+            /* int weights decompression support */
+            VDISPATCH_MATMUL(
+                    IMPLICATION(utils::one_of(wei_type, u8, s8, u4, s4),
+                            attr_.mayiconvert(wei_type, src_type)),
                     VERBOSE_UNSUPPORTED_DT);
             VDISPATCH_MATMUL(IMPLICATION(src_type == f16,
                                      utils::one_of(dst_type, f32, f16)),
@@ -103,28 +104,30 @@ struct ref_matmul_t : public primitive_t {
                     VERBOSE_UNSUPPORTED_POSTOP);
             VDISPATCH_MATMUL(ref_post_ops_t::post_ops_ok(attr()->post_ops_),
                     VERBOSE_UNSUPPORTED_POSTOP);
-            VDISPATCH_MATMUL(attr_scales_ok(), VERBOSE_UNSUPPORTED_SCALES_CFG);
+            VDISPATCH_MATMUL(attr_scales_ok({DNNL_ARG_SRC, DNNL_ARG_WEIGHTS,
+                                                    DNNL_ARG_DST},
+                                     {quantization_mode::static_sazp,
+                                             quantization_mode::dynamic_mx,
+                                             quantization_mode::dynamic_fp}),
+                    VERBOSE_UNSUPPORTED_SCALES_CFG);
             VDISPATCH_MATMUL(set_default_formats(), VERBOSE_UNSUPPORTED_TAG);
             VDISPATCH_MATMUL(zero_points_ok(), VERBOSE_UNSUPPORTED_ZP_CFG);
             VDISPATCH_MATMUL(
                     attr_.set_default_formats(dst_md(0)) == status::success,
                     VERBOSE_UNSUPPORTED_POSTOP);
-            VDISPATCH_MATMUL(
-                    IMPLICATION(!attr_.dropout_.has_default_values(),
-                            utils::one_of(
-                                    attr_.dropout_.dropout_desc_.data_type, u8,
-                                    s8)),
-                    VERBOSE_UNSUPPORTED_ATTR);
-            VDISPATCH_MATMUL(
-                    IMPLICATION(!attr_.dropout_.has_default_values(),
-                            memory_desc_wrapper(dst_md(0)).similar_to(
-                                    attr_.dropout_.dropout_desc_, true, false)),
-                    VERBOSE_UNSUPPORTED_ATTR);
+            CHECK(dropout_ok());
+
+            init_scratchpad();
 
             return status::success;
         }
 
+        int nthr_;
+        int ntasks_;
+
     private:
+        void init_scratchpad();
+
         bool zero_points_ok() const {
             const auto &zp = attr()->zero_points_;
             if (!zp.has_default_values(DNNL_ARG_SRC)) { return false; }
@@ -147,6 +150,25 @@ struct ref_matmul_t : public primitive_t {
             if (!zp.has_default_values(DNNL_ARG_DST)) { return false; }
 
             return true;
+        }
+
+        status_t dropout_ok() const {
+            if (attr_.dropout_.has_default_values()) return status::success;
+
+            assert(memory_desc_wrapper(dst_md(0)).format_kind()
+                    == format_kind::blocked);
+
+            using namespace format_tag;
+            // See `ref_dropout(...)` comment which explains the requirement.
+            VDISPATCH_MATMUL_IC(memory_desc_matches_one_of_tag(
+                                        *dst_md(0), ncdhw, nchw, ncw, nc)
+                            && IMPLICATION(attr_.dropout_.has_output_mask(),
+                                    memory_desc_wrapper(dst_md(0)).similar_to(
+                                            attr_.dropout_.dropout_desc_, true,
+                                            false)),
+                    VERBOSE_UNSUPPORTED_DROPOUT);
+
+            return status::success;
         }
     };
 

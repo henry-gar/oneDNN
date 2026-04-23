@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -33,8 +33,8 @@ static std::size_t calc_vmm_to_preserve_size_bytes(
 
     return std::accumulate(vmm_to_preserve.begin(), vmm_to_preserve.end(),
             std::size_t(0u), [](std::size_t accum, const Xbyak::Xmm &vmm) {
-                return accum + get_vmm_size_bytes(vmm);
-            });
+        return accum + get_vmm_size_bytes(vmm);
+    });
 }
 
 register_preserve_guard_t::register_preserve_guard_t(jit_generator_t *host,
@@ -105,16 +105,16 @@ size_t register_preserve_guard_t::stack_space_occupied() const {
             = vmm_to_preserve_size_bytes_ + reg64_stack_.size() * reg64_size;
 
     return stack_space_occupied;
-};
+}
 
 conditional_register_preserve_guard_t::conditional_register_preserve_guard_t(
         bool condition_to_be_met, jit_generator_t *host,
         std::initializer_list<Xbyak::Reg64> reg64_to_preserve,
         std::initializer_list<Xbyak::Xmm> vmm_to_preserve)
     : register_preserve_guard_t {condition_to_be_met
-                    ? register_preserve_guard_t {host, reg64_to_preserve,
-                            vmm_to_preserve}
-                    : register_preserve_guard_t {nullptr, {}, {}}} {};
+                      ? register_preserve_guard_t {host, reg64_to_preserve,
+                                vmm_to_preserve}
+                      : register_preserve_guard_t {nullptr, {}, {}}} {};
 
 /*
 * Registry scratchpad code
@@ -154,21 +154,24 @@ Xbyak::Address registry_scratchpad_t::getPtr(int booking) const {
     return jit_.ptr[jit_.rsp + booking];
 }
 
-reg64_savable_t::reg64_savable_t(
-        registry_scratchpad_t &regscratchpad, const Xbyak::Reg64 &reg)
-    : Xbyak::Reg64(reg)
-    , regscratchpad_(regscratchpad)
-    , booking_(regscratchpad_.book())
-    , storable_(true) {}
+reg64_savable_t::reg64_savable_t(registry_scratchpad_t &regscratchpad,
+        const Xbyak::Reg64 &reg, bool is_storable)
+    : Xbyak::Reg64(reg), regscratchpad_(regscratchpad), storable_(is_storable) {
+    if (storable_) booking_ = regscratchpad_.book();
+}
+
+reg64_savable_t::reg64_savable_t(registry_scratchpad_t &regscratchpad,
+        const Xbyak::Reg64 &reg, const Xbyak::Reg64 &alternative_reg,
+        bool use_alternative)
+    : reg64_savable_t(regscratchpad, use_alternative ? alternative_reg : reg,
+              !use_alternative) {}
 
 reg64_savable_t::reg64_savable_t(registry_scratchpad_t &regscratchpad,
         const Xbyak::Reg64 &reg, const Xbyak::Reg64 &ext_reg)
-    : Xbyak::Reg64(regscratchpad.ExtendedRegisters() ? ext_reg : reg)
-    , regscratchpad_(regscratchpad)
-    , storable_(!regscratchpad.ExtendedRegisters()) {
+    : reg64_savable_t(
+              regscratchpad, reg, ext_reg, regscratchpad.ExtendedRegisters()) {
     // We expect ext_reg from extended registers set
     assert(16 <= ext_reg.getIdx() && ext_reg.getIdx() <= 31);
-    if (storable_) booking_ = regscratchpad_.book();
 }
 
 void reg64_savable_t::save() const {

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2021 Intel Corporation
+* Copyright 2020 Intel Corporation
 * Copyright 2020-2024 FUJITSU LIMITED
 * Copyright 2025 Arm Ltd. and affiliates
 *
@@ -632,6 +632,8 @@ template struct jit_sve_convolution_fwd_t<data_type::f32, data_type::f32,
         data_type::f32, sve_512>;
 template struct jit_sve_convolution_fwd_t<data_type::f32, data_type::f32,
         data_type::f32, sve_256>;
+template struct jit_sve_convolution_fwd_t<data_type::f32, data_type::f32,
+        data_type::f32, sve_128>;
 
 template <data_type_t diff_dst_type, data_type_t wei_type,
         data_type_t diff_src_type, cpu_isa_t isa>
@@ -1173,7 +1175,7 @@ struct jit_sve_convolution_bwd_weights_t<src_type, diff_dst_type,
     const diff_weights_data_t *diff_weights;
     diff_weights_data_t *diff_bias;
 
-    const memory_tracking::grantor_t scratchpad;
+    const memory_tracking::grantor_t &scratchpad;
 
     src_data_t *tr_src;
     simple_barrier::ctx_t *tr_src_bctx;
@@ -1226,7 +1228,7 @@ struct jit_sve_convolution_bwd_weights_t<src_type, diff_dst_type,
                 && jcp.oc_without_padding % jcp.oc_block != 0;
         diff_bias = is_bias_padded
                 ? scratchpad.template get<diff_weights_data_t>(
-                        key_conv_padded_bias)
+                          key_conv_padded_bias)
                 : CTX_OUT_MEM(diff_weights_data_t *, DNNL_ARG_DIFF_BIAS);
 
         /* reduction dimension */
@@ -1659,8 +1661,8 @@ void jit_sve_convolution_bwd_weights_t<src_type, diff_dst_type,
     auto rb = this->reducer_bias_;
     assert(nthr_ == rb->balancer().nthr_);
 
-    const auto reducer_bia_scratchpad
-            = memory_tracking::grantor_t(ti->scratchpad, prefix_reducer_bia);
+    memory_tracking::grantor_t reducer_bia_scratchpad(
+            ti->scratchpad, prefix_reducer_bia);
 
     const auto &jcp = kernel_->jcp;
 
@@ -1743,15 +1745,15 @@ template <data_type_t src_type, data_type_t diff_dst_type,
 void jit_sve_convolution_bwd_weights_t<src_type, diff_dst_type,
         diff_weights_type, isa>::prepare_scratchpad_data(const exec_ctx_t &ctx)
         const {
-    auto scratchpad = ctx.get_scratchpad_grantor();
+    const auto &scratchpad = ctx.get_scratchpad_grantor();
 
     if (dnnl_thr_syncable() && nthr_mb_ > 1) {
         simple_barrier::ctx_init(scratchpad.template get<simple_barrier::ctx_t>(
                 key_conv_wei_bia_reduction_bctx));
     }
 
-    const auto reducer_bia_scratchpad
-            = memory_tracking::grantor_t(scratchpad, prefix_reducer_bia);
+    memory_tracking::grantor_t reducer_bia_scratchpad(
+            scratchpad, prefix_reducer_bia);
     auto rb = this->reducer_bias_;
     rb->init(reducer_bia_scratchpad);
 }
@@ -1832,9 +1834,8 @@ void jit_sve_convolution_bwd_weights_t<src_type, diff_dst_type,
                     auto rb = this->reducer_bias_;
                     assert(nthr == rb->balancer().nthr_);
                     if (rb->balancer().ithr_njobs(ithr) == 0) return;
-                    const auto reducer_bia_scratchpad
-                            = memory_tracking::grantor_t(
-                                    thread_info.scratchpad, prefix_reducer_bia);
+                    memory_tracking::grantor_t reducer_bia_scratchpad(
+                            thread_info.scratchpad, prefix_reducer_bia);
                     rb->reduce_nolock(thread_info.ithr, thread_info.diff_bias,
                             reducer_bia_scratchpad);
                 } break;

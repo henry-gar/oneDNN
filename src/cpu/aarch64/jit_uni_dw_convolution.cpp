@@ -162,7 +162,9 @@ void jit_uni_dw_convolution_fwd_t<isa, src_type, dst_type>::execute_forward(
 
 template struct jit_uni_dw_convolution_fwd_t<sve_512, data_type::f32>;
 template struct jit_uni_dw_convolution_fwd_t<sve_256, data_type::f32>;
+template struct jit_uni_dw_convolution_fwd_t<sve_128, data_type::f32>;
 template struct jit_uni_dw_convolution_fwd_t<sve_256, data_type::bf16>;
+template struct jit_uni_dw_convolution_fwd_t<sve_128, data_type::bf16>;
 
 template <cpu_isa_t isa, data_type_t diff_dst_type, data_type_t diff_src_type>
 void jit_uni_dw_convolution_bwd_data_t<isa, diff_dst_type,
@@ -315,33 +317,32 @@ void jit_uni_dw_convolution_bwd_weights_t<isa, src_type,
                       const int group, const int oh_start, const int work_size,
                       const unsigned char exec_flag, const size_t kh_padding,
                       const size_t filter_off) {
-                  const int tpad_underflow_off = jcp.t_pad - filter_off;
+        const int tpad_underflow_off = jcp.t_pad - filter_off;
 
-                  conv_params->exec_flags = exec_flag;
-                  conv_params->kh_count = jcp.kh - kh_padding;
+        conv_params->exec_flags = exec_flag;
+        conv_params->kh_count = jcp.kh - kh_padding;
 
-                  const int oh_s = oh_start;
-                  const int oh_e = oh_start + work_size;
-                  const int ih_s = oh_s * jcp.stride_h;
+        const int oh_s = oh_start;
+        const int oh_e = oh_start + work_size;
+        const int ih_s = oh_s * jcp.stride_h;
 
-                  conv_params->filter_pad_off
-                          = filter_off * jcp.kw * ch_block * jcp.typesize_out;
-                  conv_params->oh_index = oh_s;
-                  conv_params->oh_count = oh_e;
+        conv_params->filter_pad_off
+                = filter_off * jcp.kw * ch_block * jcp.typesize_out;
+        conv_params->oh_index = oh_s;
+        conv_params->oh_count = oh_e;
 
-                  size_t diff_dst_off
-                          = ((batch * (jcp.ngroups / ch_block) + group) * jcp.oh
-                                    + oh_start)
-                          * jcp.ow;
+        size_t diff_dst_off
+                = ((batch * (jcp.ngroups / ch_block) + group) * jcp.oh
+                          + oh_start)
+                * jcp.ow;
 
-                  size_t src_off
-                          = ((batch * (jcp.ngroups / ch_block) + group) * jcp.ih
-                                    + ih_s - tpad_underflow_off)
-                          * jcp.iw;
+        size_t src_off = ((batch * (jcp.ngroups / ch_block) + group) * jcp.ih
+                                 + ih_s - tpad_underflow_off)
+                * jcp.iw;
 
-                  conv_params->output = &diff_dst[diff_dst_off * ch_block];
-                  conv_params->input = &src[src_off * ch_block];
-              };
+        conv_params->output = &diff_dst[diff_dst_off * ch_block];
+        conv_params->input = &src[src_off * ch_block];
+    };
 
     parallel(jcp.nthr, [&](const int ithr, const int nthr) {
         assert(nthr == jcp.nthr);
@@ -381,11 +382,21 @@ void jit_uni_dw_convolution_bwd_weights_t<isa, src_type,
 
             for (int mb = mb_start; mb < mb_end; ++mb) {
                 for (int oh = 0; oh < jcp.oh; ++oh) {
-                    const int kh_t_padding = nstl::max(0, jcp.t_pad - oh);
-                    const int bottom_excess = (oh * jcp.stride_h + jcp.kh)
-                            - (jcp.ih + jcp.t_pad);
+                    // oh_inp: top input row (no padding) for this output row
+                    /**
+                     * Calculate the input height coordinate corresponding to the current output height.
+                     * This maps from output to input by multiplying by the stride, necessary when stride > 1.
+                     */
+                    const int oh_inp = oh * jcp.stride_h;
+                    // kh_t_padding: kernel rows above valid input
+                    const int kh_t_padding = nstl::max(0, jcp.t_pad - oh_inp);
+                    // bottom_excess: kernel rows past bottom of padded input
+                    const int bottom_excess
+                            = (oh_inp + jcp.kh) - (jcp.ih + jcp.t_pad);
+                    // kh_b_padding: kernel rows below valid input
                     const int kh_b_padding
                             = bottom_excess > 0 ? bottom_excess : 0;
+                    // kh_padding = rows to skip (top + bottom); filter_off = top skip
                     set_kernel_params(&conv_params, mb, g, oh, 1,
                             zero_filter_flag | zero_bias_flag,
                             kh_t_padding + kh_b_padding, kh_t_padding);

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2016-2025 Intel Corporation
+* Copyright 2016 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -30,6 +30,10 @@
 #define VDISPATCH_SOFTMAX_SC(f, msg, ...) \
     VCHECK(primitive, create, dispatch, softmax, (f), "%s," msg, \
             this->info(engine), ##__VA_ARGS__)
+
+#define VDISPATCH_SOFTMAX_IC(cond, msg, ...) \
+    VCONDCHECK(primitive, create, dispatch, softmax, (cond), \
+            status::unimplemented, msg, ##__VA_ARGS__)
 
 namespace dnnl {
 namespace impl {

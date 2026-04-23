@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -172,7 +172,8 @@ public:
     void TestBatchnorm(bool dims_in_order = true) {
         using dims = dnnl::impl::graph::dnnl_impl::dims;
 
-        auto params = ::testing::TestWithParam<batchnorm_params_t>::GetParam();
+        const auto &params
+                = ::testing::TestWithParam<batchnorm_params_t>::GetParam();
 
         graph::op_t batchnorm_op(0, params.op_kind, "batchnorm");
         batchnorm_op.set_attr(graph::op_attr::epsilon, params.epsilon);
@@ -345,15 +346,15 @@ public:
             // Initialize mean.
             std::generate(
                     running_mean_data.begin(), running_mean_data.end(), []() {
-                        static int i = 0;
-                        return std::sin(static_cast<float>(i++) * 2.f);
-                    });
+                static int i = 0;
+                return std::sin(static_cast<float>(i++) * 2.f);
+            });
             // Initialize variance.
             std::generate(running_variance_data.begin(),
                     running_variance_data.end(), []() {
-                        static int i = 0;
-                        return static_cast<float>(i++);
-                    });
+                static int i = 0;
+                return static_cast<float>(i++);
+            });
         }
 
         test_tensor_t src_ts(src, engine, src_data);

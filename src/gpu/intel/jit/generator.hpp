@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -27,7 +27,6 @@
 #include "gpu/intel/compute/device_info.hpp"
 #include "gpu/intel/engine.hpp"
 #include "gpu/intel/jit/generator_base.hpp"
-#include "gpu/intel/jit/utils/ngen_type_bridge.hpp"
 #include "gpu/intel/jit/utils/utils.hpp"
 #include "gpu/intel/primitive.hpp"
 #include "xpu/utils.hpp"
@@ -44,6 +43,12 @@
 #include "ngen_opencl.hpp"
 #endif
 
+#if DNNL_GPU_RUNTIME == DNNL_RUNTIME_ZE
+#include "gpu/intel/ze/engine.hpp"
+#include "gpu/intel/ze/kernel.hpp"
+#include "ngen_level_zero.hpp"
+#endif
+
 namespace dnnl {
 namespace impl {
 namespace gpu {
@@ -57,6 +62,7 @@ constexpr gpu_gen_t gpu_xe_hpg = ngen::HW::XeHPG;
 constexpr gpu_gen_t gpu_xe_hpc = ngen::HW::XeHPC;
 constexpr gpu_gen_t gpu_xe2 = ngen::HW::Xe2;
 constexpr gpu_gen_t gpu_xe3 = ngen::HW::Xe3;
+constexpr gpu_gen_t gpu_xe3p = ngen::HW::Xe3p;
 
 #if (!defined(NDEBUG) || defined(DNNL_DEV_MODE))
 #define GENERATOR_NAME __FILE__
@@ -91,6 +97,11 @@ template <gpu_gen_t hw>
 using ngen_code_generator_t = ngen::OpenCLCodeGenerator<hw>;
 #endif
 
+#if DNNL_GPU_RUNTIME == DNNL_RUNTIME_ZE
+template <gpu_gen_t hw>
+using ngen_code_generator_t = ngen::LevelZeroCodeGenerator<hw>;
+#endif
+
 void check_kernel_size(const std::string &kernel_name, size_t kernel_size,
         const intel::engine_t *engine);
 
@@ -103,6 +114,9 @@ public:
     generator_t(
             const ngen::Product &product, const ngen::DebugConfig &debug_config)
         : ngen_code_generator_t<hw>(product, debug_config) {}
+
+    generator_t(ngen_code_generator_t<hw> &&base)
+        : ngen_code_generator_t<hw>(std::move(base)) {}
 
     const char *kernel_name() const override {
         return ngen_code_generator_t<hw>::getExternalName().c_str();
@@ -124,13 +138,22 @@ public:
                 ocl_engine->context(), ocl_engine->device());
         return ocl::kernel_t::make(kernel, ocl_kernel, {});
 #endif
+#if DNNL_GPU_RUNTIME == DNNL_RUNTIME_ZE
+        auto *ze_engine = utils::downcast<const ze::engine_t *>(engine);
+        auto ze_module_kernel = ngen_code_generator_t<hw>::getModuleAndKernel(
+                ze_engine->context(), ze_engine->device());
+        auto ze_module_ptr
+                = std::make_shared<xpu::ze::wrapper_t<ze_module_handle_t>>(
+                        ze_module_kernel.first);
+        return ze::kernel_t::make(
+                kernel, ze_module_ptr, ze_module_kernel.second, kernel_name());
+#endif
     }
 };
 
 inline ngen::HW to_ngen_hw(const impl::engine_t *engine) {
     auto *intel_engine = utils::downcast<const intel::engine_t *>(engine);
-    auto *device_info = intel_engine->device_info();
-    return convert_dnnl_arch_to_ngen(device_info->gpu_arch());
+    return intel_engine->device_info()->ngen_hw();
 }
 
 inline ngen::HW to_ngen_hw(const impl::engine_t &engine) {

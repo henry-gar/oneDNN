@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2016-2025 Intel Corporation
+* Copyright 2016 Intel Corporation
 * Copyright 2018 YANDEX LLC
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
@@ -161,21 +161,20 @@ void jit_avx2_1x1_conv_kernel_f32_t::apply_postops(
 
             iterate(load_loop_blk, ur, load_dim_tail,
                     [&](const bool mask_flag, const int i, const int j) {
-                        const size_t aux_output_offset
-                                = (i * get_output_i_offset(jcp, true)
-                                          + j * get_output_j_offset(jcp))
-                                * sizeof(float);
-                        const auto vmm_idx
-                                = vreg_accum_idx(load_loop_blk, i, j);
-                        vmm_idxs.emplace(vmm_idx);
+                const size_t aux_output_offset
+                        = (i * get_output_i_offset(jcp, true)
+                                  + j * get_output_j_offset(jcp))
+                        * sizeof(float);
+                const auto vmm_idx = vreg_accum_idx(load_loop_blk, i, j);
+                vmm_idxs.emplace(vmm_idx);
 
-                        rhs_arg_params_tail.vmm_idx_to_out_reg.emplace(
-                                vmm_idx, aux_reg_output_data);
-                        rhs_arg_params_tail.vmm_idx_to_out_elem_off_val.emplace(
-                                vmm_idx, aux_output_offset);
-                        if (mask_flag)
-                            rhs_arg_params_tail.vmm_tail_idx_.emplace(vmm_idx);
-                    });
+                rhs_arg_params_tail.vmm_idx_to_out_reg.emplace(
+                        vmm_idx, aux_reg_output_data);
+                rhs_arg_params_tail.vmm_idx_to_out_elem_off_val.emplace(
+                        vmm_idx, aux_output_offset);
+                if (mask_flag)
+                    rhs_arg_params_tail.vmm_tail_idx_.emplace(vmm_idx);
+            });
             rhs_arg_params = rhs_arg_params_tail;
             rhs_arg_params.vmm_tail_idx_.clear();
 
@@ -208,13 +207,13 @@ void jit_avx2_1x1_conv_kernel_f32_t::apply_postops(
         } else {
             iterate(load_loop_blk, ur, load_dim_tail,
                     [&](const bool, const int i, const int j) {
-                        vmm_idxs.emplace(vreg_accum_idx(load_loop_blk, i, j));
-                    });
+                vmm_idxs.emplace(vreg_accum_idx(load_loop_blk, i, j));
+            });
             postops_injector_->compute_vector_range(vmm_idxs);
         }
         L(store_nopost_ops);
     }
-};
+}
 
 void jit_avx2_1x1_conv_kernel_f32_t::generate_reduce_loop(
         int load_loop_blk, int ur) {
@@ -778,9 +777,9 @@ status_t jit_avx2_1x1_conv_kernel_f32_t::init_conf(jit_1x1_conv_conf_t &jcp,
     const int is_bwd_d = jcp.prop_kind == backward_data;
     format_tag_t wei_tag = with_groups
             ? utils::pick(2 * ndims - 6 + is_bwd_d, gOIw8i8o, gOIw8o8i,
-                    gOIhw8i8o, gOIdhw8o8i, gOIhw8i8o, gOIdhw8o8i)
+                      gOIhw8i8o, gOIdhw8o8i, gOIhw8i8o, gOIdhw8o8i)
             : utils::pick(2 * ndims - 6 + is_bwd_d, OIw8i8o, OIw8o8i, OIhw8i8o,
-                    OIhw8o8i, OIdhw8i8o, OIdhw8o8i);
+                      OIhw8o8i, OIdhw8i8o, OIdhw8o8i);
     jcp.wei_tag = weights_d.matches_one_of_tag(wei_tag);
 
     const int simd_w = 8;

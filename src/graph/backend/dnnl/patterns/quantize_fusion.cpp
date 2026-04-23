@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2025 Intel Corporation
+* Copyright 2021 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -34,7 +34,7 @@ using FCreatePattern = graph::pass::FCreatePattern;
 namespace {
 bool check_inputs_all_bf16(op_t *op) {
     for (size_t i = 0; i < op->num_inputs(); ++i) {
-        logical_tensor_t iport = op->get_input_value(i)->get_logical_tensor();
+        logical_tensor_t iport = op->get_input_logical_tensor(i);
         VCHECK_PATTERN_UTILS(iport.data_type == graph::data_type::bf16, false,
                 "input data type for typecast-quantize fusion is not bf16");
     }

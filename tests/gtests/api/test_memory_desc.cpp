@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -118,10 +118,12 @@ TEST(c_api_host_scalar_md, TestHostScalarInvalidType) {
     ASSERT_EQ(dnnl_memory_desc_create_host_scalar(
                       &scalar_md, (dnnl_data_type_t)999),
             dnnl_invalid_arguments);
+    EXPECT_EQ(scalar_md, nullptr);
 
     ASSERT_EQ(dnnl_memory_desc_create_host_scalar(
                       &scalar_md, dnnl_data_type_undef),
             dnnl_invalid_arguments);
+    EXPECT_EQ(scalar_md, nullptr);
 }
 
 TEST(c_api_host_scalar_md, TestHostScalarNullPtr) {

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -16,9 +16,8 @@
 
 #include "gpu/intel/jit/grf_usage.hpp"
 
-#include "gpu/intel/jit/codegen/register_allocator.hpp"
-#include "gpu/intel/jit/ir/message.hpp"
-#include "gpu/intel/jit/ir/reorder.hpp"
+#include "gemmstone/../../dsl/ir/codegen/allocation_size.hpp"
+#include "gpu/intel/jit/ir/legacy.hpp"
 
 namespace dnnl {
 namespace impl {
@@ -115,16 +114,17 @@ public:
     void _visit(const alloc_t &obj) override {
         if (is_invalid_) return;
         int size = (obj.kind == alloc_kind_t::grf ? obj.size : 0);
-        size = utils::rnd_up(size, grf_size_);
-        mem_usage_guard_t alloc_guard(&alloc_usage_, &peak_alloc_usage_, size);
-        mem_usage_guard_t guard(&grf_usage_, &peak_grf_usage_, size);
+        size = ir::register_size(obj, grf_size_);
+        ir::mem_usage_guard_t alloc_guard(
+                &alloc_usage_, &peak_alloc_usage_, size);
+        ir::mem_usage_guard_t guard(&grf_usage_, &peak_grf_usage_, size);
         if (size > 0) {
             buf_usage_.add(obj.buf, obj.size, grf_usage_label_t::unknown);
             mark_known_bufs(obj.buf);
         }
-        mem_usage_guard_t header_guard;
+        ir::mem_usage_guard_t header_guard;
         if (is_header(obj.buf))
-            header_guard = mem_usage_guard_t(&headers_, &peak_headers_, 1);
+            header_guard = ir::mem_usage_guard_t(&headers_, &peak_headers_, 1);
         ir_visitor_t::_visit(obj);
     }
 
@@ -159,8 +159,8 @@ public:
     void _visit(const let_t &obj) override {
         if (is_invalid_) return;
         int size = (obj.value.is_empty() ? 0 : obj.var.type().size());
-        size = utils::rnd_up(size, reg_allocator_t::granularity);
-        mem_usage_guard_t guard(&grf_usage_, &peak_grf_usage_, size);
+        size = ir::register_size(obj);
+        ir::mem_usage_guard_t guard(&grf_usage_, &peak_grf_usage_, size);
         ir_visitor_t::_visit(obj);
     }
 

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2016-2025 Intel Corporation
+* Copyright 2016 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -143,6 +143,9 @@ template <>
 struct numeric_limits<double> : public std::numeric_limits<double> {};
 
 template <>
+struct numeric_limits<int64_t> : public std::numeric_limits<int64_t> {};
+
+template <>
 struct numeric_limits<int32_t> : public std::numeric_limits<int32_t> {};
 
 template <>
@@ -194,7 +197,7 @@ struct numeric_limits<float8_e8m0_t> {
     static constexpr float8_e8m0_t lowest() {
         return float8_e8m0_t(0x00, true);
     }
-    static constexpr float8_e8m0_t min() { return float8_e8m0_t(0x7f, true); }
+    static constexpr float8_e8m0_t min() { return float8_e8m0_t(0x01, true); }
     static constexpr float8_e8m0_t max() { return float8_e8m0_t(0xfe, true); }
 
     static constexpr int bias = 0x7f;
@@ -431,12 +434,12 @@ constexpr std::array<typename std::remove_cv<T>::type, N> to_array(T (&a)[N]) {
 
 template <class T, std::size_t N, std::size_t... I>
 constexpr std::array<typename std::remove_cv<T>::type, N> to_array_impl(
-        T(&&a)[N], index_sequence<I...>) {
+        T (&&a)[N], index_sequence<I...>) {
     return {{std::move(a[I])...}};
 }
 
 template <class T, std::size_t N>
-constexpr std::array<typename std::remove_cv<T>::type, N> to_array(T(&&a)[N]) {
+constexpr std::array<typename std::remove_cv<T>::type, N> to_array(T (&&a)[N]) {
     return to_array_impl(std::move(a), make_index_sequence<N> {});
 }
 

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -23,7 +23,6 @@ enum data_kind_t {
     BIA,
     DST,
     DIFF_DST,
-    ACC,
     // bnorm, lnorm
     SRC_1,
     // select
@@ -42,12 +41,14 @@ enum data_kind_t {
     WEI_PEEPHOLE,
     WEI_PROJECTION,
     DROPOUT_MASK,
+    DST_SCALES,
+    // SDPA softmax stats
+    SDPA_STATS,
 
     DAT_TOTAL,
-    // softmax stats
-    DST_1,
 };
-const char *data_kind2str(data_kind_t kind);
+
+const char *data_kind2str(data_kind_t dk);
 
 // Returns correspondent `data_kind_t` value to a given execution `arg` value.
 data_kind_t exec_arg2data_kind(int arg);

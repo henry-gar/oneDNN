@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -16,9 +16,10 @@
 
 #include "gpu/intel/jit/pass/hoist.hpp"
 
-#include "gpu/intel/jit/codegen/register_allocator.hpp"
-#include "gpu/intel/jit/ir/message.hpp"
-#include "gpu/intel/jit/utils/trace.hpp"
+#include "gemmstone/../../dsl/ir/codegen/allocation_size.hpp"
+#include "gemmstone/../../dsl/ir/pass/simplify.hpp"
+#include "gemmstone/../../dsl/ir/pass/trace.hpp"
+#include "gpu/intel/jit/ir/legacy.hpp"
 
 namespace dnnl {
 namespace impl {
@@ -38,7 +39,7 @@ public:
     expr_t expr() const { return make_add(args_, type_); }
 
     static expr_t make_add(
-            const std::vector<expr_t> &args, const type_t &type) {
+            const std::vector<expr_t> &args, const dsl::type_t &type) {
         auto maybe_bcast = [&](const expr_t &e) {
             if (e.type().elems() == type.elems()) return e;
             gpu_assert(e.type().is_scalar());
@@ -67,7 +68,7 @@ private:
         return args;
     }
 
-    type_t type_;
+    dsl::type_t type_;
     std::vector<expr_t> args_;
 };
 
@@ -152,8 +153,7 @@ private:
     void add_hoist_let(
             loop_info_t &loop, const expr_t &var, const expr_t &value) {
         loop.lets.emplace_back(let_t::make(var, value));
-        current_hoist_size_ += utils::rnd_up(
-                var.type().size(), reg_allocator_t::granularity);
+        current_hoist_size_ += ir::register_size(loop.lets.back().as<let_t>());
     }
 
     expr_t hoist_expr(const expr_t &expr, const expr_t &expr_var = {},
@@ -182,7 +182,7 @@ private:
 
     expr_t hoist_expr_with_add(const expr_t &expr, const expr_t &expr_var = {},
             bool *fully_hoisted = nullptr) {
-        const type_t &type = expr.type();
+        const dsl::type_t &type = expr.type();
         sum_expr_t cur_expr(expr);
 
         for (size_t i = 0; i < loops_.size(); i++) {
@@ -307,9 +307,9 @@ stmt_t hoist_exprs_impl(
 }
 
 stmt_t hoist_exprs(const stmt_t &s, ir_context_t &ir_ctx, int reserved_regs) {
-    trace_start();
+    ir::trace_start();
     auto ret = hoist_exprs_impl(s, ir_ctx, reserved_regs);
-    trace_pass("hoist_exprs", ret, ir_ctx);
+    ir::trace_pass("hoist_exprs", ret, ir_ctx);
     return ret;
 }
 
@@ -425,7 +425,7 @@ private:
 
         object_eq_map_t<expr_t, expr_t> and_ops;
         object_eq_map_t<expr_t, expr_t> mask_exprs;
-        for (auto &kv : hoisted_masks_) {
+        for (auto &kv : sort_var_map_by_value(hoisted_masks_)) {
             if (split_by_and_) {
                 auto e = split_by_and_ops(kv.first, and_ops);
                 mask_exprs.emplace(e, kv.second);
@@ -459,7 +459,7 @@ private:
                         bool_imm_t::get_packed_type(e.type().elems()));
                 ops.emplace(_e, var);
                 current_hoist_size_ += utils::rnd_up(
-                        var.type().size(), reg_allocator_t::granularity);
+                        var.type().size(), ir::ngen_alloc_granularity);
                 return var;
             } else {
                 return _e;
@@ -485,7 +485,7 @@ private:
 
 stmt_t hoist_send_masks(const stmt_t &s, ir_context_t &ir_ctx,
         const stmt_label_t &label, bool split_by_and, int reserved_regs) {
-    trace_start();
+    ir::trace_start();
     int grf_size = ir_ctx.hw().grf_size();
     int available_regs = ir_ctx.options().regs() - reserved_regs;
     int memory_usage_limit = available_regs * grf_size;
@@ -503,7 +503,7 @@ stmt_t hoist_send_masks(const stmt_t &s, ir_context_t &ir_ctx,
                       .mutate(s);
     }
 
-    trace_pass("hoist_send_masks", ret, ir_ctx);
+    ir::trace_pass("hoist_send_masks", ret, ir_ctx);
     return ret;
 }
 

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2024-2025 Intel Corporation
+* Copyright 2024 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -14,8 +14,8 @@
 * limitations under the License.
 *******************************************************************************/
 
-#ifndef GEMMSTONE_GUARD_COPY_PLAN_HPP
-#define GEMMSTONE_GUARD_COPY_PLAN_HPP
+#ifndef GEMMSTONE_GENERATOR_PIECES_COPY_PLAN_HPP
+#define GEMMSTONE_GENERATOR_PIECES_COPY_PLAN_HPP
 
 #include <array>
 #include <cstdint>
@@ -28,7 +28,7 @@
 GEMMSTONE_NAMESPACE_START
 
 #ifndef GEMMSTONE_ENABLE_COPY_PLAN_DUMP
-#if   defined(DNNL_DEV_MODE)
+#if   GEMMSTONE_ASSERTIONS
 #define GEMMSTONE_ENABLE_COPY_PLAN_DUMP 1
 #else
 #define GEMMSTONE_ENABLE_COPY_PLAN_DUMP 0
@@ -148,6 +148,7 @@ struct CopyResource
     enum Kind : uint64_t {
         null = 0,
         constantBase = 0x100000000,
+        shflLUTBase = 0x80000000,
     } kind;
     CopyOperand src;
     bool preinitialized = true;
@@ -158,6 +159,9 @@ struct CopyResource
     inline void initialize(Generator &g);
 
     static Kind makeConstant32(uint32_t c);
+
+    static Kind makeShflLUT(ngen::DataType from, ngen::DataType to);
+    bool decodeShflLUT(ngen::DataType &from, ngen::DataType &to) const;
 
 protected:
     int getData(std::array<uint8_t, 64> &data) const;
@@ -188,7 +192,7 @@ public:
     int tempFlagBytes() const;
 
 #if GEMMSTONE_ENABLE_COPY_PLAN_DUMP
-    void dump() const;
+    void dump(int n = -1) const;
     int cycleCount() const;
 #endif
 
@@ -251,6 +255,10 @@ protected:
     void planEmulatedHFToF4(CopyInstruction &i);
     void planE8M0ToF(CopyInstruction &i);
     void planBFNEmulation();
+    void emulateBooleanFunction();
+    bool planShflUpconvertXe3p(CopyInstruction &i);
+    void legalizeShfl();
+    void legalizeBfImmediate(CopyInstruction &i1);
     void legalizeSIMD(bool initial = false);
     void legalizeRegions();
     void legalizeNegation();
@@ -351,6 +359,14 @@ void CopyInstruction::execute(Generator &g)
                 g.math(ngenModifiers(), fc, dst.ngen(), src0.ngen(), src1.ngen());
             break;
         }
+        case Opcode::dnscl: {
+            uint8_t mode = 0;
+            g.dnscl(ngenModifiers(), mode, RoundingType::rne, dst.ngen(), src0.ngen(), src1.ngen(), src2.ngen());
+            break;
+	    }
+        case Opcode::shfl:
+            g.shfl.idx4(ngenModifiers(), dst.ngen(), src0.ngen(), src1.ngen());
+            break;
         default: stub("Unsupported opcode");
     }
 
@@ -373,7 +389,7 @@ void CopyResource::initialize(Generator &g)
     auto dataF  = (const float *)    &data[0];
     int n32 = (n + 3) >> 2;
 
-    bool do64 = (g.getHardware() >= HW::XeHPC);
+    const bool do64 = (g.getHardware() >= HW::XeHPC);
     GRF r(src.ngen().getBase());
     for (int i = 0; 2*i+1 < n32; i++) {
         if (do64) {

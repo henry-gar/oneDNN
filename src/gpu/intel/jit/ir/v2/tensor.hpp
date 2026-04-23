@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -32,6 +32,11 @@ namespace jit {
 namespace v2 {
 
 using jit::operator<<;
+
+inline expr_t div_up(const expr_t &a, const expr_t &b) {
+    return const_fold_non_recursive(
+            binary_op_t::make(op_kind_t::_div_up, a, b));
+}
 
 // Stores upper bounds for variables.
 class var_range_info_t {
@@ -106,7 +111,7 @@ struct block_t {
     bool operator!=(const block_t &other) const { return !operator==(other); }
     std::string brief_str() const;
     std::string str() const;
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
     pvar_t dim;
     expr_t size;
@@ -144,7 +149,7 @@ public:
     }
 
     std::string str() const;
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
 private:
     pvar_map_t<char> letter_map_;
@@ -162,7 +167,7 @@ public:
     bool has_underflow(const pvar_t &dim) const;
     const layout_desc_t &layout_desc() const { return layout_desc_; }
     std::string str() const;
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
 private:
     struct map_data_t {
@@ -207,7 +212,7 @@ struct layout_raw_tag_entry_t {
         return oss.str();
     }
 
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
     bool operator==(const layout_raw_tag_entry_t &other) const {
         return (letter == other.letter) && (block == other.block)
@@ -244,7 +249,7 @@ public:
     dim_idx_t ndims() const;
     dim_idx_t non_x_ndims() const;
     std::string str() const;
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
     bool matches(const layout_raw_tag_t &other, const layout_desc_t &desc,
             const tile_t &sizes) const;
@@ -284,16 +289,16 @@ class layout_tag_t {
 public:
     layout_tag_t() = default;
 
-    layout_tag_t(const layout_desc_t &desc, const type_t &type,
+    layout_tag_t(const layout_desc_t &desc, const dsl::type_t &type,
             const layout_raw_tag_t &raw_tag, bool is_strided = false)
         : desc_(desc)
         , type_(type)
         , raw_tag_(raw_tag)
         , is_strided_(is_strided) {}
-    layout_tag_t(const type_t &type, const std::string &str_tag,
+    layout_tag_t(const dsl::type_t &type, const std::string &str_tag,
             bool is_strided = false)
         : layout_tag_t({}, type, layout_raw_tag_t(str_tag), is_strided) {}
-    layout_tag_t(const layout_desc_t &desc, const type_t &type,
+    layout_tag_t(const layout_desc_t &desc, const dsl::type_t &type,
             const std::string &str_tag, bool is_strided = false)
         : layout_tag_t(desc, type, layout_raw_tag_t(str_tag), is_strided) {}
 
@@ -303,15 +308,15 @@ public:
     bool is_strided() const { return is_strided_; }
     void set_strided(bool strided) { is_strided_ = strided; }
     const layout_desc_t &desc() const { return desc_; }
-    const type_t &type() const { return type_; }
+    const dsl::type_t &type() const { return type_; }
     const layout_raw_tag_t &raw_tag() const { return raw_tag_; }
     bool matches(const layout_tag_t &other, const tile_t &sizes,
             bool check_type = true) const;
-    layout_tag_t with_type(const type_t &new_type) const {
+    layout_tag_t with_type(const dsl::type_t &new_type) const {
         return layout_tag_t(desc_, new_type, raw_tag_);
     }
     std::string str() const;
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
     bool operator==(const layout_tag_t &other) const {
         return (desc_ == other.desc_) && (type_ == other.type_)
@@ -344,7 +349,7 @@ public:
 
 private:
     layout_desc_t desc_;
-    type_t type_;
+    dsl::type_t type_;
     layout_raw_tag_t raw_tag_;
     bool is_strided_ = false;
 };
@@ -352,16 +357,16 @@ private:
 class layout_t {
 public:
     layout_t() = default;
-    layout_t(const layout_desc_t &desc, const type_t &type)
+    layout_t(const layout_desc_t &desc, const dsl::type_t &type)
         : desc_(desc), type_(type), base_(0) {}
-    layout_t(const layout_desc_t &desc, const type_t &type, const expr_t &base,
-            const std::vector<block_t> &blocks)
+    layout_t(const layout_desc_t &desc, const dsl::type_t &type,
+            const expr_t &base, const std::vector<block_t> &blocks)
         : desc_(desc), type_(type), base_(base), blocks_(blocks) {}
 
     bool is_empty() const { return type_.is_undef(); }
     bool is_scalar() const { return elems() == 1; }
     const layout_desc_t &desc() const { return desc_; }
-    const type_t &type() const { return type_; }
+    const dsl::type_t &type() const { return type_; }
     const expr_t &base() const { return base_; }
     void set_base(const expr_t &base) { base_ = base; }
     const std::vector<block_t> &blocks() const { return blocks_; }
@@ -387,7 +392,7 @@ public:
     int nblocks(const pvar_t &dim) const;
     int int_base_in_bytes() const { return to_int(base_) * type_.size(); }
     int int_dim_size(const pvar_t &dim) const;
-    bool has_zero_base() const { return is_zero(base_); }
+    bool has_zero_base() const { return base_.is(0); }
     bool has_const_sizes() const;
     bool has_const_strides() const;
     tile_t int_dim_sizes() const;
@@ -425,18 +430,18 @@ public:
     }
 
     layout_t make_dense() const;
-    layout_t retype(const type_t &new_type, bool dense = false) const;
+    layout_t retype(const dsl::type_t &new_type, bool dense = false) const;
     coord_t to_coord(const std::vector<int> &block_idx) const;
     int to_linear_index(const tile_t &tile, const coord_t &coord) const;
     std::string blocks_str() const;
     std::string str() const;
-    std::string str_with_size(const hw_t &hw) const;
+    std::string str_with_size(const gemmstone::dsl::hw_t &hw) const;
 
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
 private:
     layout_desc_t desc_;
-    type_t type_;
+    dsl::type_t type_;
     // Base offset in in elements of the layout type.
     expr_t base_;
     std::vector<block_t> blocks_;
@@ -496,7 +501,7 @@ public:
     layout_t sub_layout(int stride = 1) const;
     std::string str() const;
 
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
 private:
     void set_to_end();
@@ -534,7 +539,7 @@ public:
     int offset(const pvar_t &dim) const;
     icoord_t coord() const;
     std::string str() const;
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
 private:
     void set_to_end() { offset_ = total_elems_; }
@@ -551,7 +556,7 @@ public:
     dim_mask_desc_t() = default;
     dim_mask_desc_t(const pvar_t &dim, const expr_t &expr, const expr_t &bound,
             int block, bool has_underflow);
-    bool is_identity() const { return is_zero(c) && is_one(a) && y.is_empty(); }
+    bool is_identity() const { return c.is(0) && a.is(1) && y.is_empty(); }
 
     expr_t to_expr(const coord_t &coord, bool with_const = true) const;
 
@@ -559,7 +564,7 @@ public:
     bool has(const pvar_t &dim) const;
     expr_t dim_stride(const pvar_t &dim) const;
     std::string str() const;
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
     pvar_t dim;
     expr_t bound;
@@ -586,14 +591,14 @@ public:
     bool is_uniform(const block_iterator_t &it,
             const prover_t &prover = prover_t::instance()) const;
     std::string str() const;
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
 private:
     std::vector<dim_mask_desc_t> dim_masks_;
 };
 
 struct plane_t {
-    type_t type;
+    dsl::type_t type;
     // Width and height algorithmic dimensions.
     pvar_t w_dim, h_dim;
     // Width and height block size.
@@ -643,7 +648,7 @@ public:
         return oss.str();
     }
 
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
 private:
     struct index_t {
@@ -675,13 +680,13 @@ public:
     const layout_t &layout() const { return layout_; }
     const mask_desc_t &mask_desc() const { return mask_desc_; }
     const plane_t &plane() const { return plane_; }
-    const type_t &type() const { return layout_.type(); }
+    const dsl::type_t &type() const { return layout_.type(); }
     // Transforms the view to a scattered version where elements are strided
     // by stride_bytes value. This is used to generate scattered messages
     // prefetch.
     view_t scatterize(int stride_bytes, const prover_t &prover) const;
     std::string str() const;
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
     static view_t split(const dim_mapper_t &dim_mapper,
             const layout_t &base_layout, const coord_t &coord,

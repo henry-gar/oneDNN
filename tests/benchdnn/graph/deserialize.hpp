@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -105,6 +105,8 @@ struct deserialized_op_t {
 
     // Returns `true` if `deserialized_op_t` wasn't created.
     bool empty() const { return kind_.empty(); }
+
+    static const deserialized_op_t &dummy();
 };
 std::ostream &operator<<(std::ostream &s, const deserialized_op_t &dop);
 
@@ -115,7 +117,7 @@ struct deserialized_graph_t {
     void load(const std::string &pass_config_json);
 
     dnnl::graph::graph to_graph(const graph_fpmath_mode_t &fpmath_mode) const;
-    const std::vector<size_t> &get_input_ports() const { return input_ports_; };
+    const std::vector<size_t> &get_input_ports() const { return input_ports_; }
 
     std::vector<deserialized_op_t> ops_;
     // record all tensors id and its dims
@@ -205,6 +207,8 @@ private:
     bool detect_sdpa_fwd_impl() const;
     // check whether the graph is a sdpa backpropagation implementation.
     bool detect_sdpa_bwd_impl() const;
+    // check whether the graph is gated mlp implementation.
+    bool detect_gmlp_impl() const;
 };
 std::ostream &operator<<(std::ostream &s, const deserialized_graph_t &dg);
 

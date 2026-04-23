@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -59,6 +59,7 @@ status_t weights_reorder_t::pd_t::init_conf(impl::engine_t *engine) {
 
 status_t weights_reorder_t::pd_t::init_kernel_ctx(
         compute::kernel_ctx_t &kernel_ctx) const {
+    kernel_ctx.require_stateless_addressing(has_large_buffers());
     kernel_ctx.define_int("NDIMS", conf.ndims);
     if (conf.with_sum_a)
         kernel_ctx.define_int("WITH_SUM_A", 1);
@@ -68,6 +69,9 @@ status_t weights_reorder_t::pd_t::init_kernel_ctx(
 
     const memory_desc_wrapper src_mdw(src_md());
     const memory_desc_wrapper dst_mdw(dst_md());
+
+    kernel_ctx.register_buffer_size(src_mdw);
+    kernel_ctx.register_buffer_size(dst_mdw);
 
     auto input_type = src_mdw.data_type();
     auto output_type = dst_mdw.data_type();

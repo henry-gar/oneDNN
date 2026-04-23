@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2025 Intel Corporation
+* Copyright 2021 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 #include "gpu/intel/include/dispatch.h"
 #include "gpu/intel/include/io.h"
 #include "gpu/intel/include/math_utils.h"
+#include "gpu/intel/include/philox.h"
 #include "gpu/intel/include/post_ops.h"
 #include "gpu/intel/include/types.h"
 
@@ -49,6 +50,16 @@ __kernel void gemm_post_ops(__global SRC_DATA_T *src,
 #else
         global int *dst_zp
 #endif
+#if WITH_DROPOUT
+        ,
+        __global uchar *dropout_mask_buf,
+#if DROPOUT_USE_HOST_SCALARS
+        long dropout_seed, long dropout_offset, float dropout_p
+#else
+        __global long *dropout_seed_buf, __global long *dropout_offset_buf,
+        __global float *dropout_p_buf
+#endif
+#endif
 ) {
 #if WITH_HOST_SRC_SCALE
     float *a_scales = &a_scale_value;
@@ -67,20 +78,26 @@ __kernel void gemm_post_ops(__global SRC_DATA_T *src,
     const uint d1 = GWS_GET_D1();
     const uint d2 = GWS_GET_D2();
     const uint d3 = GWS_GET_D3();
+    const uint d4 = GWS_GET_D4();
+    const uint d5 = GWS_GET_D5();
 
-    size_t data_idx = SRC_OFF(d0, d1, d2, d3, 0, 0);
+    size_t data_idx = SRC_OFF(d0, d1, d2, d3, d4, d5);
 
     ACC_DATA_T acc = load(acc, src, data_idx);
     POST_OP_DATA_T accumulator = 0;
-    if (d0 < DST_D0 && d1 < DST_D1 && d2 < DST_D2 && d3 < DST_D3) {
+    if (d0 < DST_D0 && d1 < DST_D1 && d2 < DST_D2 && d3 < DST_D3 && d4 < DST_D4
+            && d5 < DST_D5) {
         const float a_scale = A_SCALES ? a_scales[0] : 1;
-        const uint b_scale_dim = (NDIMS == 2) ? d1 : (NDIMS == 3) ? d2 : d3;
+        const uint b_scale_dim = (NDIMS == 2) ? d1
+                : (NDIMS == 3)                ? d2
+                : (NDIMS == 4)                ? d3
+                : (NDIMS == 5)                ? d4
+                                              : d5;
         float b_scale = 1;
         if (B_SCALES) load(&b_scale, b_scales + scale_stride * b_scale_dim);
         if (A_SCALES || B_SCALES) acc *= a_scale * b_scale;
-
         if (bias) {
-            ACC_DATA_T b = load(b, bias + BIAS_OFF(d0, d1, d2, d3, 0, 0));
+            ACC_DATA_T b = load(b, bias, BIAS_OFF(d0, d1, d2, d3, d4, d5));
             acc += b;
         }
 
@@ -88,14 +105,34 @@ __kernel void gemm_post_ops(__global SRC_DATA_T *src,
         POST_OP_DATA_T sum_src = WITH_SUM ? load(sum_src, dst, data_idx) : 0.0f;
 
         accumulator = AS_POST_OP_DATA_T(acc);
-        APPLY_POST_OPS_SERIAL(accumulator, sum_src, d0, d1, d2, d3, 0, 0);
-
+        APPLY_POST_OPS_SERIAL(accumulator, sum_src, d0, d1, d2, d3, d4, d5);
+#if WITH_DYN_DST_SCALE == 0
         if (C_SCALES) {
             POST_OP_DATA_T c_scale = load(c_scale, c_scales);
             accumulator /= c_scale;
         }
+#endif
         if (DST_ZERO_POINT) accumulator += dst_zp[0];
     }
-
+#if WITH_DROPOUT
+#if !DROPOUT_USE_HOST_SCALARS
+    long dropout_seed = dropout_seed_buf[0];
+    long dropout_offset = DROPOUT_USE_OFFSET ? dropout_offset_buf[0] : 0;
+    float dropout_p = dropout_p_buf[0];
+#endif
+    uint dropout_threshold = get_dropout_threshold(dropout_p);
+    float dropout_inv_q = (dropout_p != 1.f) ? 1.f / (1.f - dropout_p) : 0.f;
+#if DROPOUT_USE_OFFSET
+    uint res = philox_4x32_s64(
+            data_idx, (ulong)dropout_seed, (ulong)dropout_offset);
+#else
+    uint res = philox_4x32((uint)data_idx, (uint)dropout_seed);
+#endif
+    uchar dropout = res > dropout_threshold;
+    accumulator = (dropout) ? accumulator * dropout_inv_q : 0;
+#if DROPOUT_HAS_OUTPUT_MASK
+    dropout_mask_buf[data_idx] = dropout;
+#endif
+#endif
     write(dst + data_idx, accumulator);
 }

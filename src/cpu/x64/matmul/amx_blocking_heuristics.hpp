@@ -96,39 +96,56 @@ protected:
 class matmul_amx_blocking_params_macro_t : public matmul_amx_blocking_params_t {
 public:
     matmul_amx_blocking_params_macro_t(const brgemm_matmul_conf_t &bgmmc)
-        : matmul_amx_blocking_params_t(bgmmc) {}
+        : matmul_amx_blocking_params_t(bgmmc) {
+        assert(bgmmc.tr_a_dt_sz == bgmmc.tr_b_dt_sz);
+        gemm_dt_sz = bgmmc.tr_a_dt_sz;
+        min_k_elem = matmul_amx_blocking_params_macro_t::min_k_dim / gemm_dt_sz;
+        min_mn_elem = matmul_amx_blocking_params_macro_t::min_mn_dim
+                / bgmmc.c_dt_sz;
+        k_threshold_write_bound_layer_elem
+                = matmul_amx_blocking_params_macro_t::
+                          k_threshold_write_bound_layer
+                / gemm_dt_sz;
+        min_n_dim_write_bound_layer_elem = matmul_amx_blocking_params_macro_t::
+                                                   min_n_dim_write_bound_layer
+                / gemm_dt_sz;
+    }
     static bool is_supported(const brgemm_matmul_conf_t &bgmmc,
             const brgemm_matmul_conf_utils_t &bm_conf_utils);
     static bool find_best_blocking(const brgemm_matmul_conf_t &bgmmc,
             const brgemm_matmul_conf_utils_t &bm_conf_utils,
+            matmul_amx_blocking_params_macro_t &best_blocking);
+    static bool maybe_small_dims_heuristics(const brgemm_matmul_conf_t &bgmmc,
             matmul_amx_blocking_params_macro_t &best_blocking);
 
 protected:
     float calculate_blocking_scores() const override;
 
 private:
-    static const dim_t min_m_dim = 64;
     static const dim_t min_k_dim = 256;
-    static const dim_t min_n_dim = 64;
+    static const dim_t min_mn_dim = 64;
     static const dim_t k_threshold_write_bound_layer = 256;
     static const dim_t min_n_dim_write_bound_layer = 256;
     dim_t n_decomposition = 32;
     dim_t m_decomposition = 32;
-    size_t gemm_dt_sz;
-    dim_t m_per_thread, k_per_thread, n_per_thread, b_per_thread;
-    bool is_horizontal;
-    dim_t min_m_elem, min_k_elem, min_n_elem;
-    dim_t k_threshold_write_bound_layer_elem, min_n_dim_write_bound_layer_elem;
+    size_t gemm_dt_sz {};
+    dim_t m_per_thread {}, k_per_thread {}, n_per_thread {}, b_per_thread {};
+    bool is_horizontal {};
+    dim_t min_k_elem {}, min_mn_elem {};
+    dim_t k_threshold_write_bound_layer_elem {},
+            min_n_dim_write_bound_layer_elem {};
 
-    size_t m_tmul, n_tmul, k_tmul;
-    bool set_blocking_parameters();
+    size_t m_tmul {}, n_tmul {}, k_tmul {};
+    bool set_blocking_parameters(bool force_horizontal = false,
+            bool force_transform_matrix_to_l2 = false);
     bool is_horizontal_selected(bool horizontal_not_possible,
             bool vertical_not_possible, size_t best_m_v, size_t best_k_v,
             size_t k_blk_v) const;
     void set_tmul_sizes();
     void set_decomposition();
     size_t l2_matrix_usage(size_t k_chunk_size, size_t m_or_n_blk, size_t k_blk,
-            bool is_horizontal) const;
+            bool is_horizontal,
+            bool force_transform_matrix_to_l2 = false) const;
     size_t l2_matrix_and_c_usage(size_t k_chunk_size, size_t m_or_n_blk,
             size_t k_blk, bool is_horizontal) const;
     void set_core_divs(int nthr_b, int nthr_m, int nthr_k, int nthr_n);
@@ -141,7 +158,8 @@ private:
     std::set<dim_t> blk_candidates(
             dim_t dim_per_thread, dim_t decomposition) const;
     float evaluate_single_core_blocking(size_t k_chunk_size, size_t m_or_n_blk,
-            size_t k_blk, bool is_horizontal) const;
+            size_t k_blk, bool is_horizontal,
+            bool force_transform_matrix_to_l2 = false) const;
     dim_t calc_k_blk(size_t l1_dim) const;
     bool divs_are_acceptable() const;
     bool operator==(const matmul_amx_blocking_params_macro_t &other) const;
@@ -149,6 +167,7 @@ private:
     bool operator!=(const matmul_amx_blocking_params_macro_t &other) const;
     bool operator<(const matmul_amx_blocking_params_macro_t &other) const;
     bool skip_extendable_k() const;
+    bool b_transform_fits_in_l2() const;
 };
 
 class matmul_amx_blocking_params_micro_t : public matmul_amx_blocking_params_t {
@@ -161,7 +180,7 @@ public:
 
     static void find_best_blocking(const brgemm_matmul_conf_t &bgmmc,
             const brgemm_matmul_conf_utils_t &bm_conf_utils,
-            matmul_amx_blocking_params_t &best_blocking);
+            matmul_amx_blocking_params_micro_t &best_blocking);
 
 protected:
     float calculate_blocking_scores() const override;

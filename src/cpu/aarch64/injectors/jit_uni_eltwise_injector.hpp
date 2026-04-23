@@ -1,7 +1,7 @@
 /*******************************************************************************
-* Copyright 2019-2023 Intel Corporation
+* Copyright 2019 Intel Corporation
 * Copyright 2021-2024 FUJITSU LIMITED
-* Copyright 2025 Arm Ltd. and affiliates
+* Copyright 2025-2026 Arm Ltd. and affiliates
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -43,7 +43,7 @@ struct static_params_t {
             Xbyak_aarch64::PReg p_mask = Xbyak_aarch64::PReg(1),
             Xbyak_aarch64::PReg p_tmp0 = Xbyak_aarch64::PReg(4),
             bool is_fwd = true, bool use_dst = false, bool preserve_vmm = true,
-            bool preserve_p_table = true)
+            bool preserve_p_table = true, data_type_t d_type = data_type::f32)
         : save_state(save_state)
         , x_table(x_table)
         , p_mask(p_mask)
@@ -51,7 +51,8 @@ struct static_params_t {
         , is_fwd(is_fwd)
         , use_dst(use_dst)
         , preserve_vmm(preserve_vmm)
-        , preserve_p_table(preserve_p_table) {}
+        , preserve_p_table(preserve_p_table)
+        , d_type(d_type) {}
 
     bool save_state;
     Xbyak_aarch64::XReg x_table;
@@ -61,6 +62,7 @@ struct static_params_t {
     bool use_dst;
     bool preserve_vmm;
     bool preserve_p_table;
+    data_type_t d_type;
 };
 
 /*
@@ -81,9 +83,10 @@ bool is_supported(cpu_isa_t isa, alg_kind_t alg);
 } // namespace eltwise_injector
 
 template <cpu_isa_t isa>
-struct jit_uni_eltwise_injector_f32_t {
+struct jit_uni_eltwise_injector_t {
     using TReg = typename cpu_isa_traits<isa>::TReg;
     using TRegS = typename cpu_isa_traits<isa>::TRegS;
+    using TRegH = typename cpu_isa_traits<isa>::TRegH;
 
     // Arguments description:
     // host - jit generator which is filled with instructions
@@ -97,13 +100,13 @@ struct jit_uni_eltwise_injector_f32_t {
     //   - algorithm derivative.
     // use_dst - defines whether source or destination point is passed to alg
     //   code. Depends on algorithm. See `_use_dst_for_bwd` algs definition.
-    jit_uni_eltwise_injector_f32_t(jit_generator_t *host, alg_kind_t alg,
+    jit_uni_eltwise_injector_t(jit_generator_t *host, alg_kind_t alg,
             float alpha, float beta, float scale, bool save_state = true,
             Xbyak_aarch64::XReg x_table = Xbyak_aarch64::XReg(0),
             Xbyak_aarch64::PReg p_mask = Xbyak_aarch64::PReg(1),
             Xbyak_aarch64::PReg p_tmp0 = Xbyak_aarch64::PReg(4),
             bool is_fwd = true, bool use_dst = false, bool preserve_vmm = true,
-            bool preserve_p_table = true)
+            bool preserve_p_table = true, data_type_t d_type = data_type::f32)
         : alg_(alg)
         , alpha_(alpha)
         , beta_(beta)
@@ -116,35 +119,40 @@ struct jit_uni_eltwise_injector_f32_t {
         , is_fwd_(is_fwd)
         , use_dst_(use_dst)
         , preserve_vmm_(preserve_vmm)
-        , preserve_p_table_(preserve_p_table) {
+        , preserve_p_table_(preserve_p_table)
+        , d_type_(d_type) {
         assert(eltwise_injector::is_supported(isa, alg_));
 
         register_table_entries();
     }
 
-    jit_uni_eltwise_injector_f32_t(jit_generator_t *host,
+    jit_uni_eltwise_injector_t(jit_generator_t *host,
             const post_ops_t::entry_t::eltwise_t &eltwise,
             bool save_state = true,
             Xbyak_aarch64::XReg x_table = Xbyak_aarch64::XReg(0),
             Xbyak_aarch64::PReg p_mask = Xbyak_aarch64::PReg(1),
             Xbyak_aarch64::PReg p_tmp0 = Xbyak_aarch64::PReg(4),
             bool is_fwd = true, bool use_dst = false, bool preserve_vmm = true,
-            bool preserve_p_table = true)
-        : jit_uni_eltwise_injector_f32_t(host, eltwise.alg, eltwise.alpha,
-                eltwise.beta, eltwise.scale, save_state, x_table, p_mask,
-                p_tmp0, is_fwd, use_dst, preserve_vmm, preserve_p_table) {}
+            bool preserve_p_table = true, data_type_t d_type = data_type::f32)
+        : jit_uni_eltwise_injector_t(host, eltwise.alg, eltwise.alpha,
+                  eltwise.beta, eltwise.scale, save_state, x_table, p_mask,
+                  p_tmp0, is_fwd, use_dst, preserve_vmm, preserve_p_table,
+                  d_type) {}
 
     void compute_vector_range(size_t start_idx, size_t end_idx);
     void compute_vector_range(const injector_utils::vmm_index_set_t &vmm_idxs);
     void compute_vector(size_t idx) { compute_vector_range(idx, idx + 1); }
     void prepare_table(bool gen_table = true);
     void load_table_addr() { h->adr(x_table, l_table); }
+    void set_input_range(float min_value, float max_value);
 
 private:
     const alg_kind_t alg_;
     const float alpha_;
     const float beta_;
     const float scale_;
+    float max_input_ = INFINITY;
+    float min_input_ = -INFINITY;
 
     jit_generator_t *const h;
 
@@ -160,6 +168,8 @@ private:
     const bool preserve_p_table_;
 
     Xbyak_aarch64::Label l_table;
+
+    const data_type_t d_type_;
 
     // if only the injector was inherited from jit_generator...
     enum {
@@ -205,6 +215,8 @@ private:
             const injector_utils::vmm_index_set_iterator_t start_idx_it);
     void injector_postamble();
     void assign_regs();
+    void store_preserved_vec(size_t slot, size_t vmm_idx);
+    void load_preserved_vec(size_t slot, size_t vmm_idx);
     void set_coef_to_regs();
     void compute_cmp_mask(
             const TRegS &vmm_src, const TRegS &vmm_cmpare, int cmp_predicate);
@@ -213,14 +225,16 @@ private:
 
     size_t get_vec_len();
     void exp_compute_vector_fwd(const TRegS &vmm_src);
+    void exp_compute_vector_fwd(
+            const TRegS &vmm_src, float min_input, float max_input);
     void relu_compute_vector_fwd(const TRegS &vmm_src);
-    void relu_zero_ns_compute_vector_fwd(const TRegS &vmm_src);
+    void relu_zero_ns_compute_vector_fwd(const TReg &vmm_src);
     void elu_compute_vector_fwd(const TRegS &vmm_src);
     void tanh_compute_vector_fwd(const TRegS &vmm_src);
     void tanh_polynomial_approx_compute_vector_fwd(const TRegS &vmm_src);
-    void square_compute_vector_fwd(const TRegS &vmm_src);
-    void abs_compute_vector_fwd(const TRegS &vmm_src);
-    void sqrt_compute_vector_fwd(const TRegS &vmm_src);
+    void square_compute_vector_fwd(const TReg &vmm_src);
+    void abs_compute_vector_fwd(const TReg &vmm_src);
+    void sqrt_compute_vector_fwd(const TReg &vmm_src);
     void linear_compute_vector_fwd(const TRegS &vmm_src);
     void soft_relu_compute_vector_fwd(const TRegS &vmm_src);
     void mish_compute_vector_fwd(const TRegS &vmm_src);
@@ -228,7 +242,7 @@ private:
     void gelu_tanh_compute_vector_fwd(const TRegS &vmm_src);
     void swish_compute_vector_fwd(const TRegS &vmm_src);
     void log_compute_vector_fwd(const TRegS &vmm_src);
-    void clip_compute_vector_fwd(const TRegS &vmm_src);
+    void clip_compute_vector_fwd(const TReg &vmm_src);
     void gelu_erf_compute_vector_fwd(const TRegS &vmm_src);
     void gelu_erf_minimax_approx_compute_vector_fwd(const TRegS &vmm_src);
     void round_compute_vector_fwd(const TRegS &vmm_src);
@@ -254,6 +268,7 @@ private:
     void hardswish_compute_vector_bwd(const TRegS &vmm_src);
     void hardsigmoid_compute_vector_bwd(const TRegS &vmm_src);
     void load_1word_replicate(const TRegS &vmm_src, Xbyak_aarch64::XReg x_addr);
+    void load_vector(const TRegS &vmm_src, Xbyak_aarch64::XReg x_addr);
 
     enum key_t {
         scale = 0, // scale argument
@@ -273,8 +288,16 @@ private:
         exp_ln_flt_max_f, // logf(FLT_MAX) - max normal value
         exp_ln_flt_min_f, // logf(FLT_MIN) - min normal value
         exp_pol, // see correspondent table for float values
+        exp_pol_asimd, // see corresponding table for float values
         exp_coeff1, // 0.6931473921 (0x3f31721c)
         exp_coeff2, // 0.2413862043 (0x3e772df2)
+        exp_exponent_bias,
+        exp_neg_ln2_hi, // high part of -ln(2) used for exp calculation
+        exp_neg_ln2_lo, // low part of -ln(2) used for exp calculation
+        exp_special_bound, // bound for exp special case handling
+        exp_scale_thresh, // threshold for additional overflow/underflow handling
+        exp_special_offset,
+        exp_special_bias,
         exp_not_mask17, // ~((1u << 17) - 1)
         fwd_mish_max_x_for_equation_f,
         // e^x(e^3x+4e^2x+e^x*(6+4*x)+4*(1+x)) = FLT_MAX; x =~ 22.18070976278534
@@ -302,6 +325,13 @@ private:
         gelu_erf_one_over_sqrt_two, // 1.f / sqrtf(2.f)
         gelu_erf_one_over_sqrt_pi, // 1.f / sqrtf(pi) = 0.564190f
         gelu_erf_pol, // see correspondent table for float values
+        gelu_erf_lut_max,
+        gelu_erf_lut_third,
+        gelu_erf_lut_bias,
+        gelu_erf_lut_max_index,
+        gelu_erf_lut, // ERF LUT: [erf(r), scale(r)], 513 pairs
+        gelu_erf_lut_erf, // ERF LUT: erf(r), 513 entries
+        gelu_erf_lut_scale, // ERF LUT: scale(r), 513 entries
         log_minus_inf, // -inf
         log_qnan, // qnan
         log_mantissa_mask, // gets mantissa bits
@@ -331,14 +361,25 @@ private:
     }
 
     TRegS table_val(key_t key, TRegS zreg, size_t key_off_val_shift = 0) {
+        // assumption: all table entries sharing the same key also
+        // share their broadcast property
+        const auto it = entry_map_.find(key);
+        assert(it != entry_map_.end());
+        const auto &te = (*it).second;
+        const auto scale = te.bcast ? vlen : sizeof(table_entry_val_t);
+        const auto off = te.off + key_off_val_shift * scale;
+
         Xbyak_aarch64::XReg x_addr(h->X_DEFAULT_ADDR);
-        auto off = table_off(key, key_off_val_shift);
         if (off) {
             h->add_imm(x_addr, x_table, off, h->X_TMP_0);
         } else {
             x_addr = x_table;
         }
-        load_1word_replicate(zreg, x_addr);
+        if (te.bcast) {
+            load_vector(zreg, x_addr);
+        } else {
+            load_1word_replicate(zreg, x_addr);
+        }
         return zreg;
     }
 

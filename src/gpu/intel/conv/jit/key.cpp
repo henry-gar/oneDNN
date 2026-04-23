@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -181,7 +181,7 @@ struct subkey_t {
 
     std::string str() const { return to_string(kind); }
 
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 };
 
 using key_fma_t = subkey_t<fma_kind_t>;
@@ -232,7 +232,7 @@ struct key_hw_t {
         return oss.str();
     }
 
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 };
 
 struct key_type_info_t {
@@ -306,18 +306,18 @@ struct key_type_info_t {
         return oss.str();
     }
 
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 };
 
 bool is_mb_blocked(const layout_t &layout) {
-    dim_t blk
+    int64_t blk
             = inner_block(layout, 0, /*skip_outer=*/true, /*inner_only=*/false);
     return blk > 1;
 }
 
 struct key_mb_t {
     bool is_blocked = false;
-    dim_t value = 0;
+    int64_t value = 0;
 
     key_mb_t() = default;
     key_mb_t(const config_t &cfg, prop_kind_t prop) {
@@ -365,7 +365,7 @@ struct key_mb_t {
         return oss.str();
     }
 
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 };
 
 struct key_desc_t {
@@ -388,7 +388,7 @@ struct key_desc_t {
 
     std::string str() const { return desc; }
 
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 };
 
 } // namespace
@@ -415,7 +415,7 @@ public:
         return ret;
     }
 
-    dim_t distance(const key_impl_t &other) const {
+    int64_t distance(const key_impl_t &other) const {
         int max_dist = std::numeric_limits<int>::max();
         if (!matches(other)) return max_dist;
         // Here this object is a filter, other object is a non-filter.
@@ -424,7 +424,7 @@ public:
         //   Key     : mb512
         //   Filter A: mb128+ (distance: 384)
         //   Filter B: mb256+ (distance: 256) <- smaller distance, preferred.
-        dim_t dist = other.mb_.value - mb_.value;
+        int64_t dist = other.mb_.value - mb_.value;
         auto f1 = hw_.family;
         auto f2 = other.hw_.family;
         if (f1 != f2) {
@@ -483,8 +483,7 @@ public:
         oss << "," << prop_;
         oss << "," << type_info_;
         if (csv) {
-            oss << ","
-                << "mb" << mb_.value << desc_;
+            oss << "," << "mb" << mb_.value << desc_;
         } else {
             oss << "," << mb_;
             oss << "," << desc_;
@@ -492,7 +491,7 @@ public:
         return oss.str();
     }
 
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
 private:
     key_hw_t hw_;
@@ -528,7 +527,7 @@ const std::string &key_t::desc() const {
     return impl_->desc_str();
 }
 
-dim_t key_t::distance(const key_t &other) const {
+int64_t key_t::distance(const key_t &other) const {
     gpu_assert(impl_ && other.impl_);
     return impl_->distance(*other.impl_);
 }

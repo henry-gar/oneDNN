@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2024-2025 Intel Corporation
+* Copyright 2024 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -45,6 +45,7 @@ void larger_partition_kernel_t::setup_pipeline_stage1(
     BACKEND_DNNL_ADD_PASS(pipeline, fuse_mul_sigmoid_to_swish);
     BACKEND_DNNL_ADD_PASS(pipeline, fuse_to_dnnl_sum);
     BACKEND_DNNL_ADD_PASS(pipeline, fuse_to_shuffle);
+    BACKEND_DNNL_ADD_PASS(pipeline, decompose_softmax_with_stats);
 
     // TODO(xx) The implementation of these two passes relay on a non-fully
     // lowered subgraph. We need to improve them.
@@ -92,6 +93,7 @@ void larger_partition_kernel_t::setup_pipeline_stage1(
     BACKEND_DNNL_ADD_PASS(pipeline, lift_up_post_add_for_matmul);
 
     BACKEND_DNNL_ADD_PASS(pipeline, fuse_post_ops);
+    BACKEND_DNNL_ADD_PASS(pipeline, fuse_dropout);
     BACKEND_DNNL_ADD_PASS(pipeline, fold_mul_scales);
     BACKEND_DNNL_ADD_PASS(pipeline, convert_to_runtime_dst_scales);
     BACKEND_DNNL_ADD_PASS(pipeline, fuse_dst_scales);
@@ -258,13 +260,13 @@ status_t larger_partition_kernel_t::execute_impl(const stream_t *g_stream,
     execution_args_set_t *res = res_cache.get_or_add(
             reinterpret_cast<size_t>(this), resource_ctor_);
 
-    temporary_scratchpad_t scratchpad(
+    auto scratchpad = std::make_shared<temporary_scratchpad_t>(
             memory_planner_.total_internal_temporary_size(), p_engine_,
             *g_alloc_);
-    assertm(scratchpad.size()
+    assertm(scratchpad->size()
                     >= memory_planner_.total_internal_temporary_size(),
             "no enough scratchpad memory");
-    prepare_args_set(res, inputs, outputs, scratchpad);
+    prepare_args_set(res, inputs, outputs, *scratchpad);
 
     constant_tensor_cache_t::cached_t c_buffer;
     if (enabled_constant_cache()) {
@@ -309,6 +311,8 @@ status_t larger_partition_kernel_t::execute_impl(const stream_t *g_stream,
         if (subgraph_->is_constant_[i]) continue;
         subgraph_->execs_[i]->execute(p_stream, res->get_exec_args()[i]);
     }
+
+    prolong_temporary_scratchpad_lifetime(g_stream, scratchpad);
 
     return status::success;
 }
@@ -444,7 +448,7 @@ status_t larger_partition_kernel_t::ocl_execute_impl(const stream_t *g_stream,
                 if (!subgraph_->is_constant_[i]) continue;
                 returned_event = subgraph_->execs_[i]->execute_ocl(
                         p_stream, res->get_exec_args()[i], deps);
-                deps = {returned_event};
+                deps.assign(1, returned_event);
             }
 
             c_promise.set_value(c_buffer);
@@ -455,7 +459,7 @@ status_t larger_partition_kernel_t::ocl_execute_impl(const stream_t *g_stream,
         if (subgraph_->is_constant_[i]) continue;
         returned_event = subgraph_->execs_[i]->execute_ocl(
                 p_stream, res->get_exec_args()[i], deps);
-        deps = {returned_event};
+        deps.assign(1, returned_event);
     }
 
     scratchpad.set_deps(returned_event);

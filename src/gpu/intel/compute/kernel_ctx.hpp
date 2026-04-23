@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -52,13 +52,7 @@ public:
         for (auto &opt : option_set_)
             oss << " " << opt;
 
-        if (use_int32_offset_) {
-            oss << " -DUSE_INT32_OFFSET";
-        } else {
-            // TODO: Determine if specialization for buffers between 2GB and 4GB
-            // is worthwhile
-            oss << " -cl-intel-greater-than-4GB-buffer-required";
-        }
+        if (use_int32_offset_) { oss << " -DUSE_INT32_OFFSET"; }
 
         for (auto &int_var : int_var_map_) {
             // C tokens are parsed as (-)(integer_literal). As abs(INT_MIN) >
@@ -83,19 +77,20 @@ public:
         return oss.str();
     }
 
-    void register_buffer_size(size_t size) {
-        if (size > INT_MAX) use_int32_offset(false);
-    }
-
-    void register_buffer_size(const memory_desc_wrapper &mdw) {
-        register_buffer_size(mdw.size(0, true, true));
-    }
+    void register_buffer_size(const memory_desc_wrapper &mdw);
     void register_buffer_size(const memory_desc_info_t &mdi);
 
     // Enable various optimizations when all buffers are < 2GB in size. In this
     // case, int32_t types can be used for data offsets and avoid int64_t
     // operations when native 64-bit operations are unsupported.
     void use_int32_offset(bool value) { use_int32_offset_ = value; }
+
+    void require_stateless_addressing(bool value) {
+        require_stateless_addressing_ = value;
+    }
+    bool require_stateless_addressing() const {
+        return require_stateless_addressing_;
+    }
 
     void define_int(const char *variable, int64_t value) {
         set_macro(variable, value, int_var_map_);
@@ -119,7 +114,9 @@ public:
         for (auto &opt : option_set_)
             if (opt.find(opt_start) != std::string::npos) return true;
 
-        return int_var_map_.count(name) != 0 || float_var_map_.count(name) != 0;
+        std::string var_name = name;
+        return int_var_map_.count(var_name) != 0
+                || float_var_map_.count(var_name) != 0;
     }
     bool has_macro(const std::string &name) const {
         return has_macro(name.c_str());
@@ -169,6 +166,11 @@ public:
     bool has_custom_headers() const { return !custom_headers_.empty(); }
 
 private:
+    void register_buffer_size(dim_t nelems, size_t size) {
+        if (nelems > INT32_MAX) use_int32_offset(false);
+        if (size > UINT32_MAX) require_stateless_addressing(true);
+    }
+
     void set_default_options(const primitive_attr_t *attr) {
         // By default fp32 division and sqrt are not IEEE-compliant
         add_option("-cl-fp32-correctly-rounded-divide-sqrt");
@@ -216,6 +218,7 @@ private:
     std::set<std::string> option_set_;
     std::unordered_map<std::string, std::string> custom_headers_;
     bool use_int32_offset_ = true;
+    bool require_stateless_addressing_ = false;
 };
 
 } // namespace compute

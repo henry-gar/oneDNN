@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2018-2025 Intel Corporation
+* Copyright 2018 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@
 
 #include <functional>
 #include "common/c_types_map.hpp"
+#include "common/compiler_workarounds.hpp"
 #include "common/dnnl_thread.hpp"
 #include "common/dnnl_traits.hpp"
 #include "common/math_utils.hpp"
@@ -46,16 +47,16 @@ void ref_deconvolution_fwd_t::compute_fwd_bias_common(const exec_ctx_t &ctx,
     const auto ndims = pd()->desc()->src_desc.ndims;
 
     parallel_nd(MB, G, OC, OD, OH, OW,
-            [&](dim_t mb, dim_t g, dim_t oc, dim_t od, dim_t oh, dim_t ow) {
-                const dim_t c = g * OC + oc;
-                const dim_t off = ref_conv_utils::get_data_off(
-                        dst_d, ndims, mb, c, od, oh, ow);
-                float b = io::load_float_value(bias_d.data_type(), bias, c);
-                float d = conv_output[off];
-                // Use f32 if attributes happen after bias to get precise answer
-                auto dt = non_default_attr ? data_type::f32 : dst_d.data_type();
-                io::store_float_value(dt, d + b, dst, off);
-            });
+            [=](dim_t mb, dim_t g, dim_t oc, dim_t od, dim_t oh, dim_t ow) {
+        const dim_t c = g * OC + oc;
+        const dim_t off
+                = ref_conv_utils::get_data_off(dst_d, ndims, mb, c, od, oh, ow);
+        float b = io::load_float_value(bias_d.data_type(), bias, c);
+        float d = conv_output[off];
+        // Use f32 if attributes happen after bias to get precise answer
+        auto dt = non_default_attr ? data_type::f32 : dst_d.data_type();
+        io::store_float_value(dt, d + b, dst, off);
+    });
 }
 
 void ref_deconvolution_fwd_t::compute_fwd_bias_ncdhw(const exec_ctx_t &ctx,
@@ -68,7 +69,7 @@ void ref_deconvolution_fwd_t::compute_fwd_bias_ncdhw(const exec_ctx_t &ctx,
     const auto OC = pd()->OC();
     const auto SP = pd()->OW() * pd()->OH() * pd()->OD();
 
-    parallel_nd(MB, OC, [&](dim_t mb, dim_t oc) {
+    parallel_nd(MB, OC, [=](dim_t mb, dim_t oc) {
         const dim_t off = (mb * OC + oc) * SP;
         float b = io::load_float_value(bias_d.data_type(), bias, oc);
         PRAGMA_OMP_SIMD()
@@ -91,7 +92,7 @@ void ref_deconvolution_fwd_t::compute_fwd_bias_ndhwc(const exec_ctx_t &ctx,
     const auto OC = pd()->OC();
     const auto SP = pd()->OW() * pd()->OH() * pd()->OD();
 
-    parallel_nd(MB, SP, [&](dim_t mb, dim_t sp) {
+    parallel_nd(MB, SP, [=](dim_t mb, dim_t sp) {
         const dim_t off = (mb * SP + sp) * OC;
         PRAGMA_OMP_SIMD()
         for (dim_t oc = 0; oc < OC; ++oc) {
@@ -117,24 +118,23 @@ void ref_deconvolution_fwd_t::compute_fwd_bias_nCdhwXc(const exec_ctx_t &ctx,
     const auto stride_mb = dst_d.blocking_desc().strides[0];
 
     parallel_nd(MB, utils::div_up(OC, blk_size), SP,
-            [&](dim_t mb, dim_t oc_blk, dim_t sp) {
-                const dim_t oc = oc_blk * blk_size;
-                const dim_t off = mb * stride_mb + oc * SP + sp * blk_size;
-                const dim_t blk = nstl::min(blk_size, OC - oc);
+            [=](dim_t mb, dim_t oc_blk, dim_t sp) {
+        const dim_t oc = oc_blk * blk_size;
+        const dim_t off = mb * stride_mb + oc * SP + sp * blk_size;
+        const dim_t blk = nstl::min(blk_size, OC - oc);
 
-                PRAGMA_OMP_SIMD()
-                for (dim_t i = 0; i < blk_size; ++i) {
-                    float b = i < blk ? io::load_float_value(
-                                      bias_d.data_type(), bias, oc + i)
-                                      : 0;
-                    float d = conv_output[off + i];
-                    // Use f32 if attributes happen after bias to get precise
-                    // answer.
-                    auto dt = non_default_attr ? data_type::f32
-                                               : dst_d.data_type();
-                    io::store_float_value(dt, d + b, dst, off + i);
-                }
-            });
+        PRAGMA_OMP_SIMD()
+        for (dim_t i = 0; i < blk_size; ++i) {
+            float b = i < blk
+                    ? io::load_float_value(bias_d.data_type(), bias, oc + i)
+                    : 0;
+            float d = conv_output[off + i];
+            // Use f32 if attributes happen after bias to get precise
+            // answer.
+            auto dt = non_default_attr ? data_type::f32 : dst_d.data_type();
+            io::store_float_value(dt, d + b, dst, off + i);
+        }
+    });
 }
 
 void ref_deconvolution_fwd_t::compute_fwd_bias(const exec_ctx_t &ctx, void *dst,
@@ -172,8 +172,10 @@ void ref_deconvolution_fwd_t::compute_fwd_bias(const exec_ctx_t &ctx, void *dst,
 status_t ref_deconvolution_fwd_t::compute_oscale(
         const exec_ctx_t &ctx, float *dst) const {
 
-    DEFINE_ARG_SCALES_BUFFER(src_scales, DNNL_ARG_SRC);
-    DEFINE_ARG_SCALES_BUFFER(wei_scales, DNNL_ARG_WEIGHTS);
+    const float *src_scales
+            = CTX_IN_MEM(const float *, DNNL_ARG_ATTR_SCALES | DNNL_ARG_SRC);
+    const float *wei_scales = CTX_IN_MEM(
+            const float *, DNNL_ARG_ATTR_SCALES | DNNL_ARG_WEIGHTS);
     const int wei_scale_mask = pd()->attr()->scales_.get_mask(DNNL_ARG_WEIGHTS);
 
     const memory_desc_wrapper dst_d(pd()->dst_md());
@@ -186,26 +188,22 @@ status_t ref_deconvolution_fwd_t::compute_oscale(
     const auto OCP = dst_d.padded_dims()[1];
     const auto ndims = pd()->desc()->src_desc.ndims;
 
-    const auto maybe_oscale = [](float &d, dim_t oc, const float *src_scales,
-                                      const float *wei_scales, int wei_mask) {
-        // scale_idx_mult = 1 for per_oc scales and 0, otherwise
-        const int wei_scale_idx_mult = wei_mask > 0;
-        d *= src_scales[0] * wei_scales[oc * wei_scale_idx_mult];
-    };
-
     parallel_nd(MB, OCP, OD, OH, OW,
-            [&](dim_t mb, int ocp, dim_t od, dim_t oh, dim_t ow) {
-                auto dst_off = ref_conv_utils::get_data_off(
-                        dst_d, ndims, mb, ocp, od, oh, ow);
-                float tmp_result = 0;
+            [=](dim_t mb, int ocp, dim_t od, dim_t oh, dim_t ow) {
+        auto dst_off = ref_conv_utils::get_data_off(
+                dst_d, ndims, mb, ocp, od, oh, ow);
+        float tmp_result = 0;
 
-                if (ocp < OC) {
-                    tmp_result = dst[dst_off];
-                    maybe_oscale(tmp_result, ocp, src_scales, wei_scales,
-                            wei_scale_mask);
-                    dst[dst_off] = tmp_result;
-                }
-            });
+        if (ocp < OC) {
+            tmp_result = dst[dst_off];
+
+            if (src_scales) tmp_result *= src_scales[0];
+            if (wei_scales)
+                tmp_result *= wei_scales[(wei_scale_mask > 0) * ocp];
+
+            dst[dst_off] = tmp_result;
+        }
+    });
 
     return status_t::dnnl_success;
 }
@@ -214,7 +212,9 @@ status_t ref_deconvolution_fwd_t::compute_ref_attrs(const exec_ctx_t &ctx,
         const float *conv_output, void *original_dst) const {
     auto dst = CTX_OUT_MEM(void *, DNNL_ARG_DST);
 
-    DEFINE_ARG_SCALES_BUFFER(dst_scales, DNNL_ARG_DST);
+    const float *dst_scales
+            = CTX_IN_MEM(const float *, DNNL_ARG_ATTR_SCALES | DNNL_ARG_DST);
+
     const bool has_dst_scales
             = !pd()->attr()->scales_.has_default_values(DNNL_ARG_DST);
     const int dst_scale_mask = pd()->attr()->scales_.get_mask(DNNL_ARG_DST);
@@ -239,37 +239,36 @@ status_t ref_deconvolution_fwd_t::compute_ref_attrs(const exec_ctx_t &ctx,
     const auto sum_dt = pd()->attr()->post_ops_.get_sum_dt(dst_d.data_type());
 
     parallel_nd(MB, OCP, OD, OH, OW,
-            [&](dim_t mb, int ocp, dim_t od, dim_t oh, dim_t ow) {
-                auto dst_off = ref_conv_utils::get_data_off(
-                        dst_d, ndims, mb, ocp, od, oh, ow);
-                float tmp_result = 0;
+            [= COMPAT_THIS_CAPTURE](
+                    dim_t mb, int ocp, dim_t od, dim_t oh, dim_t ow) {
+        auto dst_off = ref_conv_utils::get_data_off(
+                dst_d, ndims, mb, ocp, od, oh, ow);
+        float tmp_result = 0;
 
-                if (ocp < OC) {
-                    dim_t dst_l_off = (mb * OC + ocp) * OD * OH * OW
-                            + od * OH * OW + oh * OW + ow;
-                    msan_unpoison(
-                            (void *)(&conv_output[dst_off]), sizeof(float));
-                    tmp_result = conv_output[dst_off];
+        if (ocp < OC) {
+            dim_t dst_l_off = (mb * OC + ocp) * OD * OH * OW + od * OH * OW
+                    + oh * OW + ow;
+            msan_unpoison((void *)(&conv_output[dst_off]), sizeof(float));
+            tmp_result = conv_output[dst_off];
 
-                    ref_post_ops_t::args_t args;
-                    if (pd()->attr()->post_ops_.find(primitive_kind::sum) != -1)
-                        args.dst_val = io::load_float_value(
-                                sum_dt, original_dst, dst_off);
-                    args.ctx = &ctx;
-                    args.l_offset = dst_l_off;
-                    args.dst_md = pd()->dst_md();
-                    ref_post_ops->execute(tmp_result, args);
-                    if (has_dst_scales) {
-                        // scale_idx_mult = 1 for per_oc scales and 0, otherwise
-                        tmp_result *= dst_scales[ocp * (dst_scale_mask > 0)];
-                    }
-                    if (has_dst_zp) {
-                        tmp_result += dst_zero_points[ocp * (dst_zp_mask > 0)];
-                    }
-                }
-                io::store_float_value(
-                        dst_d.data_type(), tmp_result, dst, dst_off);
-            });
+            ref_post_ops_t::args_t args;
+            if (pd()->attr()->post_ops_.find(primitive_kind::sum) != -1)
+                args.dst_val
+                        = io::load_float_value(sum_dt, original_dst, dst_off);
+            args.ctx = &ctx;
+            args.l_offset = dst_l_off;
+            args.dst_md = pd()->dst_md();
+            ref_post_ops->execute(tmp_result, args);
+            if (has_dst_scales) {
+                // scale_idx_mult = 1 for per_oc scales and 0, otherwise
+                tmp_result /= dst_scales[ocp * (dst_scale_mask > 0)];
+            }
+            if (has_dst_zp) {
+                tmp_result += dst_zero_points[ocp * (dst_zp_mask > 0)];
+            }
+        }
+        io::store_float_value(dst_d.data_type(), tmp_result, dst, dst_off);
+    });
 
     return status_t::dnnl_success;
 }
@@ -290,7 +289,7 @@ dim_t get_weights_off(const memory_desc_wrapper &wei_d, bool with_groups,
     }
 
     return 0;
-};
+}
 
 template <data_type_t wei_type>
 static void compute_src_zp_compensation(const exec_ctx_t &ctx,
@@ -299,7 +298,7 @@ static void compute_src_zp_compensation(const exec_ctx_t &ctx,
         const cpu_deconvolution_fwd_pd_t *pd) {
     using namespace memory_tracking::names;
 
-    const auto scratchpad = ctx.get_scratchpad_grantor();
+    const auto &scratchpad = ctx.get_scratchpad_grantor();
     int32_t *zp_compensation = scratchpad.get<int32_t>(key_deconv_zp);
     const auto G = pd->G();
     const auto KH = pd->KH();
@@ -312,11 +311,11 @@ static void compute_src_zp_compensation(const exec_ctx_t &ctx,
     const auto ndims = wei_d.ndims() - (with_groups ? 1 : 0);
     const auto get_wei_off
             = [=](dim_t g, dim_t oc, dim_t ic, dim_t kd, dim_t kh, dim_t kw) {
-                  return get_weights_off(
-                          wei_d, with_groups, ndims, g, oc, ic, kd, kh, kw);
-              };
+        return get_weights_off(
+                wei_d, with_groups, ndims, g, oc, ic, kd, kh, kw);
+    };
 
-    parallel_nd(G, OC, [&](const dim_t g, const dim_t oc) {
+    parallel_nd(G, OC, [=](const dim_t g, const dim_t oc) {
         const auto out_offset = g * OC + oc;
         int32_t acc = 0;
 
@@ -366,9 +365,9 @@ prepare_zp_pad_comp_ker(const dim_t ndims, const int32_t *src_zero_points,
     const memory_desc_wrapper wei_d(deconv_pd->weights_md());
     const auto get_wei_off
             = [=](dim_t g, dim_t oc, dim_t ic, dim_t kd, dim_t kh, dim_t kw) {
-                  return get_weights_off(
-                          wei_d, with_groups, ndims, g, oc, ic, kd, kh, kw);
-              };
+        return get_weights_off(
+                wei_d, with_groups, ndims, g, oc, ic, kd, kh, kw);
+    };
 
     return [=](const dim_t g, const dim_t oc, const dim_t od, const dim_t oh,
                    const dim_t ow) {
@@ -429,7 +428,7 @@ static status_t apply_src_zero_point(const exec_ctx_t &ctx,
     const bool is_src_zp_common
             = pd->attr()->zero_points_.get_mask(DNNL_ARG_SRC) == 0;
 
-    const auto scratchpad = ctx.get_scratchpad_grantor();
+    const auto &scratchpad = ctx.get_scratchpad_grantor();
     const int32_t *const zp_src_compensation
             = scratchpad.get<int32_t>(key_deconv_zp);
     const memory_desc_wrapper dst_d(pd->dst_md());
@@ -448,28 +447,28 @@ static status_t apply_src_zero_point(const exec_ctx_t &ctx,
             ndims, src_zero_points, is_src_zp_common, wei, pd);
 
     parallel_nd(MB, G, OC, OD, OH, OW,
-            [&](const dim_t mb, const dim_t g, const dim_t oc, const dim_t od,
+            [=](const dim_t mb, const dim_t g, const dim_t oc, const dim_t od,
                     const dim_t oh, const dim_t ow) {
-                const auto oc_off = g * OC + oc;
-                const auto dst_off = ref_conv_utils::get_data_off(
-                        dst_d, ndims, mb, oc_off, od, oh, ow);
-                int32_t conv_result
-                        = conv_output[dst_off] - zp_src_compensation[oc_off];
+        const auto oc_off = g * OC + oc;
+        const auto dst_off = ref_conv_utils::get_data_off(
+                dst_d, ndims, mb, oc_off, od, oh, ow);
+        int32_t conv_result
+                = conv_output[dst_off] - zp_src_compensation[oc_off];
 
-                if (const auto zp_pad_compensation
-                        = zp_pad_comp_ker(g, oc, od, oh, ow)) {
-                    conv_result += zp_pad_compensation;
-                }
+        if (const auto zp_pad_compensation
+                = zp_pad_comp_ker(g, oc, od, oh, ow)) {
+            conv_result += zp_pad_compensation;
+        }
 
-                conv_output[dst_off] = static_cast<float>(conv_result);
-            });
+        conv_output[dst_off] = static_cast<float>(conv_result);
+    });
 
     return status::success;
 }
 
 status_t ref_deconvolution_fwd_t::execute(const exec_ctx_t &ctx) const {
     using namespace memory_tracking::names;
-    const auto scratchpad = ctx.get_scratchpad_grantor();
+    const auto &scratchpad = ctx.get_scratchpad_grantor();
     const bool ref_bias = pd()->with_bias() && !pd()->conv_supports_bias_;
     const bool non_default_attr = !pd()->attr()->has_default_values();
 
@@ -481,10 +480,10 @@ status_t ref_deconvolution_fwd_t::execute(const exec_ctx_t &ctx) const {
         conv_args[DNNL_ARG_BIAS] = args.at(DNNL_ARG_BIAS);
 
     // Create intermediate memory for f32 output if needed.
-    auto dst = args.at(DNNL_ARG_DST);
+    const auto &dst = args.at(DNNL_ARG_DST);
     std::unique_ptr<memory_t, memory_deleter_t> tmp_memory;
     CHECK(safe_ptr_assign(tmp_memory,
-            new memory_t(dst.mem->engine(), pd()->conv_pd_->diff_src_md(),
+            new memory_t(dst.mem()->engine(), pd()->conv_pd_->diff_src_md(),
                     scratchpad.get_memory_storage(key_deconv_bias))));
     memory_arg_t tmp_conv_output = {tmp_memory.get(), false};
 
@@ -499,7 +498,7 @@ status_t ref_deconvolution_fwd_t::execute(const exec_ctx_t &ctx) const {
         void *dst = CTX_OUT_MEM(void *, DNNL_ARG_DST);
         const auto dt_size = dst_d.data_type_size();
 
-        parallel(0, [&](const int ithr, const int nthr) {
+        parallel(0, [=](const int ithr, const int nthr) {
             dim_t start {0}, end {0};
             balance211(dst_d.nelems(true), nthr, ithr, start, end);
             auto o_dst_start = (char *)original_dst + start * dt_size;
@@ -512,8 +511,9 @@ status_t ref_deconvolution_fwd_t::execute(const exec_ctx_t &ctx) const {
 
     exec_ctx_t conv_ctx(ctx, std::move(conv_args));
 
-    nested_scratchpad_t ns(ctx, key_nested, conv_p_);
-    conv_ctx.set_scratchpad_grantor(ns.grantor());
+    auto *nested_grantor = create_nested_grantor(ctx.get_scratchpad_grantor(),
+            key_nested, conv_p_->pd()->scratchpad_registry());
+    conv_ctx.set_scratchpad_grantor(nested_grantor);
     auto status = conv_p_->execute(conv_ctx);
     if (status != status::success) return status;
 
@@ -561,8 +561,9 @@ status_t ref_deconvolution_bwd_data_t::execute(const exec_ctx_t &ctx) const {
     conv_args[DNNL_ARG_DST] = args.at(DNNL_ARG_DIFF_SRC);
     exec_ctx_t conv_ctx(ctx, std::move(conv_args));
 
-    nested_scratchpad_t ns(ctx, key_nested, conv_p_);
-    conv_ctx.set_scratchpad_grantor(ns.grantor());
+    auto *nested_grantor = create_nested_grantor(ctx.get_scratchpad_grantor(),
+            key_nested, conv_p_->pd()->scratchpad_registry());
+    conv_ctx.set_scratchpad_grantor(nested_grantor);
     conv_p_->execute(conv_ctx);
     return status::success;
 }
@@ -579,7 +580,7 @@ void ref_deconvolution_bwd_weights_t::compute_bwd_bias(
     const auto OD = pd()->OD();
     const auto ndims = pd()->desc()->src_desc.ndims;
 
-    parallel_nd(G, OC, [&](dim_t g, dim_t oc) {
+    parallel_nd(G, OC, [=](dim_t g, dim_t oc) {
         float db = 0;
         for_(dim_t mb = 0; mb < MB; ++mb)
         for_(dim_t od = 0; od < OD; ++od)
@@ -603,7 +604,7 @@ void ref_deconvolution_bwd_weights_t::compute_bwd_bias_ncdhw(
     const auto MB = pd()->MB();
     const auto SP = pd()->OH() * pd()->OW() * pd()->OD();
 
-    parallel_nd(OC, [&](dim_t oc) {
+    parallel_nd(OC, [=](dim_t oc) {
         float db = 0;
         for (dim_t mb = 0; mb < MB; ++mb) {
             PRAGMA_OMP_SIMD(reduction(+ : db))
@@ -624,7 +625,7 @@ void ref_deconvolution_bwd_weights_t::compute_bwd_bias_ndhwc(
     const auto SP = pd()->OW() * pd()->OH() * pd()->OD();
     const auto OC = pd()->OC();
 
-    parallel_nd(OC, [&](dim_t oc) {
+    parallel_nd(OC, [=](dim_t oc) {
         float db = 0;
         for (dim_t mb = 0; mb < MB; ++mb) {
             PRAGMA_OMP_SIMD(reduction(+ : db))
@@ -650,7 +651,7 @@ void ref_deconvolution_bwd_weights_t::compute_bwd_bias_nCdhwXc(
 
     const ptrdiff_t stride_mb = diff_dst_d.blocking_desc().strides[0];
 
-    parallel_nd(utils::div_up(OC, blksize), [&](dim_t ocb) {
+    parallel_nd(utils::div_up(OC, blksize), [=](dim_t ocb) {
         float db[blksize] = {0};
 
         for (dim_t mb = 0; mb < MB; ++mb) {
@@ -721,8 +722,9 @@ status_t ref_deconvolution_bwd_weights_t::execute(const exec_ctx_t &ctx) const {
     conv_args[DNNL_ARG_DIFF_WEIGHTS] = args.at(DNNL_ARG_DIFF_WEIGHTS);
     exec_ctx_t conv_ctx(ctx, std::move(conv_args));
 
-    nested_scratchpad_t ns(ctx, key_nested, conv_p_);
-    conv_ctx.set_scratchpad_grantor(ns.grantor());
+    auto *nested_grantor = create_nested_grantor(ctx.get_scratchpad_grantor(),
+            key_nested, conv_p_->pd()->scratchpad_registry());
+    conv_ctx.set_scratchpad_grantor(nested_grantor);
     status_t status = conv_p_->execute(conv_ctx);
     if (status != status::success) return status;
 

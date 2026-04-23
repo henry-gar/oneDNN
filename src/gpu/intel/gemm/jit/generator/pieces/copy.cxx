@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -98,7 +98,7 @@ void Generator<hw>::copyRegisters(Type Ts, Type Td, const RegisterLayout &layout
         if (Ts != layoutSrc.type() || Td != layoutDst.type()) stub("No type punning allowed on this path");
         if (canDequantizeInt4(layoutSrc, layoutDst, emptyLayout, emptyLayout)) {
             dequantizeInt4(true, layoutSrc, layoutDst, emptyLayout, emptyLayout,
-                           src, dst, emptyRegs, emptyRegs, dOffR, dOffC, 0, nullptr, strategy, state, s4Shift);
+                           src, dst, emptyRegs, emptyRegs, dOffR, dOffC, 0, 1, 1, nullptr, strategy, state, s4Shift);
             return;
         }
     }

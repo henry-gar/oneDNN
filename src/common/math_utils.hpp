@@ -1,5 +1,6 @@
 /*******************************************************************************
-* Copyright 2017-2025 Intel Corporation
+* Copyright 2017 Intel Corporation
+* Copyright 2025 Arm Ltd. and affiliates
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -36,7 +37,11 @@ template <typename T>
 inline bool is_prime(T n) {
     static_assert(std::is_integral<T>::value == true, "Not an integral type");
 
-    if (n <= 1 || n % 2 == 0 || n % 3 == 0 || n % 5 == 0) return false;
+    if (n <= 1) { return false; }
+
+    if (n == 2 || n == 3 || n == 5) { return true; }
+
+    if (n % 2 == 0 || n % 3 == 0 || n % 5 == 0) { return false; }
 
     const T sqrtn = static_cast<T>(std::sqrt(n));
     // It is enough to check prime divisors up to `sqrt(n)`.
@@ -450,15 +455,20 @@ inline bool is_eltwise_ok(
     return eltwise_use_src || eltwise_use_dst;
 }
 
-inline uint32_t philox4x32(uint32_t idx, uint32_t seed) {
+inline uint32_t philox4x32(uint64_t idx, uint64_t seed, uint64_t offset) {
+    // This impl is aligned with PyTorch at
+    // https://github.com/pytorch/pytorch/blob/09c950c/aten/src/ATen/core/PhiloxRNGEngine.h
+    // - both offset and idx are used to fill ctr
+    // - seed/offset/idx are uint64_t
+
     // Note 1: This impl computes 4 different int32_t rand
     //   values. Even though this is redundundant for sequential ref,
     //   keeping vector version to guide optimized implementations.
-    // Note 2: this can be used for 8x16 as well by changing indexing.
 
-    uint32_t x = (idx & ~3L);
-    uint32_t ctr[4] = {x + 0, x + 1, x + 2, x + 3};
-    uint32_t key[2] = {uint32_t(seed), uint32_t(seed)};
+    uint64_t x = (idx & ~3L);
+    uint32_t ctr[4] = {uint32_t(offset), uint32_t(offset >> 32), uint32_t(x),
+            uint32_t(x >> 32)};
+    uint32_t key[2] = {uint32_t(seed), uint32_t(seed >> 32)};
 
     auto mulhilo32 = [&](uint32_t a, uint32_t b, uint32_t &hi, uint32_t &lo) {
         const uint64_t product = static_cast<uint64_t>(a) * b;
@@ -485,28 +495,23 @@ inline uint32_t philox4x32(uint32_t idx, uint32_t seed) {
         key[0] += PHILOX_W4x32_0;
         key[1] += PHILOX_W4x32_1;
     };
-
-    philox4x32round();
-    philox4x32bumpkey();
-    philox4x32round();
-    philox4x32bumpkey();
-    philox4x32round();
-    philox4x32bumpkey();
-    philox4x32round();
-    philox4x32bumpkey();
-    philox4x32round();
-    philox4x32bumpkey();
-    philox4x32round();
-    philox4x32bumpkey();
-    philox4x32round();
-    philox4x32bumpkey();
-    philox4x32round();
-    philox4x32bumpkey();
-    philox4x32round();
-    philox4x32bumpkey();
+    constexpr int nrounds = 10;
+    for (int i = 0; i < (nrounds - 1); ++i) {
+        philox4x32round();
+        philox4x32bumpkey();
+    }
     philox4x32round();
 
     return ctr[idx & 3L];
+}
+
+inline uint32_t philox4x32(uint32_t idx, uint32_t seed) {
+    // Note: this is for compatibility with impls that don't support s64 rand
+    uint64_t x = idx & ~3L;
+    uint64_t idx_64 = ((x + 3) << 32) + (x + 2);
+    uint64_t offset_64 = ((x + 1) << 32) + x;
+    uint64_t seed_64 = (uint64_t(seed) << 32) + seed;
+    return philox4x32(idx_64, seed_64, offset_64);
 }
 
 inline uint16_t philox8x16(uint32_t idx, uint32_t seed) {

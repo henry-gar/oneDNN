@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -58,8 +58,11 @@ struct settings_t : public base_settings_t {
     std::vector<flags_t> flags {NONE};
     check_alg_t check_alg = check_alg_t::ALG_AUTO;
 
+    std::vector<float> eps {1.f / 16};
+
     const char *perf_template_csv() const {
-        static const std::string args = "%dir%,%dt%,%tag%,%stat_tag%,%flags%";
+        static const std::string args
+                = "%dir%,%dt%,%tag%,%stat_tag%,%flags%,%eps%";
         return perf_template_csv_base(args);
     }
 
@@ -67,7 +70,7 @@ struct settings_t : public base_settings_t {
 
     bool has_single_setup() const override {
         return dir.size() == 1 && dt.size() == 1 && tag.size() == 1
-                && stat_tag.size() == 1 && flags.size() == 1
+                && stat_tag.size() == 1 && flags.size() == 1 && eps.size() == 1
                 && base_settings_t::has_single_setup();
     }
 };
@@ -76,16 +79,16 @@ struct prb_t : public prb_dims_t {
     // A ctor with common interface across all drivers.
     prb_t(const settings_t &s)
         : prb_t(s.prb_dims, s.tag[0], s.stat_tag[0], s.ss_dt[0], s.dir[0],
-                s.dt[0], s.flags[0], s.check_alg, s.inplace[0],
-                s.attributes.front(), s.ctx_init[0], s.ctx_exe[0],
-                s.impl_filter) {
+                  s.dt[0], s.flags[0], s.check_alg, s.eps[0], s.inplace[0],
+                  s.attributes.front(), s.ctx_init[0], s.ctx_exe[0],
+                  s.impl_filter) {
         SAFE_V(s.has_single_setup() ? OK : FAIL);
     }
 
     prb_t(const prb_dims_t &prb_dims, const std::vector<std::string> &tag,
             const std::string &stat_tag, dnnl_data_type_t ss_dt, dir_t dir,
             const std::vector<dnnl_data_type_t> &dt, flags_t flags,
-            check_alg_t check_alg, bool inplace, const attr_t &attr,
+            check_alg_t check_alg, float eps, bool inplace, const attr_t &attr,
             const thr_ctx_t &ctx_init, const thr_ctx_t &ctx_exe,
             const impl_filter_t &impl_filter)
         : prb_dims_t(prb_dims)
@@ -103,7 +106,7 @@ struct prb_t : public prb_dims_t {
         , impl_filter(impl_filter)
         , n(1)
         , c(dims[ndims - 1])
-        , eps(1.f / 16) {
+        , eps(eps) {
         for (int d = 0; d < ndims - 1; d++)
             n *= dims[d];
 
@@ -179,10 +182,10 @@ struct cfg_t {
         , want_flex_bits_(MIN2(6, exact_bits_ / 2))
         , check_alg_(prb->check_alg == bnorm::ALG_AUTO
                           ? (free_bits_ >= min_flex_bits_
-                                          ? bnorm::ALG_1
-                                          : (want_flex_bits_ == exact_bits_ / 2
-                                                          ? bnorm::ALG_2
-                                                          : bnorm::ALG_0))
+                                            ? bnorm::ALG_1
+                                            : (want_flex_bits_ == exact_bits_ / 2
+                                                              ? bnorm::ALG_2
+                                                              : bnorm::ALG_0))
                           : prb->check_alg)
         , flex_bits_(check_alg_ == bnorm::ALG_1 ? MIN2(exact_bits_, free_bits_)
                                                 : want_flex_bits_)

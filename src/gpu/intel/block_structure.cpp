@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2024 Intel Corporation
+* Copyright 2021 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -82,12 +82,29 @@ block_layout_t::block_layout_t(
         // Sort outer blocks by their stride.
         std::sort(begin() + blocking.inner_nblks, end(),
                 [](const block_t &a, const block_t &b) {
-                    return a.stride < b.stride
-                            || (a.stride == b.stride && a.block < b.block);
-                });
+            return a.stride < b.stride
+                    || (a.stride == b.stride && a.block < b.block);
+        });
     }
 
     if (do_normalize) *this = normalized();
+}
+
+block_layout_t get_inner_layout(const memory_desc_wrapper &md) {
+    block_layout_t inner_layout(md, /* inner_only */ true);
+
+    block_layout_t ret;
+    // Explicitly initialize to size-1 blocks
+    for (int d = 0; d < MAX_NDIMS; d++) {
+        ret.append(block_t(d, 1, 0));
+    }
+
+    // Overwrite inner blocks with their actual values
+    for (const auto &block : inner_layout) {
+        ret[block.dim_idx] = block;
+    }
+
+    return ret;
 }
 
 } // namespace intel

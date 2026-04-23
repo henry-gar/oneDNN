@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2018-2025 Intel Corporation
+* Copyright 2018 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -55,7 +55,7 @@ static inline void init_dims(dim_t &L, dim_t &D, dim_t &I, dim_t &G, dim_t &O,
         O = dims[3];
     }
     assert(G != 0 && O != 0);
-};
+}
 
 template <data_type_t type_i>
 static inline void quantize_igo(int8_t *scratch_quantized,
@@ -69,7 +69,7 @@ static inline void quantize_igo(int8_t *scratch_quantized,
     init_dims(L, D, I, G, O, src_d);
 
     assert(scales != nullptr);
-    parallel(0, [&](const int ithr, const int nthr) {
+    parallel(0, [=](const int ithr, const int nthr) {
         dim_t start {0}, end {0};
         balance211(L * D * I, nthr, ithr, start, end);
         for (int ldi = start; ldi < end; ldi++) {
@@ -95,7 +95,7 @@ static inline void quantize_goi(int8_t *scratch_quantized,
     init_dims(L, D, I, G, O, src_d);
 
     assert(scales != nullptr);
-    parallel_nd(L * D, G * O, [&](dim_t ld, dim_t go) {
+    parallel_nd(L * D, G * O, [=](dim_t ld, dim_t go) {
         const float s = scales[(mask == 0) ? 0 : go];
         PRAGMA_OMP_SIMD()
         for (dim_t i = 0; i < I; i++) {
@@ -119,7 +119,7 @@ static inline void compensate_igo(float *compensation,
     // parallelisation overhead if dimensions are small
     const int LD_nthr = nstl::min(L * D, dim_t(nthr));
     const int GO_nthr = nstl::min(G * O, dim_t(nthr / LD_nthr));
-    parallel(nthr, [&](const int ithr, const int nthr) {
+    parallel(nthr, [=](const int ithr, const int nthr) {
         int LD_ithr = -1;
         int GO_ithr = -1;
         dim_t LD_s = -1, LD_e = -1;
@@ -170,7 +170,7 @@ static inline void compensate_goi(float *compensation,
     dim_t L, D, I, G, O;
     init_dims(L, D, I, G, O, src_d);
 
-    parallel_nd(L * D, G * O, [&](dim_t ld, dim_t go) {
+    parallel_nd(L * D, G * O, [=](dim_t ld, dim_t go) {
         int32_t compensation_s32 = 0;
         PRAGMA_OMP_SIMD()
         for (dim_t i = 0; i < I; i++) {
@@ -260,7 +260,7 @@ private:
                 = utils::array_product(input_d.dims(), input_d.ndims() - 1);
         const dim_t inner_dim = input_d.dims()[input_d.ndims() - 1];
 
-        parallel(0, [&](const int ithr, const int nthr) {
+        parallel(0, [=](const int ithr, const int nthr) {
             dim_t start {0}, end {0};
             balance211(outer_dim, nthr, ithr, start, end);
             for (int i = start; i < end; ++i) {
@@ -286,7 +286,7 @@ private:
         const memory_desc_wrapper &input_d = pd()->src_md();
         const memory_desc_wrapper &output_d = pd()->dst_md();
         const size_t nelems = input_d.nelems();
-        parallel_nd(nelems, [&](size_t i) {
+        parallel_nd(nelems, [=](size_t i) {
             const float in = (float)input[input_d.off_l(i)] * scale + shift;
             output[output_d.off_l(i)]
                     = q10n::qz_a1b0_t<float, out_data_t>()(in);
@@ -451,11 +451,11 @@ private:
 
         /* Quantize src & compute compensation */
         auto scratch_quantized
-                = (int8_t * __restrict) ctx.get_scratchpad_grantor()
+                = (int8_t *__restrict)ctx.get_scratchpad_grantor()
                           .template get<void>(memory_tracking::names::
                                           key_reorder_rnn_weights_quantization);
         auto scratch_compensation
-                = (int32_t * __restrict) ctx.get_scratchpad_grantor()
+                = (int32_t *__restrict)ctx.get_scratchpad_grantor()
                           .template get<void>(memory_tracking::names::
                                           key_reorder_rnn_weights_reduction);
         float *comp = reinterpret_cast<float *>(
@@ -486,7 +486,7 @@ private:
                 default: assert(!"Unsupported reorder");
             }
         } else
-            scratch_quantized = (int8_t * __restrict) src;
+            scratch_quantized = (int8_t *__restrict)src;
 
         /* Step 2: we pre-compute the compensation */
         switch (pd()->itag_) {
@@ -654,7 +654,7 @@ private:
                     = (out_data_t *)ctx.get_scratchpad_grantor()
                               .template get<void>(memory_tracking::names::
                                               key_reorder_rnn_weights_xf16_cvt);
-            parallel_nd(L * D, [&](dim_t ld) {
+            parallel_nd(L * D, [=](dim_t ld) {
                 types::cvt_from_float((bfloat16_t *)input_cvt + ld * G * O * I,
                         (float *)input + ld * G * O * I, G * O * I);
             });
@@ -670,7 +670,7 @@ private:
                                     key_reorder_rnn_weights_transposition);
             const dim_t M = to_igo ? G * O : I;
             const dim_t N = to_igo ? I : G * O;
-            parallel_nd(L * D, N, [&](dim_t ld, dim_t i) {
+            parallel_nd(L * D, N, [=](dim_t ld, dim_t i) {
                 for (dim_t j = 0; j < M; j++) {
                     input_tr[ld * M * N + i * M + j]
                             = input_cvt[ld * M * N + j * N + i];
@@ -873,11 +873,11 @@ private:
 
         /* Quantize src & compute compensation */
         auto scratch_quantized
-                = (int8_t * __restrict) ctx.get_scratchpad_grantor()
+                = (int8_t *__restrict)ctx.get_scratchpad_grantor()
                           .template get<void>(memory_tracking::names::
                                           key_reorder_rnn_weights_quantization);
         auto scratch_compensation
-                = (int32_t * __restrict) ctx.get_scratchpad_grantor()
+                = (int32_t *__restrict)ctx.get_scratchpad_grantor()
                           .template get<void>(memory_tracking::names::
                                           key_reorder_rnn_weights_reduction);
         float *comp = reinterpret_cast<float *>(dst + compensation_offset);
@@ -902,50 +902,50 @@ private:
             quantize_igo<type_i>(
                     scratch_quantized, src_d, (float *)src, mask, scales);
         } else
-            scratch_quantized = (int8_t * __restrict) src;
+            scratch_quantized = (int8_t *__restrict)src;
 
         if (req_s8s8_comp && mask_ok(dst_d.extra().compensation_mask))
             compensate_igo(comp, src_d, scratch_quantized, scratch_compensation,
                     pd()->thr_scratch_comp_sz_, pd()->nthr_);
 
         const auto off_plain
-                = [&](dim_t l, dim_t d, dim_t i, dim_t g, dim_t o) {
-                      return ((((dim_t)l * D + d) * I + i) * G + g) * O + o;
-                  };
+                = [=](dim_t l, dim_t d, dim_t i, dim_t g, dim_t o) {
+            return ((((dim_t)l * D + d) * I + i) * G + g) * O + o;
+        };
 
-        const auto off_blk = [&](dim_t l, dim_t d, dim_t g, dim_t ob,
-                                     dim_t ib) {
+        const auto off_blk
+                = [=](dim_t l, dim_t d, dim_t g, dim_t ob, dim_t ib) {
             return (((((dim_t)l * D + d) * G + g) * OB + ob) * IB + ib)
                     * i_block * o_block;
         };
-        const auto off_inner_blk = [&](int xdim, int y, int x,
-                                           int folding_factor) {
+        const auto off_inner_blk
+                = [=](int xdim, int y, int x, int folding_factor) {
             const int row = (xdim) * (y / folding_factor) * folding_factor;
             const int col = x * folding_factor + (y % folding_factor);
             return row + col;
         };
         const auto kernel_plain_to_blocked
-                = [&](const out_data_t *inp, out_data_t *out, int ib, int ob) {
-                      PRAGMA_OMP_SIMD()
-                      for (int i = 0; i < i_block * o_block; i++)
-                          out[i] = 0;
+                = [=](const out_data_t *inp, out_data_t *out, int ib, int ob) {
+            PRAGMA_OMP_SIMD()
+            for (int i = 0; i < i_block * o_block; i++)
+                out[i] = 0;
 
-                      for_(int i = 0; i < i_block; i++)
-                      for (int o = 0; o < o_block; o++) {
-                          if ((i + ib * i_block < I) && (o + ob * o_block < O))
-                              out[off_inner_blk(o_block, i, o, i_block)]
-                                      = inp[i * G * O + o];
-                      }
-                  };
+            for_(int i = 0; i < i_block; i++)
+            for (int o = 0; o < o_block; o++) {
+                if ((i + ib * i_block < I) && (o + ob * o_block < O))
+                    out[off_inner_blk(o_block, i, o, i_block)]
+                            = inp[i * G * O + o];
+            }
+        };
 
         parallel_nd(L, D, G, OB, IB,
-                [&](dim_t l, dim_t d, dim_t g, dim_t ob, dim_t ib) {
-                    auto inp = &scratch_quantized[off_plain(
-                            l, d, ib * i_block, g, ob * o_block)];
-                    auto out = &dst[off_blk(l, d, g, ob, ib)];
+                [=](dim_t l, dim_t d, dim_t g, dim_t ob, dim_t ib) {
+            auto inp = &scratch_quantized[off_plain(
+                    l, d, ib * i_block, g, ob * o_block)];
+            auto out = &dst[off_blk(l, d, g, ob, ib)];
 
-                    kernel_plain_to_blocked(inp, out, ib, ob);
-                });
+            kernel_plain_to_blocked(inp, out, ib, ob);
+        });
 
         return status::success;
     }

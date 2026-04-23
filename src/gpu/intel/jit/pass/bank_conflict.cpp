@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -16,9 +16,8 @@
 
 #include "gpu/intel/jit/pass/bank_conflict.hpp"
 
-#include "gpu/intel/jit/ir/fma.hpp"
-#include "gpu/intel/jit/ir/message.hpp"
-#include "gpu/intel/jit/utils/trace.hpp"
+#include "gemmstone/../../dsl/ir/pass/trace.hpp"
+#include "gpu/intel/jit/ir/legacy.hpp"
 
 namespace dnnl {
 namespace impl {
@@ -144,9 +143,9 @@ private:
 };
 
 stmt_t inject_bank_conflict_attribute(const stmt_t &s, ir_context_t &ir_ctx) {
-    trace_start();
+    ir::trace_start();
     auto ret = bank_conflict_attribute_injector_t().mutate(s);
-    trace_pass("inject_bank_conflict_attribute", ret, ir_ctx);
+    ir::trace_pass("inject_bank_conflict_attribute", ret, ir_ctx);
     return ret;
 }
 

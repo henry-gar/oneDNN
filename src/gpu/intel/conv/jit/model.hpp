@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -800,8 +800,8 @@ private:
         node.right = right;
         std::nth_element(idxs.begin() + beg, idxs.begin() + beg + nleft,
                 idxs.begin() + end, [&](int a, int b) {
-                    return X[a][feature_idx] < X[b][feature_idx];
-                });
+            return X[a][feature_idx] < X[b][feature_idx];
+        });
         if (subsamples_ > 0) {
             intel::jit::ir_utils::fast_random_t r;
             r.shuffle(idxs.begin() + beg, idxs.begin() + beg + nleft);
@@ -1059,8 +1059,8 @@ public:
         }
         std::sort(ret.begin(), ret.end(),
                 [&](const entry_t &a, const entry_t &b) {
-                    return a.second > b.second;
-                });
+            return a.second > b.second;
+        });
         return ret;
     }
 

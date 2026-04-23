@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@
 
 #include "xpu/sycl/memory_storage.hpp"
 
-#include "gpu/intel/jit/dsl/runtime.hpp"
+#include "gemmstone/dsl/runtime.hpp"
 #include "gpu/intel/jit/generator_base.hpp"
 #include "gpu/intel/sycl/compat.hpp"
 #include "gpu/intel/sycl/device_info.hpp"
@@ -57,10 +57,10 @@ status_t engine_t::create_kernel(gpu::intel::compute::kernel_t *kernel,
     return jitter->get_kernel(*kernel, this);
 }
 
-status_t engine_t::create_kernel(
-        compute::kernel_t &kernel, const jit::dsl::kernel_t &kernel_dsl) const {
+status_t engine_t::create_kernel(compute::kernel_t &kernel,
+        const gemmstone::dsl::kernel_t &kernel_dsl) const {
     return interop_kernel_t::make(kernel,
-            jit::dsl::make_kernel(
+            gemmstone::dsl::make_kernel(
                     kernel_dsl, impl()->context(), impl()->device()),
             {});
 }
@@ -114,18 +114,25 @@ status_t engine_t::create_kernels(
 
     const char *source = nullptr;
     for (size_t i = 0; source == nullptr && i < kernel_names.size(); i++)
-        source = ocl::get_kernel_source(kernel_names[i]);
+        source = get_kernel_source(kernel_names[i]);
     VERROR_ENGINE(source, status::runtime_error,
             "No OpenCL source was found for kernel");
 
     stringstream_t pp_code;
-    CHECK(gpu::intel::ocl::preprocess_headers(pp_code, source, kernel_ctx));
+    CHECK(compute::preprocess_headers(pp_code, source, kernel_ctx));
+    std::string code_str = pp_code.str();
 
     std::string build_options = kernel_ctx.options();
     build_options += " " + device_info()->get_cl_ext_options();
 
+    gpu::intel::compute::program_src_t src(code_str);
+    if (src) { build_options += " -g -s " + std::string(src.name()); }
+
+    compute::debugdump_processed_source(
+            code_str, build_options, device_info()->get_cl_ext_options());
+
     auto kb_src = syclex::create_kernel_bundle_from_source(
-            context(), syclex::source_language::opencl, pp_code.str());
+            context(), syclex::source_language::opencl, code_str);
     auto kb_exe = syclex::build(
             kb_src, syclex::properties {syclex::build_options(build_options)});
     *kernels = std::vector<compute::kernel_t>(kernel_names.size());
@@ -133,8 +140,7 @@ status_t engine_t::create_kernels(
         if (!kernel_names[i]) continue;
 
         CHECK(interop_kernel_t::make((*kernels)[i],
-                kb_exe.ext_oneapi_get_kernel(kernel_names[i]),
-                gpu::intel::compute::program_src_t(pp_code.str())));
+                kb_exe.ext_oneapi_get_kernel(kernel_names[i]), src));
     }
 
     return status::success;

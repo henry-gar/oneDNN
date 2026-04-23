@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -42,7 +42,7 @@ public:
         void parse(std::istream &in);
         std::string str() const;
         std::string registry_str() const;
-        IR_DEFINE_DUMP()
+        XE_DEFINE_DUMP()
     };
 
     plan_registry_t() = default;

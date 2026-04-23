@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2023 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -26,6 +26,8 @@
 #include "gtest/gtest.h"
 
 #include "oneapi/dnnl/dnnl.hpp"
+
+#include "common/compiler_workarounds.hpp"
 
 namespace dnnl {
 
@@ -285,6 +287,12 @@ protected:
         if (get_test_engine_kind() == engine::kind::gpu)
             set_primitive_cache_capacity(0);
 #endif
+#if DNNL_GPU_RUNTIME == DNNL_RUNTIME_ZE
+        // Note: necessary abstractions to support concurrent kernel generation
+        // are not introduced for Level Zero backend.
+        SKIP_IF(true,
+                "Concurrent execution is not supported by Level Zero backend.");
+#endif
         // This test doesn't work properly under SDE.
         const int len = 1024;
         char value_str[len];
@@ -307,7 +315,8 @@ protected:
     }
 
     void Test() {
-        dnnl::impl::parallel(nthreads, [this](int ithr, int nthr) {
+        dnnl::impl::parallel(
+                nthreads, [= COMPAT_THIS_CAPTURE](int ithr, int nthr) {
             const int step = (ntasks + nthr - 1) / nthr;
             const int beg = ithr * step;
             const int end = std::min(beg + step, ntasks);
@@ -315,16 +324,18 @@ protected:
                 tasks_[i]->execute();
         });
 
-        for (int i = 0; i < ntasks; i++) {
-            tasks_[i]->validate();
-        }
+        dnnl::impl::parallel(1, [= COMPAT_THIS_CAPTURE](int ithr, int nthr) {
+            for (int i = 0; i < ntasks; i++) {
+                tasks_[i]->validate();
+            }
+        });
+
+        synchronize_threadpool(get_test_engine_kind());
     }
 
     static const int ntasks;
     static const int nthreads;
     std::vector<std::shared_ptr<task_t>> tasks_;
-    engine eng;
-    stream strm;
 };
 
 const int test_concurrency_t::ntasks = 1000;

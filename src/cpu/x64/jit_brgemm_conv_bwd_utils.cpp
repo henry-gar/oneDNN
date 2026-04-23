@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -1113,8 +1113,8 @@ status_t brg_blocking_t::calc_blocks() {
 
     const auto thr_eff_threshold = 0.9f;
     const auto max_iw_block_thr = utils::saturate(1, sp,
-            static_cast<int>(div_up(
-                    mb * ngroups * nb_ic * is, thr_eff_threshold * nthr)));
+            static_cast<int>(ceil(
+                    mb * ngroups * nb_ic * is / (thr_eff_threshold * nthr))));
 
     iw_block = is_block = sp_block = -1;
     brg_blocking_t best_brgb = *this;
@@ -1183,7 +1183,7 @@ float brg_blocking_t::est_eff_1x1() {
     const auto amx_fac = maskrcnn_cond
             ? (div_up(M + M_tail, 16) / (M_n_sp_blks + M_tail_n_sp_blks))
             : (static_cast<float>(div_up(M + M_tail, 16))
-                    / (M_n_sp_blks + M_tail_n_sp_blks));
+                      / (M_n_sp_blks + M_tail_n_sp_blks));
 
     const auto brgemm_microkernel_eff = is_amx(isa)
             ? amx_fac * (static_cast<float>(icb_ave) * spb_ave)
@@ -1457,7 +1457,10 @@ status_t init_jcp(jit_brgemm_conv_conf_t &jcp, cpu_isa_t isa,
     const bool has_uneven_spatial = jcp.id % jcp.stride_d != 0
             || jcp.ih % jcp.stride_h != 0 || jcp.has_uneven_iw;
 
-    if (cd.use_inversion && has_uneven_spatial) return status::unimplemented;
+    bool is_deconv_with_uneven_spatial = cd.use_inversion && has_uneven_spatial;
+    VDISPATCH_CONV_IC(!is_deconv_with_uneven_spatial,
+            VERBOSE_UNSUPPORTED_FEATURE,
+            "deconvolution with uneven spatial dimensions is not supported");
 
     jcp.dilate_d = (ndims == 5) ? cd.dilates[0] : 0;
     jcp.dilate_h = (ndims == 3) ? 0 : cd.dilates[ndims - 4];
@@ -1509,7 +1512,7 @@ status_t init_jcp(jit_brgemm_conv_conf_t &jcp, cpu_isa_t isa,
             = everyone_is(f32, jcp.src_dt, jcp.dst_dt) && jcp.wei_dt == f16;
     jcp.is_tf32 = everyone_is(f32, jcp.src_dt, jcp.wei_dt)
             && one_of(attr.fpmath_.mode_, fpmath_mode::tf32, fpmath_mode::any)
-            && is_superset(isa, avx10_2_512_amx_2);
+            && is_superset(isa, avx10_2_amx_2);
 
     VDISPATCH_CONV_IC(!jcp.is_bf32, VERBOSE_UNSUPPORTED_DT);
 
@@ -1707,7 +1710,8 @@ void set_k_range(int P, int D, int S, dim_t i, dim_t O, int K, int &k_s,
 
     k_f = is_w ? K : nstl::min(K, static_cast<int>(div_up(i + P + 1, D)));
     k_s = is_w ? 0
-               : nstl::max(0, static_cast<int>(div_up(i + P - O * S + 1, D)));
+               : static_cast<int>(
+                         div_up(nstl::max((dim_t)0, i + P - O * S + 1), D));
 
     while (k_s % S != s)
         k_s++;
@@ -1850,19 +1854,19 @@ dim_t precalculate_comp_pad_kernels(const jit_brgemm_conv_conf_t &jcp,
 
     const auto update_kernels
             = [&](int kd_b, int kd_e, int kh_b, int kh_e, int kw_b, int kw_e) {
-                  unique_kernels.insert({kd_b, kd_e, kh_b, kh_e, kw_b, kw_e});
-                  if (k == static_cast<dim_t>(unique_kernels.size())) return;
-                  if (fill_k_ranges) {
-                      (*kd_bs)[k] = kd_b;
-                      (*kd_es)[k] = kd_e;
-                      (*kh_bs)[k] = kh_b;
-                      (*kh_es)[k] = kh_e;
-                      (*kw_bs)[k] = kw_b;
-                      (*kw_es)[k] = kw_e;
-                  }
-                  k++;
-                  assert(IMPLICATION(fill_k_ranges, k <= jcp.ker_ranges_size));
-              };
+        unique_kernels.insert({kd_b, kd_e, kh_b, kh_e, kw_b, kw_e});
+        if (k == static_cast<dim_t>(unique_kernels.size())) return;
+        if (fill_k_ranges) {
+            (*kd_bs)[k] = kd_b;
+            (*kd_es)[k] = kd_e;
+            (*kh_bs)[k] = kh_b;
+            (*kh_es)[k] = kh_e;
+            (*kw_bs)[k] = kw_b;
+            (*kw_es)[k] = kw_e;
+        }
+        k++;
+        assert(IMPLICATION(fill_k_ranges, k <= jcp.ker_ranges_size));
+    };
 
     for_(int idb = 0; idb < jcp.nb_id; idb++)
     for_(int ihb = 0; ihb < jcp.nb_ih; ihb++)

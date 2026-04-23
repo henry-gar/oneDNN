@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -412,23 +412,27 @@ struct workspace_t : public data_helper_t {
     workspace_t(const mst &ws, const conf_t &conf)
         : ws_(ws)
         , conf_(conf)
-        , gates_(conf.ws_gates_size > 0 ? ws.get_sub_storage(
-                         conf.ws_gates_offset, conf.ws_gates_size)
-                                        : nullptr)
+        , gates_(conf.ws_gates_size > 0
+                          ? ws.get_sub_storage(
+                                    conf.ws_gates_offset, conf.ws_gates_size)
+                          : nullptr)
         , gates_strides_ {0}
-        , states_(conf.ws_states_size > 0 ? ws.get_sub_storage(
-                          conf.ws_states_offset, conf.ws_states_size)
-                                          : nullptr)
+        , states_(conf.ws_states_size > 0
+                          ? ws.get_sub_storage(
+                                    conf.ws_states_offset, conf.ws_states_size)
+                          : nullptr)
         , states_strides_ {0}
-        , c_states_(conf.ws_c_states_size > 0 ? ws.get_sub_storage(
-                            conf.ws_c_state_offset, conf.ws_c_states_size)
-                                              : nullptr)
-        , bias_(conf.ws_bias_size > 0 ? ws.get_sub_storage(
-                        conf.ws_bias_offset, conf.ws_bias_size)
+        , c_states_(conf.ws_c_states_size > 0
+                          ? ws.get_sub_storage(conf.ws_c_state_offset,
+                                    conf.ws_c_states_size)
+                          : nullptr)
+        , bias_(conf.ws_bias_size > 0 ? ws.get_sub_storage(conf.ws_bias_offset,
+                                                conf.ws_bias_size)
                                       : nullptr)
-        , grid_comp_(conf.ws_grid_comp_size > 0 ? ws.get_sub_storage(
-                             conf.ws_grid_comp_offset, conf.ws_grid_comp_size)
-                                                : nullptr) {
+        , grid_comp_(conf.ws_grid_comp_size > 0
+                          ? ws.get_sub_storage(conf.ws_grid_comp_offset,
+                                    conf.ws_grid_comp_size)
+                          : nullptr) {
         if (gates_) {
             const dim_t n_b = conf_.mb;
             const dim_t n_tb = conf_.n_iter * n_b;
@@ -664,7 +668,7 @@ struct scratch_t : public data_helper_t {
         return conf_.n_iter_scratch_gates != 1
                 ? iter * conf_.mb * conf_.scratch_gates_ld
                 : 0;
-    };
+    }
 
     const mst *gates() const {
         // Reuse diff_gates_ when possible to reduce memory consumption
@@ -687,7 +691,7 @@ struct scratch_t : public data_helper_t {
         return conf_.n_iter_scratch_gates != 1
                 ? iter * conf_.mb * conf_.scratch_diff_gates_ld
                 : 0;
-    };
+    }
     const mst *diff_gates() const { return diff_gates_.get(); }
 
     sub_buffer_t diff_gates(dim_t iter) const {

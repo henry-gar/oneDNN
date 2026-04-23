@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -237,7 +237,7 @@ private:
             case arg_t::scale: return scale_ptr(off);
             default: assert(!"unsupported arg_num"); break;
         }
-        return Xbyak::Address(0);
+        return Xbyak::Address {};
     }
 
     Xbyak::Reg64 get_reg_address(const arg_t arg_num) {
@@ -271,7 +271,7 @@ jit_pp_kernel_t<isa>::jit_pp_kernel_t(size_t OC, size_t MB, dim_t dst_mb_stride,
         const primitive_attr_t *attr, data_type_t bias_dt, data_type_t acc_dt,
         const memory_desc_t *dst_md, bool skip_sum)
     : pp_kernel_t(
-            OC, MB, dst_mb_stride, attr, bias_dt, acc_dt, dst_md, skip_sum)
+              OC, MB, dst_mb_stride, attr, bias_dt, acc_dt, dst_md, skip_sum)
     , jit_generator_t(jit_name(), isa) {
     assert(IMPLICATION(this->dst_data_type_ == bf16, mayiuse(avx512_core)));
 

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2018-2025 Intel Corporation
+* Copyright 2018 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -117,9 +117,7 @@ flags_t str2flags(const char *str) {
     while (str && *str) {
         if (*str == 'O')
             flags |= DIFF_WEIGHTS_OVERWRITE;
-        else {
-            BENCHDNN_PRINT(0, "%s\n", "Error: unsupported flags value.");
-        }
+        else { BENCHDNN_PRINT(0, "%s\n", "Error: unsupported flags value."); }
         str++;
     }
     return flags;
@@ -565,6 +563,28 @@ rnn_data_kind_t data_kind2rnn_data_kind(data_kind_t data_kind) {
         default: assert(!"unknown data kind");
     }
     return KIND_TOTAL;
+}
+
+data_kind_t rnn_data_kind2data_kind(rnn_data_kind_t rnn_data_kind) {
+    switch (rnn_data_kind) {
+        case rnn_data_kind_t::DST_LAYER: return data_kind_t::DST;
+        case rnn_data_kind_t::DST_ITER: return data_kind_t::DST_ITER;
+        case rnn_data_kind_t::DST_ITER_C: return data_kind_t::DST_ITER_C;
+        case rnn_data_kind_t::DIFF_SRC_LAYER: return data_kind_t::SRC;
+        case rnn_data_kind_t::DIFF_AUGRU_ATTENTION:
+            return data_kind_t::AUGRU_ATTENTION;
+        case rnn_data_kind_t::DIFF_SRC_ITER: return data_kind_t::SRC_ITER;
+        case rnn_data_kind_t::DIFF_SRC_ITER_C: return data_kind_t::SRC_ITER_C;
+        case rnn_data_kind_t::DIFF_WEIGHTS_LAYER: return data_kind_t::WEI;
+        case rnn_data_kind_t::DIFF_WEIGHTS_ITER: return data_kind_t::WEI_ITER;
+        case rnn_data_kind_t::DIFF_WEIGHTS_PEEPHOLE:
+            return data_kind_t::WEI_PEEPHOLE;
+        case rnn_data_kind_t::DIFF_WEIGHTS_PROJECTION:
+            return data_kind_t::WEI_PROJECTION;
+        case rnn_data_kind_t::DIFF_BIAS: return data_kind_t::BIA;
+        default: assert(!"unknown data kind");
+    }
+    return DAT_TOTAL;
 }
 
 void prb_t::set_qparams(float fp_min, float fp_max) {

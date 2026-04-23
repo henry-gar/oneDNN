@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -17,10 +17,12 @@
 /// @example softmax.cpp
 /// > Annotated version: @ref softmax_example_cpp
 
+/// @page softmax_example_cpp_brief
+/// @brief This C++ API example demonstrates how to create and execute a
+/// [Softmax](@ref dev_guide_softmax) primitive in forward training propagation mode.
+
 /// @page softmax_example_cpp Softmax Primitive Example
-/// This C++ API example demonstrates how to create and execute a
-/// [Softmax](@ref dev_guide_softmax) primitive in forward training propagation
-/// mode.
+/// \copybrief softmax_example_cpp_brief
 ///
 /// Key optimizations included in this example:
 /// - In-place primitive execution;

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -104,7 +104,11 @@ void Generator<hw>::loadMatrixBlock(const Register &dest, const RegisterBlock &b
         case AccessType::Scattered:
         case AccessType::ChannelScattered: {
             auto spec = getDataSpecLSC(atype, astrategy, block, AccessClass::Read);
-            if (block.descAssigned) {
+            if(hw >= HW::Xe3p) spec |= Overfetch;
+            if (astrategy.atomic && hw >= HW::Xe2) {
+                spec = getDataSpecLSC(atype, astrategy, block, AccessClass::Atomic);
+                atomic(AtomicOp::load, mod, dest, spec, astrategy.base, getAddress(addr, block, astrategy));
+            } else if (block.descAssigned) {
                 MessageDescriptor desc;
                 ExtendedMessageDescriptor exdesc;
                 encodeLoadDescriptors(hw, desc, exdesc, block.simdSize, r0, spec, astrategy.base, null);
@@ -121,6 +125,7 @@ void Generator<hw>::loadMatrixBlock(const Register &dest, const RegisterBlock &b
             auto spec = block_2d(getDataSizeLSC(block.ebytes, false), w, h, count) | astrategy.cachingR;
             if (astrategy.accessType == AccessType::Block2DTranspose) spec |= transpose;
             if (astrategy.accessType == AccessType::Block2DVNNI)      spec |= vnni;
+            if(hw >= HW::Xe3p) spec |= Overfetch;
             load(mod, dest, spec, astrategy.base, getAddress(addr, block, astrategy));
             break;
         }
@@ -308,7 +313,7 @@ void Generator<hw>::atomicAddMatrixBlock(Type T, const GRF &src, const RegisterB
                     auto mod = simd | maskMod | ExecutionOffset(eoff);
                     if (block.ebytes * block.count != T.real().size()) stub();
                     if (astrategy.newDP) {
-                        auto op = T.isFP() ? AtomicOp::fadd
+                        auto op = T.isFP() ? (hw >= HW::Xe3p && T == Type::bf16) ? AtomicOp::bfadd : AtomicOp::fadd
                                            : AtomicOp::add;
                         atomic(op, mod, specLSC, astrategy.base, getAddress(addr[hoff], block, astrategy), curSrc);
                     } else switch (T.real()) {

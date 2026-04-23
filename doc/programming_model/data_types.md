@@ -22,7 +22,10 @@ in comparison to fp32.
 | f8\_e4m3  | [OFP8 standard 8-bit floating-point](https://www.opencompute.org/documents/ocp-8-bit-floating-point-specification-ofp8-revision-1-0-2023-06-20-pdf) with 4 exponent and 3 mantissa bits |
 | e8m0      | [MX standard 8-bit scaling type](https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf)                                                                 |
 | f4\_e2m1  | [MX standard 4-bit floating-point](https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf) with 2 exponent and 1 mantissa bits                           |
-| f4\_e3m0  | 4-bit floating-point with 3 exponent bits and no mantissa bit                                                                                                                           |
+| f4\_e3m0  | 4-bit floating-point with 3 exponent bits and no mantissa bit(1)                                                                                                                        |
+
+Footnotes:
+1. f4\_e3m0 is deprecated, and will be removed in a future release.
 
 ## Inference and Training
 
@@ -39,7 +42,7 @@ oneDNN supports training and inference with the following data types:
 | s8        | `+`       |          |
 | u8        | `+`       |          |
 | f4\_e2m1  | `+`       |          |
-| f4\_e3m0  |           |          |
+| f4\_e3m0  | (3)       | (3)      |
 | s4        | `+`(2)    |          |
 | u4        | `+`(2)    |          |
 
@@ -47,8 +50,9 @@ Footnotes:
 1. f64 support is limited to matmul, convolution, reorder, layer normalization, and
    pooling primitives on Intel GPUs.
 2. s4/u4 data types are only supported as a storage data type for weights argument
-   in case of weights decompression. For more details, refer to
-   [Matmul Tutorial: weights decompression](@ref weights_decompression_matmul_cpp).
+   in case of weight-only quantization. For more details, refer to
+   [Matmul Tutorial: weight-only quantization](@ref matmul_with_weight_only_quantization_cpp).
+3. f4\_e3m0 is deprecated, and will be removed in a future release.
 
 @note
     Data type support may also be limited by hardware capabilities. Refer to
@@ -64,7 +68,7 @@ See topics for the corresponding data types details:
  * @ref dev_guide_attributes_quantization
  * @ref dev_guide_training_bf16
  * @ref dev_guide_attributes_fpmath_mode
- * @ref weights_decompression_matmul_cpp
+ * @ref matmul_with_weight_only_quantization_cpp
  * @ref matmul_f8_quantization_cpp
 
 Individual primitives may have additional limitations with respect to data type
@@ -161,32 +165,31 @@ can be found in @ref dev_guide_attributes_rounding_mode.
 ## Hardware Limitations
 
 While all the platforms oneDNN supports have hardware acceleration for
-fp32 arithmetics, that is not the case for other data types. Support
+fp32 arithmetic, that is not the case for other data types. Support
 for low precision data types may not be available for older
 platforms. The next sections explain limitations that exist for low
-precision data types for Intel(R) Architecture processors, Intel
-Processor Graphics and Xe Architecture graphics.
+precision data types for Intel 64/AMD64 based processors and Intel Graphpics.
 
-### Intel(R) Architecture Processors
+### Intel 64/AMD64 Processors
 
 oneDNN performance optimizations for Intel Architecture Processors are
 specialized based on Instruction Set Architecture (ISA). The following
 table indicates data types support for every supported ISA:
 
-| ISA                                                  | f64     | f32     | bf16    | f16     | s8/u8   | f8      | f4_e2m1 | s4/u4   |
-| ---------------------------------------------------- | ------- | ------- | ------- | ------- | ------- | ------- | ------- | ------- |
-| Intel SSE4.1                                         |         | `+`     |         |         |         |         |         |         |
-| Intel AVX                                            |         | `+`     |         |         |         |         |         |         |
-| Intel AVX2                                           |         | `+`     |         |         | `+`(1)  |         |         |         |
-| Intel AVX2 with Intel DL Boost (int8)                |         | `+`     |         |         | `+`     |         |         |         |
-| Intel AVX-512                                        |         | `+`     | `.`(2)  |         | `+`(1)  |         |         |         |
-| Intel AVX-512 with Intel DL Boost (int8)             |         | `+`     | `.`(2)  |         | `+`     |         |         |         |
-| Intel AVX-512 with Intel DL Boost (int8, bf16)       |         | `+`     | `+`     |         | `+`     |         |         |         |
-| Intel AVX2 with Intel DL Boost (int8) and NE_CONVERT |         | `+`     | `.`     | `.`     | `+`     |         |         |         |
-| Intel AVX10.1/512 with Intel AMX (int8, bf16)        |         | `+`     | `+`     | `.`(3)  | `+`     |         |         | `.`     |
-| Intel AVX10.1/512 with Intel AMX (int8, bf16, f16)   |         | `+`     | `+`     | `+`     | `+`     | `.`     |         | `.`     |
-| Intel AVX10.2                                        |         | `+`     | `+`     | `+`     | `+`     | `.`     |         | `.`     |
-| Intel AVX10.2 with Intel AMX (int8, bf16, fp16, fp8) |         | `+`     | `+`     | `+`     | `+`     | `+`     |         | `.`     |
+| ISA                                                  | f64     | f32     | bf16    | f16     | s8/u8   | f8_e4m3 | f8_e5m2 | f4_e2m1 | s4/u4   |
+| ---------------------------------------------------- | ------- | ------- | ------- | ------- | ------- | ------- | ------- | ------- | ------- | 
+| Intel SSE4.1                                         |         | `+`     |         |         |         |         |         |         |         |
+| Intel AVX                                            |         | `+`     |         |         |         |         |         |         |         |
+| Intel AVX2                                           |         | `+`     |         |         | `+`(1)  |         |         |         |         |
+| Intel AVX2 with Intel DL Boost (int8)                |         | `+`     |         |         | `+`     |         |         |         |         |
+| Intel AVX-512                                        |         | `+`     | `.`(2)  |         | `+`(1)  |         |         |         |         |
+| Intel AVX-512 with Intel DL Boost (int8)             |         | `+`     | `.`(2)  |         | `+`     |         |         |         |         |
+| Intel AVX-512 with Intel DL Boost (int8, bf16)       |         | `+`     | `+`     |         | `+`     |         |         |         |         |
+| Intel AVX2 with Intel DL Boost (int8) and NE_CONVERT |         | `+`     | `.`     | `.`     | `+`     |         |         |         |         |
+| Intel AVX10.1 with Intel AMX (int8, bf16)            |         | `+`     | `+`     | `.`(3)  | `+`     |         |         |         | `.`     |
+| Intel AVX10.1 with Intel AMX (int8, bf16, f16)       |         | `+`     | `+`     | `+`     | `+`     | `.`     | `.`     |         | `.`     |
+| Intel AVX10.2                                        |         | `+`     | `+`     | `+`     | `+`     | `.`     |         |         | `.`     |
+| Intel AVX10.2 with Intel AMX (int8, bf16, fp16, fp8) |         | `+`     | `+`     | `+`     | `+`     | `+`     | `+`     |         | `.`     |
 
 Legend:
 * `+` indicates oneDNN uses hardware-native compute support for this data type.
@@ -205,28 +208,33 @@ Footnotes:
    This can lead to scenarios where a f16 primitive may perform slower than
    similar f32 primitive.
 
-### Intel(R) Processor Graphics and Xe Architecture graphics
-oneDNN performance optimizations for Intel Processor graphics and
-Xe Architecture graphics are specialized based on device microarchitecture (uArch).
-The following uArchs and associated devices have specialized optimizations in the
-library:
+### Intel Graphics
+
+oneDNN performance optimizations for Intel Graphics are specialized based on
+device microarchitecture (uArch). The following uArchs and associated devices
+have specialized optimizations in the library:
  * Xe-LP
-   * Intel UHD Graphics for 11th-14th Gen Intel(R) Processors
-   * Intel Iris Xe Graphics
+   * Intel Graphics for 11th-14th Gen Intel(R) Processors
    * Intel Iris Xe MAX Graphics (formerly DG1)
  * Xe-LPG
-   * Intel Graphics for Intel Core Ultra processors (formerly Meteor Lake)
+   * Intel Graphics for Intel Core Ultra Series 1 processors (formerly Meteor Lake)
  * Xe-HPG
    * Intel Arc A-Series Graphics (formerly Achemist)
    * Intel Data Center GPU Flex Series (formerly Arctic Sound)
  * Xe-HPC
    * Intel Data Center GPU Max Series (formerly Ponte Vecchio)
  * Xe2-LPG
-   * Intel Graphics for Intel Core Ultra processors (Series 2) (formerly Lunar Lake)
+   * Intel Graphics for Intel Core Ultra Series 2 processors (formerly Lunar Lake)
  * Xe2-HPG
    * Intel Arc B-Series Graphics (formerly Battlemage)
  * Xe3-LPG
-   * Intel Arc Graphics for future Intel Core Ultra processors (code name Panther Lake)
+   * Intel Graphics for Intel Core Ultra Series 3 processors (formerly Panther Lake)
+   * Intel Graphics for future Intel Core Series 3 processors (code name Wildcat Lake)
+   * Intel Graphics for future Intel Core Ultra processors (code name Nova Lake S)
+ * Xe3p-LPG
+   * Intel Graphics for future Intel Core Ultra processors (code name Nova Lake P)
+ * Xe3p-XPC
+   * future discrete GPUs based on Xe3p-XPC architecture (code name Crescent Island)
 
 The following table indicates the data types support for each uArch supported by oneDNN.
 
@@ -239,6 +247,8 @@ The following table indicates the data types support for each uArch supported by
 | Xe2-LPG  | `+`     | `+`     | `+`     | `+`     | `+`     | `.`     | `.`     | `.`     |
 | Xe2-HPG  | `+`     | `+`     | `+`     | `+`     | `+`     | `.`     | `.`     | `.`     |
 | Xe3-LPG  | `+`     | `+`     | `+`     | `+`     | `+`     | `.`     | `.`     | `.`     |
+| Xe3p-LPG | `+`     | `+`     | `+`     | `+`     | `+`     | `+`     | `.`     | `.`     |
+| Xe3p-XPC | `+`     | `+`     | `+`     | `+`     | `+`     | `+`     | `+`     | `.`     |
 
 Legend:
 * `+` indicates oneDNN uses hardware-native compute support for this data type.

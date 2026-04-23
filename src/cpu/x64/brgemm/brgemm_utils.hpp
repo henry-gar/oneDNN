@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -33,8 +33,6 @@ status_t init_kernel_datatype(
 
 namespace brgemm_utils {
 
-bool can_dispatch_uker(const brgemm_desc_t *brg);
-
 void maybe_try_bf32(brgemm_desc_t *brg);
 
 void set_isa_impl(brgemm_desc_t *brg);
@@ -66,6 +64,8 @@ status_t init_brdgmm_conf(brgemm_desc_t *brg, cpu_isa_t isa,
         dim_t LDA, dim_t LDC, dim_t M, dim_t N,
         const brgemm_strides_t *strides = nullptr);
 
+/** assigns dimension to int with range check */
+status_t safe_dim_to_int(int &dst, dim_t src);
 } // namespace brgemm_utils
 
 } // namespace x64

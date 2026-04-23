@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2023 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -34,7 +34,7 @@ private:
 
 public:
     void TestConv2d() {
-        auto p = ::testing::TestWithParam<conv_params_t>::GetParam();
+        const auto &p = ::testing::TestWithParam<conv_params_t>::GetParam();
 
         static auto isa = dnnl_get_effective_cpu_isa();
         SKIP_IF(p.engine == dnnl_cpu && p.data_type == dnnl_bf16

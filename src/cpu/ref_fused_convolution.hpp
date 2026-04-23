@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 * Copyright 2022 Arm Ltd. and affiliates
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
@@ -198,7 +198,7 @@ struct ref_fused_convolution_fwd_t : public primitive_t {
                 arg_cache.append_inout_arg(
                         DNNL_ARG_FROM, sp_begin, from_md, true);
                 arg_cache.append_inout_arg(DNNL_ARG_TO, sp_end, to_md, false);
-                args_.push_back(arg_cache);
+                args_.push_back(std::move(arg_cache));
 
                 // Increment scratchpad offsets
                 sp_begin = sp_end;
@@ -248,24 +248,27 @@ struct ref_fused_convolution_fwd_t : public primitive_t {
                     = root_pd->scratchpad_size(attr()->scratchpad_mode_);
 
             // Create arg cache for the root pd
-            arg_cache_t arg_cache;
-            arg_cache.append_ctx_arg(DNNL_ARG_SRC);
-            arg_cache.append_ctx_arg(DNNL_ARG_WEIGHTS);
-            for (auto arg : {DNNL_ARG_SRC, DNNL_ARG_WEIGHTS, DNNL_ARG_DST})
-                if (!attr_1x1.scales_.has_default_values(arg))
-                    arg_cache.append_ctx_arg(DNNL_ARG_ATTR_SCALES | arg);
-            if (desc()->bias_desc.data_type != data_type::undef)
-                arg_cache.append_ctx_arg(DNNL_ARG_BIAS);
-            arg_cache.append_inout_arg(DNNL_ARG_DST, inout_sp_offset_end,
-                    root_pd->dst_md(), false);
-            // Initialize binary post_op.
-            CHECK(attr_1x1.set_default_formats(root_pd->dst_md()));
-            for (int idx = 0; idx < attr_1x1.post_ops_.len(); ++idx) {
-                if (attr_1x1.post_ops_.contain(primitive_kind::binary, idx))
-                    arg_cache.append_ctx_arg(DNNL_ARG_ATTR_MULTIPLE_POST_OP(idx)
-                            | DNNL_ARG_SRC_1);
+            {
+                arg_cache_t arg_cache;
+                arg_cache.append_ctx_arg(DNNL_ARG_SRC);
+                arg_cache.append_ctx_arg(DNNL_ARG_WEIGHTS);
+                for (auto arg : {DNNL_ARG_SRC, DNNL_ARG_WEIGHTS, DNNL_ARG_DST})
+                    if (!attr_1x1.scales_.has_default_values(arg))
+                        arg_cache.append_ctx_arg(DNNL_ARG_ATTR_SCALES | arg);
+                if (desc()->bias_desc.data_type != data_type::undef)
+                    arg_cache.append_ctx_arg(DNNL_ARG_BIAS);
+                arg_cache.append_inout_arg(DNNL_ARG_DST, inout_sp_offset_end,
+                        root_pd->dst_md(), false);
+                // Initialize binary post_op.
+                CHECK(attr_1x1.set_default_formats(root_pd->dst_md()));
+                for (int idx = 0; idx < attr_1x1.post_ops_.len(); ++idx) {
+                    if (attr_1x1.post_ops_.contain(primitive_kind::binary, idx))
+                        arg_cache.append_ctx_arg(
+                                DNNL_ARG_ATTR_MULTIPLE_POST_OP(idx)
+                                | DNNL_ARG_SRC_1);
+                }
+                args_.push_back(std::move(arg_cache));
             }
-            args_.push_back(arg_cache);
 
             // Increment scratchpad offsets
             inout_sp_offset_begin = inout_sp_offset_end;
@@ -342,7 +345,7 @@ struct ref_fused_convolution_fwd_t : public primitive_t {
                                         | DNNL_ARG_SRC_1));
                 }
 
-                args_.push_back(arg_cache);
+                args_.push_back(std::move(arg_cache));
 
                 while (++po_op_iter < end) {
                     if (utils::one_of(po.entry_[po_op_iter].kind,
@@ -402,7 +405,7 @@ struct ref_fused_convolution_fwd_t : public primitive_t {
 
     status_t execute(const exec_ctx_t &ctx) const override {
         engine_t *engine = ctx.stream()->engine();
-        const auto scratchpad = ctx.get_scratchpad_grantor();
+        const auto &scratchpad = ctx.get_scratchpad_grantor();
 
         const auto inout_buffer = scratchpad.get_memory_storage(
                 memory_tracking::names::key_fusion_inout_buffer);
@@ -424,16 +427,18 @@ struct ref_fused_convolution_fwd_t : public primitive_t {
                     inout_memory.emplace_back(new memory_t(engine, &arg_info.md,
                             inout_buffer->get_sub_storage(arg_info.offset,
                                     memory_desc_wrapper(arg_info.md).size())));
-                    exec_args[arg_info.op_arg].mem = inout_memory.back().get();
-                    exec_args[arg_info.op_arg].is_const = arg_info.is_const;
+                    exec_args[arg_info.op_arg]
+                            = {inout_memory.back().get(), arg_info.is_const};
                 }
             }
 
             exec_ctx_t op_ctx(ctx, std::move(exec_args));
 
-            nested_scratchpad_t ns(ctx,
-                    memory_tracking::names::key_fusion_forward_scratchpad, op);
-            op_ctx.set_scratchpad_grantor(ns.grantor());
+            auto *nested_grantor = create_nested_grantor(
+                    ctx.get_scratchpad_grantor(),
+                    memory_tracking::names::key_fusion_forward_scratchpad,
+                    op->pd()->scratchpad_registry());
+            op_ctx.set_scratchpad_grantor(nested_grantor);
             CHECK(op->execute(op_ctx));
         }
 

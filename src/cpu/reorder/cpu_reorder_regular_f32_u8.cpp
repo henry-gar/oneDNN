@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 * Copyright 2022 FUJITSU LIMITED
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
@@ -37,6 +37,8 @@ const impl_list_map_t &regular_f32_u8_impl_list_map() {
             DNNL_AARCH64_ONLY(CPU_REORDER_INSTANCE(aarch64::jit_uni_reorder_t))
 
             DNNL_PPC64_ONLY(CPU_REORDER_INSTANCE(ppc64::ppc64_matrixA_reorder_t))
+
+            DNNL_RV64GCV_ONLY(CPU_REORDER_INSTANCE(rv64::rvv_matrixA_reorder_t))
 
             REG_FAST_DIRECT_COPY(f32, u8)
 

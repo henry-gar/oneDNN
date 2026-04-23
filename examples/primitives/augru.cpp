@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -17,11 +17,12 @@
 /// @example augru.cpp
 /// > Annotated version: @ref augru_example_cpp
 
+/// @page augru_example_cpp_brief
+/// @brief This C++ API example demonstrates how to create and execute an
+/// [AUGRU RNN](@ref dev_guide_rnn) primitive in forward training propagation mode.
+
 /// @page augru_example_cpp AUGRU RNN Primitive Example
-///
-/// This C++ API example demonstrates how to create and execute an
-/// [AUGRU RNN](@ref dev_guide_rnn) primitive in forward training propagation
-/// mode.
+/// \copybrief augru_example_cpp_brief
 ///
 /// Key optimizations included in this example:
 /// - Creation of optimized memory format from the primitive descriptor.

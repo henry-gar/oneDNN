@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -34,7 +34,7 @@ namespace jit {
 struct zp_plan_impl_t;
 
 struct zp_plan_t : public base_plan_t {
-    zp_plan_t(const hw_t &hw);
+    zp_plan_t(const dsl::hw_t &hw);
     ~zp_plan_t();
     void init(const config_t &cfg, bool src_2d_loads,
             const gemm_schedule_t &gemm_schedule, const view_t &zp_src_view,
@@ -71,7 +71,7 @@ struct zp_plan_t : public base_plan_t {
     int estimate_regs() const;
     std::string str() const;
 
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
     std::unique_ptr<zp_plan_impl_t> impl;
 };

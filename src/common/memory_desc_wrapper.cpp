@@ -1,7 +1,7 @@
 /*******************************************************************************
-* Copyright 2016-2025 Intel Corporation
+* Copyright 2016 Intel Corporation
 * Copyright 2024-2025 FUJITSU LIMITED
-* Copyright 2025 Arm Ltd. and affiliates
+* Copyright 2025-2026 Arm Ltd. and affiliates
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -59,9 +59,13 @@ status_t fill_blocked(memory_desc_t &md, std::initializer_list<int> perm,
 
     utils::array_set(md.padded_offsets, 0, md.ndims);
     for (int d = 0; d < md.ndims; ++d)
-        md.padded_dims[d] = md.dims[d] == DNNL_RUNTIME_DIM_VAL
-                ? DNNL_RUNTIME_DIM_VAL
+        md.padded_dims[d] = is_runtime_value(md.dims[d])
+                ? runtime_value_for(md.padded_dims[d])
                 : utils::rnd_up(md.dims[d], blocks[d]);
+
+    // tracks max stride for integral overflow checks
+    dim_t max_stride = 1;
+    int max_stride_d = 0;
 
     // setting the strides
     {
@@ -72,12 +76,29 @@ status_t fill_blocked(memory_desc_t &md, std::initializer_list<int> perm,
             blk.strides[d] = stride;
 
             const dim_t pdim = md.padded_dims[d];
-            if (utils::one_of(DNNL_RUNTIME_DIM_VAL, stride, pdim))
-                stride = DNNL_RUNTIME_DIM_VAL;
+            if (any_runtime_value(stride, pdim))
+                stride = runtime_value_for(stride);
             else if (pdim != 0)
                 stride *= pdim / blocks[d];
 
+            if (max_stride <= stride) {
+                max_stride = stride;
+                max_stride_d = d;
+            }
+
         } while (iter_d != perm.begin());
+    }
+
+    const size_t dt_size = types::data_type_size(md.data_type);
+
+    // guard against integral overflow due to strides exceeding numeric limits
+    if (!is_runtime_value(md.padded_dims[max_stride_d])) {
+        size_t dim_val = static_cast<size_t>(
+                md.padded_dims[max_stride_d] / blocks[max_stride_d]);
+        dim_val = dim_val == (size_t)max_stride ? 1 : dim_val;
+        if (dim_val > SIZE_MAX / max_stride) return status::invalid_arguments;
+        if (dt_size && ((dim_val * max_stride) > SIZE_MAX / dt_size))
+            return status::invalid_arguments;
     }
 
     return status::success;
@@ -190,6 +211,7 @@ status_t memory_desc_wrapper::compute_blocking(
         C(defcab, {3, 4, 5, 2, 0, 1}, {}, {});
 
         C(Abc4a, {0, 1, 2}, {4}, {0});
+        C(Abc8a, {0, 1, 2}, {8}, {0});
         C(aBc4b, {0, 1, 2}, {4}, {1});
 
         C(Ab4a, {0, 1}, {4}, {0});
@@ -206,6 +228,9 @@ status_t memory_desc_wrapper::compute_blocking(
         C(BA24b8a, {1, 0}, {24, 8}, {1, 0});
         C(aCB24c8b, {0, 2, 1}, {24, 8}, {2, 1});
         C(abDC24d8c, {0, 1, 3, 2}, {24, 8}, {3, 2});
+        C(BA12b8a, {1, 0}, {12, 8}, {1, 0});
+        C(aCB12c8b, {0, 2, 1}, {12, 8}, {2, 1});
+        C(abDC12d8c, {0, 1, 3, 2}, {12, 8}, {3, 2});
         C(BA16a16b2a, {1, 0}, {16, 16, 2}, {0, 1, 0});
         C(BA16a32b2a, {1, 0}, {16, 32, 2}, {0, 1, 0});
         C(BA16a48b2a, {1, 0}, {16, 48, 2}, {0, 1, 0});
@@ -286,6 +311,7 @@ status_t memory_desc_wrapper::compute_blocking(
         C(ABcde4a4b, {0, 1, 2, 3, 4}, {4, 4}, {0, 1});
         C(aBCde4c4b, {0, 1, 2, 3, 4}, {4, 4}, {2, 1});
         C(aBcdef4b, {0, 1, 2, 3, 4, 5}, {4}, {1});
+        C(aBcdef8b, {0, 1, 2, 3, 4, 5}, {8}, {1});
         C(aBCdef4c4b, {0, 1, 2, 3, 4, 5}, {4, 4}, {2, 1});
         C(aBCdef4b4c, {0, 1, 2, 3, 4, 5}, {4, 4}, {1, 2});
         C(aBdc4b, {0, 1, 3, 2}, {4}, {1});
@@ -332,6 +358,7 @@ status_t memory_desc_wrapper::compute_blocking(
         C(aCB4c8b16c2b, {0, 2, 1}, {4, 8, 16, 2}, {2, 1, 2, 1});
         C(aCB4c8b16c4b, {0, 2, 1}, {4, 8, 16, 4}, {2, 1, 2, 1});
         C(Abc16a, {0, 1, 2}, {16}, {0});
+        C(Abc32a, {0, 1, 2}, {32}, {0});
         C(ABc16a16b, {0, 1, 2}, {16, 16}, {0, 1});
         C(ABc4a2b, {0, 1, 2}, {4, 2}, {0, 1});
         C(ABc4a4b, {0, 1, 2}, {4, 4}, {0, 1});
@@ -483,6 +510,7 @@ status_t memory_desc_wrapper::compute_blocking(
         C(aBCde8c16b2c, {0, 1, 2, 3, 4}, {8, 16, 2}, {2, 1, 2});
         C(aBCde8c8b, {0, 1, 2, 3, 4}, {8, 8}, {2, 1});
         C(aBcdef16b, {0, 1, 2, 3, 4, 5}, {16}, {1});
+        C(aBcdef32b, {0, 1, 2, 3, 4, 5}, {32}, {1});
         C(aBCdef16b16c, {0, 1, 2, 3, 4, 5}, {16, 16}, {1, 2});
         C(aBCdef16b16c2b, {0, 1, 2, 3, 4, 5}, {16, 16, 2}, {1, 2, 1});
         C(aBCdef16c16b, {0, 1, 2, 3, 4, 5}, {16, 16}, {2, 1});
@@ -521,8 +549,10 @@ status_t memory_desc_wrapper::compute_blocking(
         C(Acb8a, {0, 2, 1}, {8}, {0});
         C(AcB8a2b, {0, 2, 1}, {8, 2}, {0, 1});
         C(AcB8a4b, {0, 2, 1}, {8, 4}, {0, 1});
+        C(aCBd4b4c, {0, 2, 1, 3}, {4, 4}, {1, 2});
         C(aCBd8b8c, {0, 2, 1, 3}, {8, 8}, {1, 2});
         C(aCBd16b16c, {0, 2, 1, 3}, {16, 16}, {1, 2});
+        C(aCBde4b4c, {0, 2, 1, 3, 4}, {4, 4}, {1, 2});
         C(aCBde8b8c, {0, 2, 1, 3, 4}, {8, 8}, {1, 2});
         C(aCBde16b16c, {0, 2, 1, 3, 4}, {16, 16}, {1, 2});
         C(Acdb16a, {0, 2, 3, 1}, {16}, {0});
@@ -539,8 +569,10 @@ status_t memory_desc_wrapper::compute_blocking(
         C(AcdeB8a4b, {0, 2, 3, 4, 1}, {8, 4}, {0, 1});
         C(Acedb16a, {0, 2, 4, 3, 1}, {16}, {0});
         C(Adcb16a, {0, 3, 2, 1}, {16}, {0});
+        C(BAc4a4b, {1, 0, 2}, {4, 4}, {0, 1});
         C(BAc8a8b, {1, 0, 2}, {8, 8}, {0, 1});
         C(BAc16a16b, {1, 0, 2}, {16, 16}, {0, 1});
+        C(BAcd4a4b, {1, 0, 2, 3}, {4, 4}, {0, 1});
         C(BAcd8a8b, {1, 0, 2, 3}, {8, 8}, {0, 1});
         C(BAcd16a16b, {1, 0, 2, 3}, {16, 16}, {0, 1});
         C(ABc32a16b, {0, 1, 2}, {32, 16}, {0, 1});
@@ -594,6 +626,7 @@ status_t memory_desc_wrapper::compute_blocking(
         C(aBCde2b8c8b2c, {0, 1, 2, 3, 4}, {2, 8, 8, 2}, {1, 2, 1, 2});
         C(aBdec32b, {0, 1, 3, 4, 2}, {32}, {1});
         C(aCBdef16c16b, {0, 2, 1, 3, 4, 5}, {16, 16}, {2, 1});
+        C(aCBdef4b4c, {0, 2, 1, 3, 4, 5}, {4, 4}, {1, 2});
         C(aCBdef8b8c, {0, 2, 1, 3, 4, 5}, {8, 8}, {1, 2});
         C(aCBdef16b16c, {0, 2, 1, 3, 4, 5}, {16, 16}, {1, 2});
         C(Abcdef16a, {0, 1, 2, 3, 4, 5}, {16}, {0});
@@ -602,6 +635,7 @@ status_t memory_desc_wrapper::compute_blocking(
         C(aCBde16c16b, {0, 2, 1, 3, 4}, {16, 16}, {2, 1});
         C(Acdb32a, {0, 2, 3, 1}, {32}, {0});
         C(BAcd16b16a, {1, 0, 2, 3}, {16, 16}, {1, 0});
+        C(BAcde4a4b, {1, 0, 2, 3, 4}, {4, 4}, {0, 1});
         C(BAcde8a8b, {1, 0, 2, 3, 4}, {8, 8}, {0, 1});
         C(BAcde16a16b, {1, 0, 2, 3, 4}, {16, 16}, {0, 1});
         C(BAc16b16a, {1, 0, 2}, {16, 16}, {1, 0});
@@ -1001,10 +1035,13 @@ status_t memory_desc_wrapper::compute_blocking(
         C(aCB8b8c, {0, 2, 1}, {8, 8}, {1, 2});
         C(BA16b8a, {1, 0}, {16, 8}, {1, 0});
         C(BA8b8a, {1, 0}, {8, 8}, {1, 0});
+        C(BA4b8a, {1, 0}, {4, 8}, {1, 0});
         C(aCB16c8b, {0, 2, 1}, {16, 8}, {2, 1});
         C(aCB8c8b, {0, 2, 1}, {8, 8}, {2, 1});
+        C(aCB4c8b, {0, 2, 1}, {4, 8}, {2, 1});
         C(abDC16d8c, {0, 1, 3, 2}, {16, 8}, {3, 2});
         C(abDC8d8c, {0, 1, 3, 2}, {8, 8}, {3, 2});
+        C(abDC4d8c, {0, 1, 3, 2}, {4, 8}, {3, 2});
         C(AB2a4b, {0, 1}, {2, 4}, {0, 1});
         default: break;
     }

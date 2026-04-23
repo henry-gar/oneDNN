@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@
 
 #include "ngen_config_internal.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 
@@ -132,7 +133,7 @@ template <typename T> static inline constexpr14 T roundup_pow2(T x)
     if (x <= 1)
         return 1;
     else
-        return 1 << (1 + bsr(x - 1));
+        return T(1) << (1 + bsr(x - 1));
 }
 
 template <typename T> static inline constexpr14 T rounddown_pow2(T x)

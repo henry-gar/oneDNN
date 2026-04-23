@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -141,9 +141,9 @@ void jit_uni_x8s8s32x_fwd_kernel_vmm_t<isa, Vmm>::apply_sum(
                 && "p_sum_scale or p_sum_zp = nullptr");
         const float sum_scale = *p_sum_scale;
         const int32_t sum_zp = *p_sum_zp;
-        const auto sum_injector_lam = [this, oc_block, sum_scale, sum_zp](
-                                              const bool mask_flag, const int k,
-                                              const int j) {
+        const auto sum_injector_lam
+                = [this, oc_block, sum_scale, sum_zp](
+                          const bool mask_flag, const int k, const int j) {
             const int aux_output_offset = jcp.typesize_out
                     * (k * oc_block + j * jcp.oc_without_padding * jcp.ngroups);
             cvt2ps(jcp.sum_dt, vmm_prev_dst, reg_out, aux_output_offset,
@@ -163,8 +163,8 @@ void jit_uni_x8s8s32x_fwd_kernel_vmm_t<isa, Vmm>::apply_sum(
         };
         // Capture by value has to be applied since this lambda is called from
         // a different context when stack values are unavailable.
-        const auto sum_injector = [nb_oc_block, ur_w, last_oc_block_flag,
-                                          sum_injector_lam]() {
+        const auto sum_injector
+                = [nb_oc_block, ur_w, last_oc_block_flag, sum_injector_lam]() {
             iterate(nb_oc_block, ur_w, last_oc_block_flag, sum_injector_lam);
         };
         if (*p_sum_scale != 1.f)
@@ -192,28 +192,25 @@ void jit_uni_x8s8s32x_fwd_kernel_vmm_t<isa, Vmm>::apply_postops(
             iterate(nb_oc_block, ur_w, last_oc_block_flag,
                     oc_blk_is_smaller_than_vmm,
                     [&](const bool mask_flag, const int k, const int j) {
-                        const size_t aux_output_offset = jcp.typesize_out
-                                * (k * oc_block
-                                        + j * jcp.oc_without_padding
-                                                * jcp.ngroups);
-                        const auto vmm_idx = vmm_out_idx(j, k);
-                        vmm_idxs.emplace(vmm_idx);
+                const size_t aux_output_offset = jcp.typesize_out
+                        * (k * oc_block
+                                + j * jcp.oc_without_padding * jcp.ngroups);
+                const auto vmm_idx = vmm_out_idx(j, k);
+                vmm_idxs.emplace(vmm_idx);
 
-                        rhs_arg_params.vmm_idx_to_out_reg.emplace(
-                                vmm_idx, reg_out);
-                        rhs_arg_params.vmm_idx_to_out_elem_off_val.emplace(
-                                vmm_idx, aux_output_offset);
+                rhs_arg_params.vmm_idx_to_out_reg.emplace(vmm_idx, reg_out);
+                rhs_arg_params.vmm_idx_to_out_elem_off_val.emplace(
+                        vmm_idx, aux_output_offset);
 
-                        if (mask_flag)
-                            rhs_arg_params.vmm_tail_idx_.emplace(vmm_idx);
-                    });
+                if (mask_flag) rhs_arg_params.vmm_tail_idx_.emplace(vmm_idx);
+            });
 
             postops_injector_->compute_vector_range(vmm_idxs, rhs_arg_params);
         } else {
             iterate(nb_oc_block, ur_w,
                     [&](const bool, const int k, const int j) {
-                        vmm_idxs.emplace(vmm_out_idx(j, k));
-                    });
+                vmm_idxs.emplace(vmm_out_idx(j, k));
+            });
             postops_injector_->compute_vector_range(vmm_idxs);
         }
         if (jcp.with_sum && *p_sum_zp != 0) pop(reg_ptr_sum_zp);
@@ -597,11 +594,11 @@ void jit_uni_x8s8s32x_fwd_kernel_vmm_t<isa, Vmm>::compute_ker(int ur_w,
     };
     auto kernel_offset
             = [this, ch_block_all, oc_block](int ii, int ic, int ki) {
-                  return jcp.typesize_in
-                          * ((ii * jcp.nb_ic * jcp.kd * jcp.kh * jcp.kw + ki)
-                                          * ch_block_all
-                                  + ic_sub_step * ic * oc_block);
-              };
+        return jcp.typesize_in
+                * ((ii * jcp.nb_ic * jcp.kd * jcp.kh * jcp.kw + ki)
+                                * ch_block_all
+                        + ic_sub_step * ic * oc_block);
+    };
     auto compute = [this](Vmm vreg_acc, Vmm vreg_wei, Vmm vreg_src) {
         if (jcp.has_vnni) {
             vpdpbusd(vreg_acc, vreg_src, vreg_wei, VexEncoding);
@@ -946,8 +943,8 @@ void jit_uni_x8s8s32x_fwd_kernel_vmm_t<isa, Vmm>::generate() {
     int in_ic_shift = jcp.is_fused_conv ? jcp.dw_conv_buffer_oc
                                         : jcp.ic_without_padding * jcp.ngroups;
     const int urw_inp_stride = jcp.ur_w * jcp.stride_w;
-    const int n_urw_l_pad
-            = nstl::min(div_up(jcp.l_pad, urw_inp_stride), jcp.ow / jcp.ur_w);
+    const int n_urw_l_pad = nstl::min(
+            div_up(nstl::max(0, jcp.l_pad), urw_inp_stride), jcp.ow / jcp.ur_w);
     const int inp_shift_pad = nstl::max(0,
             jcp.typesize_in * (n_urw_l_pad * urw_inp_stride - jcp.l_pad)
                     * in_ic_shift);
@@ -1010,8 +1007,10 @@ void jit_uni_x8s8s32x_fwd_kernel_vmm_t<isa, Vmm>::generate() {
                       - extended_filter_size)
                     / jcp.stride_w;
     const int n_urw_per_ow_block = jcp.ow_block / jcp.ur_w;
-    const int max_safe_iw = nstl::max(
-            0, jcp.iw - div_up(ic_sub_step, jcp.ic_without_padding));
+    const int max_safe_iw = nstl::max(0,
+            jcp.iw
+                    - div_up(static_cast<int>(ic_sub_step),
+                            jcp.ic_without_padding));
     const int max_safe_ow = jcp.ic_without_padding % ic_sub_step == 0
             ? jcp.ow
             : (max_safe_iw + jcp.l_pad - extended_filter_size) / jcp.stride_w;
@@ -1376,7 +1375,7 @@ status_t jit_uni_x8s8s32x_fwd_kernel_t<isa>::init_conf(jit_conv_conf_t &jcp,
             = !attr.scales_.get(DNNL_ARG_WEIGHTS).has_default_values();
     jcp.with_dst_scales = !attr.scales_.get(DNNL_ARG_DST).has_default_values();
 
-    const auto zp = attr.zero_points_;
+    const auto &zp = attr.zero_points_;
     jcp.dst_zero_point = !zp.has_default_values(DNNL_ARG_DST);
     jcp.src_zero_point = !zp.has_default_values(DNNL_ARG_SRC);
     jcp.zp_src_is_common

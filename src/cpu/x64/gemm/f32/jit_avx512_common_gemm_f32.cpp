@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2017-2025 Intel Corporation
+* Copyright 2017 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -126,6 +126,7 @@ struct xbyak_gemm_t : public jit_generator_t {
         auto ALPHA = qword[rsp + 48];
         auto BETA = qword[rsp + 64];
         auto ORIG_A = qword[rsp + 80];
+        auto WS_BUF = qword[rsp + 96];
         auto ORIG_SP = qword[rsp + 120];
 
         auto ZSTRIDE = zmm4;
@@ -147,7 +148,8 @@ struct xbyak_gemm_t : public jit_generator_t {
             Label pack2, pack3, pack4, pack10;
 
             mov(BO1, A);
-            lea(AO1, ptr[rsp + 128 + OFFSET * SIZE]);
+            mov(AO1, WS_BUF);
+            lea(AO1, ptr[AO1 + OFFSET * SIZE]);
             mov(LL, K);
             sar(LL, 2);
             jle(pack3, T_NEAR);
@@ -551,9 +553,9 @@ struct xbyak_gemm_t : public jit_generator_t {
         };
 
         // Innerkernel; called by kernel
-        auto innerkernel = [&](int unroll_m, int unroll_n, bool isDirect,
-                                   bool isCopy, bool doCPrefetch,
-                                   bool isUnmasked = true) {
+        auto innerkernel
+                = [&](int unroll_m, int unroll_n, bool isDirect, bool isCopy,
+                          bool doCPrefetch, bool isUnmasked = true) {
             for (int i = 0; i < 8; i++) {
                 if (!isDirect) {
                     prefetcht0(ptr[AO1
@@ -833,13 +835,15 @@ struct xbyak_gemm_t : public jit_generator_t {
         auto kernel = [&](int unroll_m, int unroll_n, bool isDirect,
                               bool isCopy, bool isUnmasked = true) {
             if (!isDirect) {
-                lea(AO1, ptr[rsp + 128 + OFFSET * SIZE]);
+                mov(AO1, WS_BUF);
+                lea(AO1, ptr[AO1 + OFFSET * SIZE]);
             } else {
                 mov(AO1, A);
             }
 
             if (isCopy) {
-                lea(LDA4, ptr[rsp + 128 + OFFSET * SIZE]);
+                mov(LDA4, WS_BUF);
+                lea(LDA4, ptr[LDA4 + OFFSET * SIZE]);
             } else {
                 auto step = 2;
                 lea(LDA4, ptr[LDA * step + (16 - 1 - OFFSET) * SIZE]);
@@ -1454,18 +1458,22 @@ struct xbyak_gemm_t : public jit_generator_t {
         cmp(K, STACK_K_CAPACITY);
         jg(buffer_in_ws, T_NEAR);
 
-        // Create buffer and align to 4kB page
+        // Using 4kB aligned buffer on stack as workspace
         lea(rax, ptr[K * SIZE]);
         imul(rax, rax, 0x30);
         add(rax, 256);
         sub(rsp, rax);
         and_(rsp, -PAGE_4K);
+        lea(rax, ptr[rsp + 128]);
         jmp(buffer_allocated, T_NEAR);
 
         L(buffer_in_ws);
-        mov(rsp, ARG_WS);
+        // Using buffer in heap as workspace
+        mov(rax, ARG_WS);
+        sub(rsp, 256);
 
         L(buffer_allocated);
+        mov(WS_BUF, rax);
 
         mov(ORIG_SP, rbp);
         mov(M, ARG_M);

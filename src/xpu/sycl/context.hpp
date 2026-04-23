@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -85,7 +85,7 @@ struct context_t final : public xpu::context_t {
     void set_deps(std::vector<::sycl::event> &&event) {
         events_ = event_t(std::move(event));
     }
-    void set_deps(event_t &&events) { events_ = std::move(events); };
+    void set_deps(event_t &&events) { events_ = std::move(events); }
 
     void append_deps(const xpu::event_t &event) override {
         events_.append(event);

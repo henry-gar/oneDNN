@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2023 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -137,7 +137,7 @@ TEST_F(ocl_stream_test_c_t, BasicInteropC) {
     TEST_OCL_CHECK(clReleaseCommandQueue(interop_ocl_queue));
 }
 
-TEST_F(ocl_stream_test_cpp_t, BasicInteropC) {
+TEST_F(ocl_stream_test_cpp_t, BasicInteropCpp) {
     SKIP_IF(!find_ocl_device(CL_DEVICE_TYPE_GPU),
             "OpenCL GPU devices not found.");
 
@@ -224,9 +224,9 @@ TEST_F(ocl_stream_test_cpp_t, InteropIncompatibleQueueCpp) {
 #endif
     TEST_OCL_CHECK(err);
 
-    catch_expected_failures(
-            [&] { ocl_interop::make_stream(eng, cpu_ocl_queue); }, true,
-            dnnl_invalid_arguments);
+    catch_expected_failures([&] {
+        ocl_interop::make_stream(eng, cpu_ocl_queue);
+    }, true, dnnl_invalid_arguments);
 
     TEST_OCL_CHECK(clReleaseCommandQueue(cpu_ocl_queue));
 }

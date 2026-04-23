@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2024-2025 Intel Corporation
+* Copyright 2024 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -24,7 +24,7 @@
 #include "common/engine.hpp"
 
 #if DNNL_GPU_VENDOR == DNNL_VENDOR_INTEL
-#include "gpu/intel/sycl/l0/utils.hpp"
+#include "gpu/intel/sycl/utils.hpp"
 #endif
 
 #if DNNL_GPU_VENDOR == DNNL_VENDOR_NVIDIA
@@ -43,7 +43,7 @@ namespace sycl {
 std::string to_string(backend_t backend) {
     switch (backend) {
         case backend_t::host: return "Host";
-        case backend_t::level0: return "Level Zero";
+        case backend_t::ze: return "Level Zero";
         case backend_t::opencl: return "OpenCL";
         case backend_t::nvidia: return "Nvidia";
         case backend_t::amd: return "AMD";
@@ -98,7 +98,7 @@ backend_t get_backend(const ::sycl::device &dev) {
 
     switch (dev.get_backend()) {
         case ::sycl::backend::opencl: return backend_t::opencl;
-        case ::sycl::backend::ext_oneapi_level_zero: return backend_t::level0;
+        case ::sycl::backend::ext_oneapi_level_zero: return backend_t::ze;
         case ::sycl::backend::ext_oneapi_cuda: return backend_t::nvidia;
         case ::sycl::backend::ext_oneapi_hip: return backend_t::amd;
         default: break;
@@ -149,7 +149,7 @@ bool are_equal(const ::sycl::device &lhs, const ::sycl::device &rhs) {
 #endif
 
 #if DNNL_GPU_VENDOR == DNNL_VENDOR_INTEL
-    if (lhs_be == backend_t::level0) {
+    if (lhs_be == backend_t::ze) {
         return gpu::intel::sycl::compare_ze_devices(lhs, rhs);
     }
 #endif
@@ -181,8 +181,8 @@ bool dev_ctx_consistency_check(
     // Try to find the given device in the given context.
     auto it = std::find_if(ctx_devs.begin(), ctx_devs.end(),
             [&](const ::sycl::device &ctx_dev) {
-                return are_equal(ctx_dev, dev);
-            });
+        return are_equal(ctx_dev, dev);
+    });
     // If found.
     if (it != ctx_devs.end()) return true;
 
@@ -195,8 +195,8 @@ bool dev_ctx_consistency_check(
         auto parent_dev = get_parent_device(dev);
         it = std::find_if(ctx_devs.begin(), ctx_devs.end(),
                 [&](const ::sycl::device &ctx_dev) {
-                    return are_equal(ctx_dev, parent_dev);
-                });
+            return are_equal(ctx_dev, parent_dev);
+        });
         // If found.
         if (it != ctx_devs.end()) return true;
     }
@@ -278,28 +278,25 @@ std::vector<::sycl::device> get_devices(
 
     devices.erase(std::remove_if(devices.begin(), devices.end(),
                           [=](const ::sycl::device &dev) {
-                              auto _dev_type = dev.get_info<
-                                      ::sycl::info::device::device_type>();
-                              if (_dev_type != dev_type) return true;
+        auto _dev_type = dev.get_info<::sycl::info::device::device_type>();
+        if (_dev_type != dev_type) return true;
 #if defined(DNNL_SYCL_GENERIC)
-                              // The devices do not have to be filtered out by
-                              // vendor and backend in the case of generic
-                              // vendor.
-                              return false;
+        // The devices do not have to be filtered out by
+        // vendor and backend in the case of generic
+        // vendor.
+        return false;
 #endif
-                              auto _vendor_id = dev.get_info<
-                                      ::sycl::info::device::vendor_id>();
-                              if (_vendor_id != vendor_id) return true;
+        auto _vendor_id = dev.get_info<::sycl::info::device::vendor_id>();
+        if (_vendor_id != vendor_id) return true;
 
-                              if (dev_type == ::sycl::info::device_type::gpu) {
-                                  auto _backend = get_backend(dev);
-                                  if (_backend == backend_t::unknown
-                                          || _backend != gpu_backend)
-                                      return true;
-                              }
+        if (dev_type == ::sycl::info::device_type::gpu) {
+            auto _backend = get_backend(dev);
+            if (_backend == backend_t::unknown || _backend != gpu_backend)
+                return true;
+        }
 
-                              return false;
-                          }),
+        return false;
+    }),
             devices.end());
     return devices;
 }
@@ -321,7 +318,7 @@ status_t get_device_index(size_t *index, const ::sycl::device &dev) {
     } else {
         *index = SIZE_MAX;
         // TODO: remove this work around once Level-Zero is fixed
-        if (backend == backend_t::level0) return status::success;
+        if (backend == backend_t::ze) return status::success;
         VERROR_ENGINE(false, status::invalid_arguments,
                 VERBOSE_INVALID_ENGINE_IDX, devices.size(),
                 xpu::sycl::to_string(dev_type).c_str(), SIZE_MAX);

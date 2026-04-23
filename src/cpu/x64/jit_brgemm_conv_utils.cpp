@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2025 Intel Corporation
+* Copyright 2021 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -661,6 +661,7 @@ status_t brg_blocking_t::estimate_brgemm_ur() {
                                        : brgemm_broadcast_t::none;
     }
     brgemm_attr_t brgattr;
+    brgattr.use_uker = use_uker;
     brgattr.max_bs = max_batch;
     max_vpad = exec_type == exec_vpad ? nstl::max(l_pad, r_pad) : 0;
     brgattr.max_top_vpad = max_vpad;
@@ -760,6 +761,7 @@ status_t brg_blocking_t::get_brgemm_ur(
                 vK, strides_ptr, is_bf32, is_tf32));
 
         brgemm_attr_t brgattr;
+        brgattr.use_uker = use_uker;
         brgattr.max_bs = max_batch;
         max_vpad = exec_type == exec_vpad ? nstl::max(l_pad, r_pad) : 0;
         brgattr.max_top_vpad = max_vpad;
@@ -868,8 +870,11 @@ dim_t brg_blocking_t::grid_coverage(
 }
 
 float brg_blocking_t::est_eff() {
-    const auto brgemm_microkernel_eff = (static_cast<float>(adj_ocblock) * ur)
-            / ((ur + adj_ocblock) * max_regs);
+    const auto N_regs = static_cast<float>(adj_ocblock);
+    const auto M_regs = is_amx(isa) ? div_up(ur, amx_h) : ur;
+    const auto tot_regs = is_amx(isa) ? brgemm_desc_t::AMX_TILES_NUM : max_regs;
+    const auto brgemm_microkernel_eff
+            = (N_regs * M_regs) / ((N_regs + M_regs) * tot_regs);
 
     const auto ur_eff = static_cast<float>(sp_block) / rnd_up(sp_block, ur);
     const auto brgemm_eff = squeeze_val(ur
@@ -893,7 +898,7 @@ float brg_blocking_t::est_eff() {
     const dim_t max_job = (loop_order == loop_ndhwgc)
             ? grid_coverage(thread_job, oc, ngroups, oc_block, sp, sp_block)
             : grid_coverage(thread_job, sp, static_cast<dim_t>(nb_od) * nb_oh,
-                    sp_block, oc, oc_block);
+                      sp_block, oc, oc_block);
     const dim_t sum_job = static_cast<dim_t>(mb) * od * oh * ow * ngroups * oc;
 
     const float job_eff = max_job == 0
@@ -1243,8 +1248,8 @@ status_t brg_blocking_t::calc_blocks() {
 
     const auto thr_eff_threshold = 0.9f;
     const auto max_ow_block_thr = utils::saturate(1, ow,
-            static_cast<int>(div_up(
-                    mb * ngroups * nb_oc * os, thr_eff_threshold * nthr)));
+            static_cast<int>(ceil(
+                    mb * ngroups * nb_oc * os / (thr_eff_threshold * nthr))));
 
     ow_block = os_block = sp_block = -1;
     brg_blocking_t best_brgb = *this;
@@ -1318,7 +1323,7 @@ float brg_blocking_t::est_eff_1x1() {
     const auto amx_fac = maskrcnn_cond
             ? (div_up(M + M_tail, 16) / (M_n_sp_blks + M_tail_n_sp_blks))
             : (static_cast<float>(div_up(M + M_tail, 16))
-                    / (M_n_sp_blks + M_tail_n_sp_blks));
+                      / (M_n_sp_blks + M_tail_n_sp_blks));
 
     const auto brgemm_microkernel_eff = is_amx(isa)
             ? amx_fac * (static_cast<float>(ocb_ave) * spb_ave)
@@ -1375,15 +1380,15 @@ float brg_blocking_t::est_eff_1x1() {
     if (is_os_blocking) {
         max_job = (loop_order == loop_ndhwgc)
                 ? grid_coverage(thread_job, oc, ngroups, oc_block, os,
-                        static_cast<dim_t>(nb_os_blocking) * sp_block)
+                          static_cast<dim_t>(nb_os_blocking) * sp_block)
                 : grid_coverage(thread_job, os, 1,
-                        static_cast<dim_t>(nb_os_blocking) * sp_block, oc,
-                        oc_block);
+                          static_cast<dim_t>(nb_os_blocking) * sp_block, oc,
+                          oc_block);
     } else {
         max_job = (loop_order == loop_ndhwgc)
                 ? grid_coverage(thread_job, oc, ngroups, oc_block, sp, sp_block)
                 : grid_coverage(thread_job, sp, static_cast<dim_t>(od) * oh,
-                        sp_block, oc, oc_block);
+                          sp_block, oc, oc_block);
     }
 
     const dim_t sum_job = static_cast<dim_t>(mb) * od * oh * ow * ngroups * oc;
@@ -1562,9 +1567,9 @@ void brg_blocking_t::calc_blocks_1x1() {
         const auto max_os_block_thr
                 = (src_dsz * ic >= 1024 && src_dsz * ic < 4096)
                 ? nstl::max(nstl::min(16, os),
-                        div_up(os, div_up(nthr, mb * div_up(oc, oc_block))))
+                          div_up(os, div_up(nthr, mb * div_up(oc, oc_block))))
                 : nstl::max(div_up(2048, oc_block),
-                        static_cast<int>(div_up(mb * ngroups * os, nthr)));
+                          static_cast<int>(div_up(mb * ngroups * os, nthr)));
         const auto max_os_block_L2 = max_sp_block_L2;
 
         auto max_os_block_aliasing = 1000000 / nthr;
@@ -1589,8 +1594,8 @@ void brg_blocking_t::calc_blocks_1x1() {
         os_block = 0;
 
         const auto max_ow_block_thr = utils::saturate(1, ow,
-                static_cast<int>(div_up(
-                        mb * ngroups * nb_oc * os, thr_eff_threshold * nthr)));
+                static_cast<int>(ceil(mb * ngroups * nb_oc * os
+                        / (thr_eff_threshold * nthr))));
         const auto max_ow_block_L2 = max_sp_block_L2;
 
         start_sp_block = utils::saturate(
@@ -1674,9 +1679,10 @@ status_t init_jcp(jit_brgemm_conv_conf_t &jcp, cpu_isa_t isa,
     const memory_desc_wrapper dst_d(&dst_md);
     const memory_desc_wrapper bias_d(&bias_md);
 
-    // Big int (> INT_MAX) values are unsupported and jcp fields may overflow
+    // Per-tensor spatial product, weights nelems, and per-dim
+    // strides/paddings/dilations must fit in int.
     // TODO: change data type of jcp fields to size_t
-    VDISPATCH_CONV_IC(!has_large_size(cd, src_d, weights_d, dst_d),
+    VDISPATCH_CONV_IC(!has_large_size_relaxed(cd, src_d, weights_d, dst_d),
             VERBOSE_BAD_PARAM, "large size is not supported");
 
     const bool with_groups = weights_d.ndims() == src_d.ndims() + 1;
@@ -1755,7 +1761,7 @@ status_t init_jcp(jit_brgemm_conv_conf_t &jcp, cpu_isa_t isa,
     jcp.is_fp8 = one_of(jcp.src_dt, f8_e5m2, f8_e4m3)
             && one_of(jcp.wei_dt, f8_e5m2, f8_e4m3);
     jcp.is_fp8_convert
-            = jcp.is_fp8 && one_of(isa, avx10_1_512_amx_fp16, avx10_2_512);
+            = jcp.is_fp8 && one_of(isa, avx10_1_512_amx_fp16, avx10_2);
     jcp.is_f32_f16
             = everyone_is(f32, jcp.src_dt, jcp.dst_dt) && jcp.wei_dt == f16;
     jcp.is_f32_bf16
@@ -1773,7 +1779,7 @@ status_t init_jcp(jit_brgemm_conv_conf_t &jcp, cpu_isa_t isa,
             && isa == avx512_core_amx;
     jcp.is_tf32 = everyone_is(f32, jcp.src_dt, jcp.wei_dt)
             && one_of(attr.fpmath_.mode_, fpmath_mode::tf32, fpmath_mode::any)
-            && is_superset(isa, avx10_2_512_amx_2);
+            && is_superset(isa, avx10_2_amx_2);
     jcp.wei_plain = everyone_is(true, jcp.wei_dt == data_type::f32,
             is_superset(isa, avx512_core), weights_d.is_plain());
     if (jcp.wei_plain)
@@ -1885,11 +1891,11 @@ status_t init_jcp(jit_brgemm_conv_conf_t &jcp, cpu_isa_t isa,
             VERBOSE_ISA_DT_MISMATCH);
     VDISPATCH_CONV_IC(
             IMPLICATION(one_of(jcp.wei_dt, f8_e5m2, f8_e4m3),
-                    mayiuse(avx512_core_amx_fp16) || mayiuse(avx10_2_512)),
+                    mayiuse(avx512_core_amx_fp16) || mayiuse(avx10_2)),
             VERBOSE_ISA_DT_MISMATCH);
-    VDISPATCH_CONV_IC(IMPLICATION(jcp.wei_dt == f8_e5m2,
-                              mayiuse(avx512_core_amx_fp16)
-                                      || mayiuse(avx10_2_512_amx_2)),
+    VDISPATCH_CONV_IC(
+            IMPLICATION(jcp.wei_dt == f8_e5m2,
+                    mayiuse(avx512_core_amx_fp16) || mayiuse(avx10_2_amx_2)),
             VERBOSE_ISA_DT_MISMATCH);
     const bool is_f32
             = utils::everyone_is(f32, jcp.src_dt, jcp.wei_dt, jcp.dst_dt);
@@ -2110,8 +2116,8 @@ status_t init_conf(jit_brgemm_conv_conf_t &jcp, cpu_isa_t isa,
 
     // TODO: this logic seems not taking dilation into which can avoid pure
     // kernel-in-pad cases.
-    if (!is_amx(isa) && div_up(jcp.l_pad, jcp.stride_w) < jcp.kw
-            && div_up(jcp.r_pad, jcp.stride_w) < jcp.kw) {
+    if (!is_amx(isa) && div_up(nstl::max(0, jcp.l_pad), jcp.stride_w) < jcp.kw
+            && div_up(nstl::max(0, jcp.r_pad), jcp.stride_w) < jcp.kw) {
         try_exec_vpad = true;
     }
 
@@ -2282,7 +2288,7 @@ status_t init_conf(jit_brgemm_conv_conf_t &jcp, cpu_isa_t isa,
                         /* heuristic */ jcp.ow < 256)) {
             jcp.use_M_mask = jcp.is_os_blocking ? 2 : 0;
             jcp.use_uker = true;
-            jcp.use_interleave_stores = true;
+            jcp.use_interleave_stores = jcp.use_uker;
             jcp.hint_prefetching = brgemm_kernel_prefetching_t::brgemm_prf0;
             // assuming 2x2 decomposition in amx brgemm kernel
             // and overlap of input by kw
@@ -2317,7 +2323,7 @@ status_t init_conf(jit_brgemm_conv_conf_t &jcp, cpu_isa_t isa,
         jcp.exec_type = exec_base;
         if (is_amx(isa) && jcp.ow < (8 * 1024)) {
             jcp.use_uker = true;
-            jcp.use_interleave_stores = true;
+            jcp.use_interleave_stores = jcp.use_uker;
             jcp.hint_prefetching = brgemm_kernel_prefetching_t::brgemm_prf0;
         }
 
@@ -2368,12 +2374,13 @@ status_t init_conf(jit_brgemm_conv_conf_t &jcp, cpu_isa_t isa,
         dim_t ds = jcp.copy_block_only
                 ? (brg_blocking_t::get_inp_size(jcp.idp, jcp.od_block, jcp.kd,
                            jcp.stride_d, jcp.dilate_d)
-                        + nstl::max(0, jcp.f_pad) + nstl::max(0, jcp.back_pad))
+                          + nstl::max(0, jcp.f_pad)
+                          + nstl::max(0, jcp.back_pad))
                 : jcp.idp;
         dim_t hs = jcp.copy_block_only
                 ? (brg_blocking_t::get_inp_size(jcp.ihp, jcp.oh_block, jcp.kh,
                            jcp.stride_h, jcp.dilate_h)
-                        + nstl::max(0, jcp.t_pad) + nstl::max(0, jcp.b_pad))
+                          + nstl::max(0, jcp.t_pad) + nstl::max(0, jcp.b_pad))
                 : jcp.ihp;
         if (jcp.is_os_blocking)
             hs = div_up(rnd_up(hs * jcp.iwp, jcp.brgM), jcp.iwp)
@@ -2611,7 +2618,7 @@ status_t init_1x1_conf(jit_brgemm_conv_conf_t &jcp, cpu_isa_t isa,
         // non-unrolled kernel does not support bf32, only dispatch unrolled
         // kernel for now
         jcp.use_uker = jcp.is_bf32 || !is_small_mb;
-        jcp.use_interleave_stores = true;
+        jcp.use_interleave_stores = jcp.use_uker;
     }
 
     // TODO: heuristic to dispatch BF32 BRGeMM
@@ -2652,7 +2659,7 @@ status_t init_1x1_conf(jit_brgemm_conv_conf_t &jcp, cpu_isa_t isa,
 
     const size_t rtus_buffer_size = jcp.is_reduced_rtus
             ? jcp.rtus_padded_ic_size * jcp.os_block
-            : jcp.LDA * jcp.os;
+            : static_cast<size_t>(jcp.LDA) * jcp.os;
     jcp.inp_buffer_size
             = jcp.is_rtus ? rnd_up(rtus_buffer_size, align_size) : 0;
 
@@ -2709,8 +2716,13 @@ void set_amx_wsp_per_thread(jit_brgemm_conv_conf_t &jcp) {
             = utils::rnd_up(jcp.amx_buf_size_per_thread + 1, P4K);
 }
 
-void init_scratchpad(memory_tracking::registrar_t &scratchpad,
-        const jit_brgemm_conv_conf_t &jcp) {
+status_t init_scratchpad(memory_tracking::registrar_t &scratchpad,
+        const jit_brgemm_conv_conf_t &jcp, const memory_desc_t &src_md,
+        const memory_desc_t &weights_md, const memory_desc_t &dst_md) {
+    const memory_desc_wrapper src_d(&src_md);
+    const memory_desc_wrapper weights_d(&weights_md);
+    const memory_desc_wrapper dst_d(&dst_md);
+
     if (uses_batch_elements(jcp.brg_type, jcp.exec_type)) {
         scratchpad.book(key_brgemm_primitive_batch,
                 static_cast<size_t>(jcp.nthr) * jcp.adjusted_batch_size,
@@ -2769,6 +2781,20 @@ void init_scratchpad(memory_tracking::registrar_t &scratchpad,
         scratchpad.book(key_conv_dst_scales,
                 static_cast<size_t>(jcp.nthr) * sizeof(float), P4K);
     }
+
+    // Check scratchpad size to avoid allocating huge buffers
+    if (jcp.exec_type == exec_trans) {
+        constexpr size_t scratchpad_limit_by_absolute_value = (size_t)32
+                << 30; // 32Gb - TODO: may it's too large?
+        const size_t scratchpad_limit_by_tensor_sizes = (size_t)64 * jcp.nthr
+                * (src_d.size() + weights_d.size() + dst_d.size());
+        const size_t scratchpad_limit
+                = nstl::min(scratchpad_limit_by_absolute_value,
+                        scratchpad_limit_by_tensor_sizes);
+        if (scratchpad.size() > scratchpad_limit) return status::unimplemented;
+    }
+
+    return status::success;
 }
 
 void balance_bwd_w(jit_brgemm_conv_conf_t &jcp) {
@@ -3001,24 +3027,23 @@ void balance_bwd_w(jit_brgemm_conv_conf_t &jcp) {
 
         // Selecting the number of threads for every dimension closest to what
         // we defined before
-        auto calc_diff =
-                [&](const std::vector<std::pair<int, bwd_w_dims>> &cv) {
-                    auto tot_n = 1;
-                    double res = 1;
-                    for (int i = 0; i < nd; i++) {
-                        const auto nvf = dv[i].first;
-                        const auto n = cv[i].first;
-                        const auto v = maxv[cv[i].second];
-                        const auto disb
-                                = nvf * static_cast<double>(rnd_up(v, n)) / v;
-                        const auto nf = static_cast<double>(n);
-                        const auto var = ((nf > nvf) ? (nf / nvf) : (nvf / nf));
-                        tot_n *= n;
-                        res *= disb * var;
-                    }
-                    const auto thr_disb = static_cast<double>(jcp.nthr) / tot_n;
-                    return res * thr_disb;
-                };
+        auto calc_diff
+                = [&](const std::vector<std::pair<int, bwd_w_dims>> &cv) {
+            auto tot_n = 1;
+            double res = 1;
+            for (int i = 0; i < nd; i++) {
+                const auto nvf = dv[i].first;
+                const auto n = cv[i].first;
+                const auto v = maxv[cv[i].second];
+                const auto disb = nvf * static_cast<double>(rnd_up(v, n)) / v;
+                const auto nf = static_cast<double>(n);
+                const auto var = ((nf > nvf) ? (nf / nvf) : (nvf / nf));
+                tot_n *= n;
+                res *= disb * var;
+            }
+            const auto thr_disb = static_cast<double>(jcp.nthr) / tot_n;
+            return res * thr_disb;
+        };
 
         // nv: vector to keep result of selection
         std::vector<std::pair<int, bwd_w_dims>> nv;
@@ -3120,9 +3145,9 @@ status_t init_conf_bwd_w(jit_brgemm_conv_conf_t &jcp,
             && one_of(diff_weights_d.data_type(), f32, f16, f8_e5m2, f8_e4m3)
             && one_of(diff_dst_d.data_type(), f8_e5m2, f8_e4m3);
 
-    jcp.isa = is_fp8 ? (mayiuse(avx10_2_512_amx_2) ? avx10_2_512_amx_2
-                                                   : avx512_core_amx_fp16)
-                     : (is_f16 ? avx512_core_amx_fp16 : avx512_core_amx);
+    jcp.isa = is_fp8
+            ? (mayiuse(avx10_2_amx_2) ? avx10_2_amx_2 : avx512_core_amx_fp16)
+            : (is_f16 ? avx512_core_amx_fp16 : avx512_core_amx);
 
     // disabling verbose dispatch messages for unsupported isa for better readability
     if (!mayiuse(jcp.isa)) return status::unimplemented;

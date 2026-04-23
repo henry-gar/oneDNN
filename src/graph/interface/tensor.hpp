@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -64,6 +64,7 @@ private:
         // property is host_scalar
         int32_t s32_value = 0;
         float f32_value;
+        int64_t s64_value;
         // TODO: add more dtype support
     } scalar_;
 };

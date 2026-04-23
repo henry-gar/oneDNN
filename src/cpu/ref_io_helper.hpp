@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2025 Intel Corporation
+* Copyright 2021 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -60,6 +60,13 @@ inline int load_int_value(data_type_t dt, const void *ptr, dim_t idx) {
 
 #undef CASE
     return INT_MAX;
+}
+
+inline int64_t load_int64_value(data_type_t dt, const void *ptr, dim_t idx) {
+    assert(ptr);
+    if (dt == data_type::s64)
+        return reinterpret_cast<const int64_t *>(ptr)[idx];
+    return static_cast<int64_t>(load_int_value(dt, ptr, idx));
 }
 
 ALWAYS_INLINE float load_float_value(

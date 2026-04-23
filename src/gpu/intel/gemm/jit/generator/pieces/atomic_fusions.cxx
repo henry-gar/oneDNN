@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -530,8 +530,11 @@ bool Generator<hw>::gemmFusedPostOpsFinalize(Label &labelLateExit, GEMMProblem &
     modState.ra.safeRelease(zero);
 
     status << "Load completed C tile" << status_stream::endl;
-    modStrategy.C.atomic = modStrategy.CO.atomic = false;
-    modState.Cext_strategy.atomic = false;
+    if (hw < HW::Xe2) {
+        /* Xe2 + later need atomic loads */
+        modStrategy.C.atomic = modStrategy.CO.atomic = false;
+        modState.Cext_strategy.atomic = false;
+    }
     gemmAccessC(COperation::Load, modProblem, modStrategy, modState);
 
     if (strategy.zeroTempC) {

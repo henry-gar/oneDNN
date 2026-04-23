@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -107,7 +107,11 @@ typedef enum {
     /// [MX-compliant 4-bit float data type](https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf) with 2-bit exponent and 1 bit mantissa.
     dnnl_f4_e2m1 = 14,
     /// 4-bit float data type with 3-bit exponent and 0 bit mantissa.
+    ///
+    /// @deprecated The f4_e3m0 data type will be removed in a future release.
     dnnl_f4_e3m0 = 15,
+    /// 64-bit signed integer
+    dnnl_s64 = 16,
 
     // Max value to prevent UB for internal-use-only values.
     dnnl_data_type_max = 0x7fff,
@@ -250,7 +254,7 @@ typedef struct {
 
 /// Special pointer value that indicates that the library needs to allocate an
 /// underlying buffer for a memory object.
-#define DNNL_MEMORY_ALLOCATE ((void *)(size_t)-1)
+#define DNNL_MEMORY_ALLOCATE ((void *)(size_t) - 1)
 
 /// @} dnnl_api_memory
 

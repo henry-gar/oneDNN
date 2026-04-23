@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -177,9 +177,10 @@ public:
     virtual void override_set(const std::string &s, bool is_env) {
         auto params = get_all_params();
         auto parts = gpu_utils::split(s);
+        const std::string sep = "=";
         for (auto &p : parts) {
             if (p.empty()) continue;
-            auto sub_parts = gpu_utils::split(p, "=");
+            auto sub_parts = gpu_utils::split(p, sep);
             gpu_assert(sub_parts.size() == 2);
             auto &key = sub_parts[0];
             auto &value = sub_parts[1];
@@ -229,8 +230,8 @@ protected:
         if (do_sort) {
             std::sort(ret.begin(), ret.end(),
                     [this](const param_t *a, const param_t *b) {
-                        return sort_key(a) < sort_key(b);
-                    });
+                return sort_key(a) < sort_key(b);
+            });
         }
         return ret;
     }

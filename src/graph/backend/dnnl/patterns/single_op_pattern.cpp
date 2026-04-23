@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright 2020-2025 Intel Corporation
+ * Copyright 2020 Intel Corporation
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,7 +14,6 @@
  * limitations under the License.
  *******************************************************************************/
 
-#include "graph/backend/dnnl/internal_ops.hpp"
 #include "graph/backend/dnnl/kernels/kernels.hpp"
 #include "graph/backend/dnnl/patterns/fusions.hpp"
 #include "graph/backend/dnnl/patterns/pattern_matcher_pass.hpp"
@@ -40,11 +39,10 @@ DNNL_BACKEND_REGISTER_PATTERN_DEF_BEGIN(single_op_pass)
             .set_kind(partition_kind_t::misc_post_ops) \
             .set_attr<FCreatePattern>("FCreatePattern", \
                     [](const std::shared_ptr<pb_graph_t> &pgraph) -> void { \
-                        pgraph->append_op(graph::op_kind::op); \
-                    }) \
-            .set_attr<FCreateKernel>("FCreateKernel", []() -> kernel_ptr { \
-                return std::make_shared<kernel>(); \
-            });
+        pgraph->append_op(graph::op_kind::op); \
+    }).set_attr<FCreateKernel>("FCreateKernel", []() -> kernel_ptr { \
+        return std::make_shared<kernel>(); \
+    });
 
 // register passes with dnnl backend support
 DNNL_BACKEND_REGISTER_PATTERN_MATCHER_PASS(dnnl, eltwise_fwd_pass)
@@ -56,8 +54,8 @@ DNNL_BACKEND_REGISTER_PATTERN_MATCHER_PASS(dnnl, eltwise_fwd_pass)
                             = pgraph->append_alternation(get_unary_ops());
                     // the round algorithm in eltwise primitive does not
                     // support other data types.
-                    p_eltwise->append_decision_function([](op_t *graph_op)
-                                                                -> bool {
+                    p_eltwise->append_decision_function(
+                            [](op_t *graph_op) -> bool {
                         if (graph_op->get_kind() == graph::op_kind::Round)
                             return check_input_dtype<graph::data_type::f32>(
                                     graph_op);
@@ -370,10 +368,8 @@ DNNL_BACKEND_REGISTER_PATTERN_MATCHER_PASS(dnnl, interpolate_bwd_pass)
 // f16-in-bf16-out and same dtype in/out.
 #define SET_BF16_F16_CHECK() \
     append_decision_function([](op_t *graph_op) -> bool { \
-        logical_tensor_t inport \
-                = graph_op->get_input_value(0)->get_logical_tensor(); \
-        logical_tensor_t outport \
-                = graph_op->get_output_value(0)->get_logical_tensor(); \
+        logical_tensor_t inport = graph_op->get_input_logical_tensor(0); \
+        logical_tensor_t outport = graph_op->get_output_logical_tensor(0); \
         if (inport.data_type == graph::data_type::bf16 \
                 && outport.data_type == graph::data_type::f16) \
             return false; \
@@ -411,8 +407,8 @@ DNNL_BACKEND_REGISTER_PATTERN_MATCHER_PASS(dnnl, reduce_pass)
                                             graph::op_kind::ReduceMin,
                                             graph::op_kind::ReduceProd,
                                             graph::op_kind::ReduceSum});
-                    reduction->append_decision_function([](op_t *graph_op)
-                                                                -> bool {
+                    reduction->append_decision_function(
+                            [](op_t *graph_op) -> bool {
                         if (graph_op->has_attr(op_attr::axes)
                                 && graph_op->get_attr<std::vector<int64_t>>(
                                                    op_attr::axes)
@@ -434,6 +430,23 @@ DNNL_BACKEND_REGISTER_PATTERN_MATCHER_PASS(dnnl, greater_equal_pass)
                 })
         .set_attr<FCreateKernel>("FCreateKernel",
                 []() -> kernel_ptr { return std::make_shared<binary_t>(); });
+
+DNNL_BACKEND_REGISTER_PATTERN_MATCHER_PASS(dnnl, rmsn_pass)
+        .set_priority(DEFAULT_P)
+        .set_kind(partition_kind_t::misc_post_ops)
+        .set_attr<FCreatePattern>("FCreatePattern",
+                [](const std::shared_ptr<pb_graph_t> &pgraph) -> void {
+                    graph::utils::pm::pb_op_t *p_rmsnorm
+                            = pgraph->append_op(graph::op_kind::RMSNorm);
+                    p_rmsnorm->append_decision_function(
+                            check_begin_norm_axis_attr);
+                    // primitive only support 2-5D data tensor for rmsnorm
+                    p_rmsnorm->append_decision_function(
+                            check_input_ndim_from_offset<0, 2, 5>);
+                })
+        .set_attr<FCreateKernel>("FCreateKernel", []() -> kernel_ptr {
+            return std::make_shared<layer_norm_fwd_t>();
+        });
 
 #undef DNNL_BACKEND_SINGLE_OP_TRANSFORM
 #undef DEFAULT_P

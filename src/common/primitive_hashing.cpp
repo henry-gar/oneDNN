@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -43,7 +43,7 @@ key_t::key_t(const engine_t *engine, const op_desc_t *op_desc,
 
 key_t::key_t(const primitive_desc_t *pd, const engine_t *engine)
     : key_t(engine, pd->op_desc(), pd->attr(), pd->pd_iterator_offset(),
-            pd->hint_mds(false /* is_hint */), pd->skip_idx()) {}
+              pd->hint_mds(false /* is_hint */), pd->skip_idx()) {}
 
 bool key_t::operator==(const key_t &rhs) const {
     DNNL_SHORT_CIRCUIT_SELF_COMPARISON(rhs);
@@ -83,6 +83,7 @@ bool key_t::operator==(const key_t &rhs) const {
             break;
             CASE(deconvolution)
             CASE(eltwise)
+            CASE(gated_mlp)
             CASE(gemm)
             CASE(group_normalization)
             CASE(inner_product)
@@ -309,8 +310,7 @@ size_t get_attr_hash(const primitive_attr_t &attr) {
         seed = hash_combine(seed, attr.gpu_attr_->get_hash());
     }
     if (!attr.dropout_.has_default_values()) {
-        seed = hash_combine(
-                seed, get_md_hash(attr.dropout_.user_dropout_desc_));
+        seed = hash_combine(seed, attr.dropout_.get_hash());
     }
     // Combined hash for attributes
     return seed;
@@ -735,6 +735,7 @@ size_t get_desc_hash(const sdpa_desc_t &desc) {
     size_t seed = 0;
     // Kinds
     seed = hash_combine(seed, static_cast<size_t>(desc.primitive_kind));
+    seed = hash_combine(seed, static_cast<size_t>(desc.prop_kind));
     // Memory descriptors
     seed = hash_combine(seed, get_md_hash(desc.q_desc));
     seed = hash_combine(seed, get_md_hash(desc.k_desc));
@@ -743,7 +744,12 @@ size_t get_desc_hash(const sdpa_desc_t &desc) {
     seed = hash_combine(seed, desc.kq_zero_points.get_hash());
     seed = hash_combine(seed, desc.vs_scales.get_hash());
     seed = hash_combine(seed, desc.vs_zero_points.get_hash());
+    seed = hash_combine(seed, get_md_hash(desc.dS_desc));
     seed = hash_combine(seed, get_md_hash(desc.dst_desc));
+    seed = hash_combine(seed, get_md_hash(desc.diff_dst_desc));
+    seed = hash_combine(seed, get_md_hash(desc.diff_q_desc));
+    seed = hash_combine(seed, get_md_hash(desc.diff_k_desc));
+    seed = hash_combine(seed, get_md_hash(desc.diff_v_desc));
     seed = hash_combine(seed, get_md_hash(desc.attn_mask_desc));
     seed = hash_combine(seed, get_md_hash(desc.scale_desc));
     // Scale type
@@ -754,6 +760,22 @@ size_t get_desc_hash(const sdpa_desc_t &desc) {
     seed = hash_combine(seed, static_cast<size_t>(desc.mask_type));
     seed = hash_combine(seed, static_cast<size_t>(desc.softmax_alg));
     // Combined hash for sdpa desc
+    return seed;
+}
+
+size_t get_desc_hash(const gated_mlp_desc_t &desc) {
+    size_t seed = 0;
+    // Kinds
+    seed = hash_combine(seed, static_cast<size_t>(desc.primitive_kind));
+    // Memory descriptors
+    seed = hash_combine(seed, get_md_hash(desc.src_desc));
+    seed = hash_combine(seed, get_md_hash(desc.w_gate_desc));
+    seed = hash_combine(seed, get_md_hash(desc.w_up_desc));
+    seed = hash_combine(seed, get_md_hash(desc.w_down_desc));
+    seed = hash_combine(seed, get_md_hash(desc.dst_desc));
+    // Activation kind
+    seed = hash_combine(seed, static_cast<size_t>(desc.activation));
+    // Combined hash for gated_mlp desc
     return seed;
 }
 

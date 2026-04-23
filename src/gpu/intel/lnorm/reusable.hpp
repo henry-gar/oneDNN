@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -56,7 +56,8 @@ struct reusable_params_t : trivially_serializable_t<reusable_params_t> {
     bool use_scale = false;
     bool use_shift = false;
     bool skip_mean = false;
-    uint8_t padding[3] = {0};
+    bool require_stateless_addressing = true;
+    uint8_t padding[2] = {0};
 
     // Not used by bwd impl, but would be padding otherwise
     bool with_src_scale = false;

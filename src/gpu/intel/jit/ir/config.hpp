@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -108,7 +108,7 @@ class dst_layout_param_t : public layout_param_t {
     bool is_default() const override { return false; }
 };
 
-class options_param_t : public value_param_t<kernel::options_t> {
+class options_param_t : public value_param_t<dsl::kernel::options_t> {
 public:
     using value_param_t::is_overridden;
     using value_param_t::value_param_t;
@@ -210,7 +210,7 @@ public:
         return oss.str();
     }
 
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
 private:
     value_t tile_;
@@ -319,7 +319,7 @@ public:
     }
 
     static int get_max_threadgroups_per_wave(
-            const kernel::options_t &options, dim_t tg_elems) {
+            const dsl::kernel::options_t &options, dim_t tg_elems) {
         auto arch = convert_ngen_arch_to_dnnl(options.hw());
         int threads_per_eu = compute::device_info_t::threads_per_eu(
                 arch, options.regs() > 128);
@@ -333,8 +333,8 @@ public:
 
     // Return thread utilization as a percentage. If this value is low,
     // parallelism is a fundamental limitation to the current work scheduling.
-    static float get_thread_utilization(
-            const kernel::options_t &options, dim_t kg_elems, dim_t tg_elems) {
+    static float get_thread_utilization(const dsl::kernel::options_t &options,
+            dim_t kg_elems, dim_t tg_elems) {
         auto arch = convert_ngen_arch_to_dnnl(options.hw());
         int eus_per_subslice = compute::device_info_t::max_eus_per_wg(arch);
         int subslice_count = options.hw().eu_count() / eus_per_subslice;
@@ -348,8 +348,8 @@ public:
 
     // Return wave utilization as a percentage. If this value is low, memory
     // latency may be an issue due to limited use of SMT to hide the latency.
-    static float get_wave_utilization(
-            const kernel::options_t &options, dim_t kg_elems, dim_t tg_elems) {
+    static float get_wave_utilization(const dsl::kernel::options_t &options,
+            dim_t kg_elems, dim_t tg_elems) {
         int tgs_per_wave = get_max_threadgroups_per_wave(options, tg_elems);
         return (100.f * float(kg_elems))
                 / float(utils::rnd_up(kg_elems, tgs_per_wave));
@@ -424,7 +424,7 @@ public:
                 dims[i] *= ir_utils::safe_divide(padded_dim(d), tg_block);
             }
         }
-        set_kernel_grid(grid_info_t(dims, ir_builder_t::tg_idx));
+        set_kernel_grid(grid_info_t(dims, ir::tg_idx_name));
     }
 
     void init_thread_group_grid(const std::array<tile_t, 3> &grid) {
@@ -433,7 +433,7 @@ public:
             for (auto &d : grid[i])
                 dims[i] *= thread_group_dim(d);
         }
-        set_thread_group_grid(grid_info_t(dims, ir_builder_t::thr_idx));
+        set_thread_group_grid(grid_info_t(dims, ir::thr_idx_name));
     }
 
 protected:
@@ -445,8 +445,8 @@ protected:
     name##_param_t name##_; \
     param_init_t name##_init_ \
             = register_param([](const container_config_t *c) { \
-                  return &static_cast<const prim_config_t *>(c)->name##_; \
-              });
+        return &static_cast<const prim_config_t *>(c)->name##_; \
+    });
     INIT_PARAM(options)
     INIT_PARAM(kernel_grid)
     INIT_PARAM(thread_group_grid)

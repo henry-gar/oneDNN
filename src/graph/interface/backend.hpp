@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright 2020-2025 Intel Corporation
+ * Copyright 2020 Intel Corporation
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -48,7 +48,7 @@ public:
 
     virtual ~backend_t() = default;
 
-    const std::string &get_name() const { return name_; };
+    const std::string &get_name() const { return name_; }
     size_t get_id() const { return id_; }
     float get_priority() const { return priority_; }
 

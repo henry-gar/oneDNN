@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -85,6 +85,13 @@ public:
 #endif
     }
 };
+
+inline std::unique_ptr<ocl::engine_factory_t> get_engine_factory(
+        engine_kind_t engine_kind) {
+    return std::unique_ptr<ocl::engine_factory_t>(
+            new ocl::engine_factory_t(engine_kind));
+}
+
 } // namespace ocl
 } // namespace xpu
 } // namespace impl

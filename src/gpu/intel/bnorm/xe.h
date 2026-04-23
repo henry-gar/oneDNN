@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -113,7 +113,7 @@
 #define MAYBE_LAST_IC_LOAD_FLOAT_1x16(ptr, idx) \
     (is_last_ic_block ? (simd_id < 8 ? ptr[(idx) + simd_id] : 0.0f) \
                       : as_float(intel_sub_group_block_read( \
-                              (const __global uint *)(&ptr[(idx)]))))
+                                (const __global uint *)(&ptr[(idx)]))))
 #else
 #define MAYBE_LAST_IC_LOAD_FLOAT_1x16(ptr, idx) LOAD_FLOAT_1x16(&ptr[(idx)])
 #endif

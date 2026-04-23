@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2025 Intel Corporation
+* Copyright 2021 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -43,7 +43,7 @@ struct binary_kernel_t : public jit_generator_t {
     using bcast_t = binary_bcast_t;
 
     binary_kernel_t(const size_t vlen, const binary_pd_t *pd,
-            const jit_binary_conf_t conf, const char *name,
+            const jit_binary_conf_t &conf, const char *name,
             bool tail_kernel = false);
     ~binary_kernel_t() override = default;
 
@@ -169,8 +169,8 @@ struct jit_uni_binary_kernel_t : public binary_kernel_t {
     void forward_over_outer_dims();
     void generate() override;
 
-    jit_uni_binary_kernel_t(const binary_pd_t *pd, const jit_binary_conf_t conf,
-            bool tail_kernel = false);
+    jit_uni_binary_kernel_t(const binary_pd_t *pd,
+            const jit_binary_conf_t &conf, bool tail_kernel = false);
     ~jit_uni_binary_kernel_t() override = default;
 
     std::map<data_type_t, io::io_saturation_conf_t>

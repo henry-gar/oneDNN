@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -26,6 +26,7 @@
 #include "gemmstone/type.hpp"
 #include "gpu/intel/compute/device_info.hpp"
 #include "gpu/intel/compute/kernel_arg_list.hpp"
+#include "gpu/intel/gemm/jit/pd.hpp"
 #include "gpu/intel/jit/generator_base.hpp"
 #include "gpu/intel/kernel_cache.hpp"
 
@@ -63,15 +64,15 @@ static inline gemmstone::Type convert_dnnl_to_kernel_type(data_type_t type) {
 struct gen_desc_t {
     friend struct gen_kernel_t;
 
-    const gemmstone::GEMMProblem *problem() const { return &problem_; };
-    const gemmstone::GEMMStrategy *strategy() const { return &strategy_; };
+    const gemmstone::GEMMProblem *problem() const { return &problem_; }
+    const gemmstone::GEMMStrategy *strategy() const { return &strategy_; }
 
     const gemmstone::CommonDriverInfo *driver_info() const {
         return &driver_info_;
-    };
+    }
     const gemmstone::EvaluateAuxOutput *aux_params() const {
         return &aux_params_;
-    };
+    }
 
     compute::scalar_type_t scalar_type() const;
 
@@ -88,9 +89,16 @@ struct gen_desc_t {
     const gemmstone::kcatalog::Entry &entry() const {
         assert(entry_ != nullptr);
         return *entry_;
-    };
+    }
 
     void set_entry(const gemmstone::kcatalog::Entry *entry) { entry_ = entry; }
+    void set_problem(const gemmstone::GEMMProblem &problem) {
+        problem_ = problem;
+    }
+
+    void set_efficient_64b(bool efficient_64b) {
+        efficient_64b_ = efficient_64b;
+    }
 
 protected:
     compute::gpu_arch_t arch_;
@@ -102,28 +110,16 @@ protected:
     gemmstone::EvaluateAuxOutput aux_params_;
     gemmstone::CommonDriverInfo driver_info_;
 
+    bool efficient_64b_ = false;
+
     /* optional information to fine-tune kernel */
     int m_ = -1, n_ = -1, k_ = -1;
     int eu_count_ = -1;
     bool disable_systolic_ = false;
     bool relaxed_acc_ = false;
 
-    status_t transfer_post_ops(gpu_post_ops_t &&post_ops, bool swap_ab);
-
     status_t finalize(const char *tags);
     void update_driver_info();
-};
-
-struct quant_params {
-    data_type_t scales_type;
-    data_type_t zp_type;
-    data_type_t gs_type;
-    int scale_ndims;
-    int zp_ndims;
-    int gs_ndims;
-    int group_k;
-    int group_mn;
-    bool force_gs;
 };
 
 struct gen_nocopy_desc_t : public gen_desc_t {
@@ -145,14 +141,9 @@ struct gen_nocopy_desc_t : public gen_desc_t {
     std::vector<const gemmstone::kcatalog::Entry *> select_kernel(
             compute::gpu_arch_t arch, int stepping, int eu_count,
             bool has_systolic, bool is_integrated, compute_mode mode,
-            int batch_dims, bool trans_a, bool trans_b, bool trans_co,
-            bool swap_ab, const quant_params &a_quant,
-            const quant_params &b_quant, bool dst_sround, bool c_offset,
-            bool bias, sum_ab_t reduce_ab, float alpha, float beta,
-            data_type_t a_type, data_type_t b_type, data_type_t c_type,
-            data_type_t co_type, data_type_t acc_type, int align_a, int align_b,
-            int align_c, dim_t m, dim_t n, dim_t k, dim_t lda, dim_t ldb,
-            dim_t ldc, dim_t batch, gpu_post_ops_t &&post_ops);
+            const gemmstone::GEMMProblem &problem, float alpha, float beta,
+            dim_t m, dim_t n, dim_t k, dim_t lda, dim_t ldb, dim_t ldc,
+            dim_t batch);
 
     status_t finalize();
 
@@ -164,14 +155,14 @@ private:
 };
 
 struct gen_xe_systolic_kernel_desc_t : public gen_desc_t {
-    status_t select_kernel(compute::gpu_arch_t arch, int stepping, int eu_count,
-            bool is_integrated, int batch_dims, bool packed_c, bool trans_co,
-            bool a_offset, bool b_offset, bool c_offset, bool bias, float alpha,
-            float beta, data_type_t a_type, data_type_t b_type,
-            data_type_t c_type, data_type_t ao_type, data_type_t bo_type,
-            data_type_t co_type, data_type_t acc_type, dim_t m, dim_t n,
-            dim_t k, dim_t batch, int unroll_m, int unroll_n, bool alt,
-            gpu_post_ops_t &&post_ops);
+    status_t select_kernel(compute::gpu_product_t product, int stepping,
+            int eu_count, bool is_integrated, int batch_dims, bool packed_c,
+            bool trans_co, bool a_offset, bool b_offset, bool c_offset,
+            bool bias, float alpha, float beta, data_type_t a_type,
+            data_type_t b_type, data_type_t c_type, data_type_t ao_type,
+            data_type_t bo_type, data_type_t co_type, data_type_t acc_type,
+            dim_t m, dim_t n, dim_t k, dim_t batch, int unroll_m, int unroll_n,
+            bool alt, gpu_post_ops_t &&post_ops);
 
     static void choose_unrolls(compute::gpu_arch_t arch, int eu_count,
             data_type_t a_type, data_type_t b_type, data_type_t c_type, dim_t m,
@@ -203,24 +194,22 @@ protected:
 } // namespace gemm
 
 template <>
-struct trivial_key_validator_t<gemm::jit::gen_desc_t> {
+struct key_validator_t<gemm::jit::gen_desc_t> {
     static bool is_valid(const gemm::jit::gen_desc_t &) { return true; }
 };
 
 template <>
-struct trivial_key_validator_t<gemm::jit::gen_nocopy_desc_t> {
+struct key_validator_t<gemm::jit::gen_nocopy_desc_t> {
     static bool is_valid(const gemm::jit::gen_nocopy_desc_t &derived) {
-        return trivial_key_validator_t<gemm::jit::gen_desc_t>::is_valid(
-                derived);
+        return key_validator_t<gemm::jit::gen_desc_t>::is_valid(derived);
     }
 };
 
 template <>
-struct trivial_key_validator_t<gemm::jit::gen_xe_systolic_kernel_desc_t> {
+struct key_validator_t<gemm::jit::gen_xe_systolic_kernel_desc_t> {
     static bool is_valid(
             const gemm::jit::gen_xe_systolic_kernel_desc_t &derived) {
-        return trivial_key_validator_t<gemm::jit::gen_desc_t>::is_valid(
-                derived);
+        return key_validator_t<gemm::jit::gen_desc_t>::is_valid(derived);
     }
 };
 

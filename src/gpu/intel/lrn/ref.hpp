@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -83,10 +83,11 @@ struct ref_fwd_t : public primitive_t {
 
         compute::kernel_ctx_t kernel_ctx;
 
-        status_t status = status::success;
         const auto *desc = pd()->desc();
 
         kernel_ctx.set_data_type(desc->src_desc.data_type, false);
+        kernel_ctx.register_buffer_size(*pd()->src_md());
+        kernel_ctx.require_stateless_addressing(pd()->has_large_buffers());
 
         kernel_ctx.define_int("IS_FWD", 1);
 
@@ -102,7 +103,6 @@ struct ref_fwd_t : public primitive_t {
                 break;
             default: VDISPATCH_LRN_IC(false, VERBOSE_BAD_ALGORITHM);
         }
-        if (status != status::success) return status;
 
         const memory_desc_wrapper src_d(pd()->src_md());
         const memory_desc_wrapper dst_d(pd()->dst_md());
@@ -207,10 +207,11 @@ struct ref_bwd_t : public primitive_t {
 
         compute::kernel_ctx_t kernel_ctx;
 
-        status_t status = status::success;
         const auto *desc = pd()->desc();
 
         kernel_ctx.set_data_type(desc->src_desc.data_type, false);
+        kernel_ctx.register_buffer_size(*pd()->src_md());
+        kernel_ctx.require_stateless_addressing(pd()->has_large_buffers());
 
         kernel_ctx.define_int("IS_BWD", 1);
 
@@ -223,7 +224,6 @@ struct ref_bwd_t : public primitive_t {
                 break;
             default: VDISPATCH_LRN_IC(false, VERBOSE_BAD_ALGORITHM);
         }
-        if (status != status::success) return status;
 
         const memory_desc_wrapper src_d(pd()->src_md());
         const memory_desc_wrapper diff_dst_d(pd()->diff_dst_md());

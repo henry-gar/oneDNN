@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -35,9 +35,7 @@ public:
     virtual status_t exit_immediate_mode() { return status::success; }
 
 protected:
-    bool has_zero_pad_primitive() const {
-        return engine()->kind() == dnnl_gpu;
-    };
+    bool has_zero_pad_primitive() const { return engine()->kind() == dnnl_gpu; }
 
     status_t zero_pad(const memory_t *memory, const exec_ctx_t &ctx) override;
 };

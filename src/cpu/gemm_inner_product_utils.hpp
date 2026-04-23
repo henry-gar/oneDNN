@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2023 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -53,7 +53,8 @@ struct pp_kernel_t {
             const float *dst_zero_points,
             const void *post_ops_binary_rhs_arg_vec, const void *dst_orig,
             size_t first_mb_matrix_addr_off, const exec_ctx_t &ctx,
-            const memory_desc_t &dst_md) const = 0;
+            const memory_desc_t &dst_md) const
+            = 0;
 
     virtual status_t create_kernel() { return status::success; }
 
@@ -90,8 +91,8 @@ protected:
         return (!runtime_oc()) && (OC_ == (size_t)dst_mb_stride_);
     }
     bool do_bias() const { return bias_data_type_ != data_type::undef; }
-    bool runtime_oc() const { return OC_ == (size_t)DNNL_RUNTIME_DIM_VAL; }
-    bool runtime_mb() const { return MB_ == (size_t)DNNL_RUNTIME_DIM_VAL; }
+    bool runtime_oc() const { return is_runtime_value(OC_); }
+    bool runtime_mb() const { return is_runtime_value(MB_); }
 };
 
 inline const bcast_set_t &gemm_default_strategies() {

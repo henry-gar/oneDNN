@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright 2024-2025 Intel Corporation
+ * Copyright 2024 Intel Corporation
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -58,7 +58,7 @@ size_t kernel_base_t::encode_constant_cache_key(
 
 const std::vector<inplace_pair_t> &kernel_base_t::get_inplace_pairs() const {
     return inplace_pairs_;
-};
+}
 
 } // namespace dnnl_impl
 } // namespace graph

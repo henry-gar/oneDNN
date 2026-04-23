@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2024-2025 Intel Corporation
+* Copyright 2024 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -77,7 +77,7 @@ protected:
     const Xbyak::Reg64 reg64_aux_;
 
     bool is_fp8_native() {
-        return is_superset(host_->max_cpu_isa(), cpu_isa_t::avx10_2_512);
+        return is_superset(host_->max_cpu_isa(), cpu_isa_t::avx10_2);
     }
 
     Xbyak::Zmm zmm_mask(

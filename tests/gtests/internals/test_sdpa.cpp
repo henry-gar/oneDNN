@@ -28,6 +28,8 @@
 #include <memory>
 #include <random>
 
+#define DEBUG_PRINT_MEM 0
+
 using mdt = memory::data_type;
 using dnnl::accumulation_mode;
 
@@ -197,9 +199,56 @@ std::ostream &operator<<(std::ostream &ss, const accumulation_t &accs) {
     return ss;
 }
 
+// Mirrors benchdnn attr_t::dropout_t (--attr-dropout=PROB[:SEED[:TAG[:OFFSET[:HOST_SCALARS]]]]).
+struct dropout_config_t {
+    float probability = 0.0f;
+    int64_t seed = 0; // 64-bit Philox seed
+    memory::data_type seed_dt = mdt::s64; // s32 or s64
+    int64_t offset = 0; // 64-bit RNG offset; 0 = unset
+    bool use_host_scalars = false;
+    memory::format_tag mask_tag
+            = memory::format_tag::any; // any = output mask; undef = no mask
+
+    dropout_config_t() = default;
+    dropout_config_t(float probability_, int64_t seed_,
+            memory::data_type seed_dt_ = mdt::s64, int64_t offset_ = 0,
+            bool use_host_scalars_ = false,
+            memory::format_tag mask_tag_ = memory::format_tag::any)
+        : probability(probability_)
+        , seed(seed_)
+        , seed_dt(seed_dt_)
+        , offset(offset_)
+        , use_host_scalars(use_host_scalars_)
+        , mask_tag(mask_tag_) {}
+
+    bool enabled() const { return probability > 0.0f; }
+    bool has_output_mask() const {
+        return mask_tag != memory::format_tag::undef;
+    }
+};
+
+std::ostream &operator<<(std::ostream &ss, const dropout_config_t &d) {
+    if (!d.enabled()) {
+        ss << "dropout_none";
+    } else {
+        // Replace '.' in probability float with 'p' so the name stays
+        // alphanumeric-plus-underscore (GTest requirement).
+        std::string prob_str = std::to_string(d.probability);
+        for (char &c : prob_str)
+            if (c == '.') c = 'p';
+        ss << "dropout_" << prob_str << "_s" << d.seed;
+        if (d.offset != 0) ss << "_o" << d.offset;
+        if (!d.has_output_mask()) ss << "_nomask";
+    }
+    return ss;
+}
+
+static const dropout_config_t no_dropout {};
+
 using sdpa_dims_t_tuple = std::tuple<int, num_heads_t, seq_len_size_t,
         head_group_size_t, tensor_type_t, tensor_type_t, tensor_type_t,
-        quantize_type, tag_t, mask_config_t, scale_type, accumulation_t>;
+        quantize_type, tag_t, mask_config_t, scale_type, accumulation_t,
+        dropout_config_t>;
 
 struct sdpa_dims_t {
     memory::dim mb;
@@ -217,6 +266,7 @@ struct sdpa_dims_t {
     mask_config_t mask;
     scale_type stype;
     accumulation_t acc_modes;
+    dropout_config_t dropout;
 
     sdpa_dims_t() = default;
     sdpa_dims_t(memory::dim mb_, memory::dim head_num_,
@@ -232,7 +282,8 @@ struct sdpa_dims_t {
             mask_type mask_ = mask_type::no_mask,
             scale_type stype_ = default_scale_type,
             accumulation_mode kq_acc_ = accumulation_mode::f32,
-            accumulation_mode vs_acc_ = accumulation_mode::f32)
+            accumulation_mode vs_acc_ = accumulation_mode::f32,
+            dropout_config_t dropout_ = no_dropout)
         : mb(mb_)
         , heads {head_num_, kv_head_num_}
         , seq_len {query_num_, seq_len_}
@@ -244,7 +295,8 @@ struct sdpa_dims_t {
         , key_format_tag(key_format_tag_)
         , mask {mask_, mskdt_}
         , stype(stype_)
-        , acc_modes {kq_acc_, vs_acc_} {}
+        , acc_modes {kq_acc_, vs_acc_}
+        , dropout(dropout_) {}
 
     sdpa_dims_t(const sdpa_dims_t_tuple &dims)
         : mb(std::get<0>(dims))
@@ -258,7 +310,8 @@ struct sdpa_dims_t {
         , key_format_tag(std::get<8>(dims))
         , mask(std::get<9>(dims))
         , stype(std::get<10>(dims))
-        , acc_modes(std::get<11>(dims)) {}
+        , acc_modes(std::get<11>(dims))
+        , dropout(std::get<12>(dims)) {}
 };
 
 struct sdpa_tensors_t {
@@ -266,6 +319,10 @@ struct sdpa_tensors_t {
     memory m_key_quantized, m_value_quantized, m_output_quantized;
     memory m_scale; // tested sdpa arg, can be host-side scalar
     memory m_scale_prim; // reference (prim) sdpa arg
+    memory m_dropout_prob, m_dropout_seed, m_dropout_offset;
+
+    memory m_diff_query, m_diff_key, m_diff_value, m_diff_output, m_dS;
+    memory m_diff_query_quantized, m_diff_key_quantized, m_diff_value_quantized;
 
     memory m_key_scales, m_key_zp, m_value_scales, m_value_zp;
     dnnl::primitive_attr sdpa_attr_quantized, sdpa_kq_attr_quantized,
@@ -323,6 +380,7 @@ std::ostream &operator<<(std::ostream &ss, const sdpa_dims_t &p) {
         ss << "_devicescale";
     if (p.acc_modes.kq_acc == accumulation_mode::f16) ss << "_kqf16acc";
     if (p.acc_modes.vs_acc == accumulation_mode::f16) ss << "_vsf16acc";
+    if (p.dropout.enabled()) ss << "_" << p.dropout;
     return ss;
 }
 
@@ -361,7 +419,7 @@ std::string print_row(const sdpa_dims_t &p) {
     ss << "|" << p.seq_len.kv;
     ss << "|" << p.seq_len.q;
     ss << "|" << p.key.dt;
-    if (!(p.key.dt == mdt::f16 || p.value.dt == mdt::bf16)
+    if (!(p.key.dt == mdt::f16 || p.key.dt == mdt::bf16)
             && p.qtype != quantize_type::no_quantization) {
         ss << "/" << p.key.sdt;
         ss << "/" << p.key.zpdt;
@@ -519,6 +577,7 @@ sdpa_tensors_t get_descriptors(dnnl::engine &eng, dnnl::stream &strm,
             = {p.mb, p.heads.kv, p.seq_len.kv * 2, p.head_group.head_size};
     const memory::dims v_sz
             = {p.mb, p.heads.kv, p.seq_len.kv, p.head_group.head_size};
+    const memory::dims dS_sz = {p.mb, p.heads.q, p.seq_len.q, p.seq_len.kv};
     const memory::dims scale_sz = {1, 1, 1, 1};
 
     bool with_host_scale = p.stype == scale_type::host_side;
@@ -562,7 +621,7 @@ sdpa_tensors_t get_descriptors(dnnl::engine &eng, dnnl::stream &strm,
 
     memory::dims mask_sz;
     switch (p.mask.type) {
-        case mask_type::no_mask: mask_sz = {};
+        case mask_type::no_mask: mask_sz = {}; break;
         case mask_type::oneD: mask_sz = {1, 1, 1, p.seq_len.kv}; break;
         case mask_type::causal_br:
         case mask_type::causal_tl:
@@ -602,24 +661,45 @@ sdpa_tensors_t get_descriptors(dnnl::engine &eng, dnnl::stream &strm,
     auto mask_md             = memory::desc(mask_sz,       p.mask.dt != mdt::undef ? p.mask.dt : p.dt.dt,   abcd);
     auto output_md           = memory::desc(q_sz,          p.dt.dt,     abcd);
     auto output_quantized_md = memory::desc(q_sz,          p.dt.dt,     abcd);
+
+    auto dS_md            = memory::desc(dS_sz,          p.dt.dt,      abcd);
     // clang-format on
 
     // Create memory objects
     out.m_query = double_and_resize(query_md, eng, strm, doubled_memory);
+    out.m_diff_query = double_and_resize(query_md, eng, strm, doubled_memory);
+    out.m_diff_query_quantized
+            = double_and_resize(query_md, eng, strm, doubled_memory);
+
     out.m_key_quantized
             = double_and_resize(key_quantized_md, eng, strm, doubled_memory);
+    out.m_diff_key
+            = double_and_resize(key_quantized_md, eng, strm, doubled_memory);
+    out.m_diff_key_quantized
+            = double_and_resize(key_quantized_md, eng, strm, doubled_memory);
+
     out.m_key_scales
             = double_and_resize(key_scales_md, eng, strm, doubled_memory);
     out.m_key_zp = double_and_resize(key_zp_md, eng, strm, doubled_memory);
+
     out.m_value_quantized
             = double_and_resize(val_quantized_md, eng, strm, doubled_memory);
+    out.m_diff_value
+            = double_and_resize(val_quantized_md, eng, strm, doubled_memory);
+    out.m_diff_value_quantized
+            = double_and_resize(val_quantized_md, eng, strm, doubled_memory);
+
     out.m_value_scales
             = double_and_resize(val_scales_md, eng, strm, doubled_memory);
     out.m_value_zp = double_and_resize(val_zp_md, eng, strm, doubled_memory);
     out.m_mask = double_and_resize(mask_md, eng, strm, doubled_memory);
+
     out.m_output = double_and_resize(output_md, eng, strm, doubled_memory);
     out.m_output_quantized
             = double_and_resize(output_quantized_md, eng, strm, doubled_memory);
+    out.m_diff_output = double_and_resize(output_md, eng, strm, doubled_memory);
+
+    out.m_dS = double_and_resize(dS_md, eng, strm, doubled_memory);
 
     // Allocate user data.
     std::vector<float> query_data(product(q_sz), 0.f);
@@ -628,6 +708,7 @@ sdpa_tensors_t get_descriptors(dnnl::engine &eng, dnnl::stream &strm,
     std::vector<float> val_quantized_data(product(v_sz), 0);
     std::vector<float> key_scale_data(product(key_scales_sz), std::nanf("1"));
     std::vector<float> val_scale_data(product(val_scales_sz), std::nanf("1"));
+    std::vector<float> diff_output_data(product(q_sz), 0.f);
 
     std::vector<int> key_zp_data_signed(product(key_scales_sz), INT_MAX);
     std::vector<int> val_zp_data_signed(product(val_scales_sz), INT_MAX);
@@ -637,6 +718,7 @@ sdpa_tensors_t get_descriptors(dnnl::engine &eng, dnnl::stream &strm,
 
     std::vector<float> mask_data(product(mask_sz), NAN);
     std::vector<float> output_data(product(q_sz), NAN);
+    std::vector<float> dS_data(product(dS_sz), 0);
 
     out.sdpa_attr_quantized.set_scratchpad_mode(dnnl::scratchpad_mode::library);
 
@@ -699,7 +781,57 @@ sdpa_tensors_t get_descriptors(dnnl::engine &eng, dnnl::stream &strm,
         }
     }
 
+    if (p.dropout.enabled()) {
+        // Mask descriptor: u8, same 4D shape as the score matrix
+        // {mb, heads_q, seq_len_q, seq_len_kv} — matches the SDPA query rank
+        // and satisfies the documentation requirement that the mask has the
+        // same dimensions as the softmax src/dst (the score tensor).
+        memory::desc mask_desc;
+        if (p.dropout.has_output_mask()) {
+            const memory::dims score_sz_4d
+                    = {p.mb, p.heads.q, p.seq_len.q, p.seq_len.kv};
+            mask_desc = memory::desc(
+                    score_sz_4d, mdt::u8, memory::format_tag::abcd);
+        }
+        out.sdpa_attr_quantized.set_dropout(mask_desc, p.dropout.seed_dt,
+                p.dropout.offset != 0, p.dropout.use_host_scalars);
+
+        if (p.dropout.use_host_scalars) {
+            out.m_dropout_prob = memory(
+                    memory::desc::host_scalar(mdt::f32), p.dropout.probability);
+            if (p.dropout.seed_dt != mdt::s64) {
+                throw std::runtime_error(
+                        "SDPA dropout host scalar seed_dt must be s64");
+            }
+            out.m_dropout_seed = memory(memory::desc::host_scalar(mdt::s64),
+                    static_cast<int64_t>(p.dropout.seed));
+            if (p.dropout.offset != 0) {
+                out.m_dropout_offset
+                        = memory(memory::desc::host_scalar(mdt::s64),
+                                static_cast<int64_t>(p.dropout.offset));
+            }
+        } else {
+            auto prob_md = memory::desc({1}, mdt::f32, memory::format_tag::a);
+            auto seed_md = memory::desc(
+                    {1}, p.dropout.seed_dt, memory::format_tag::a);
+            out.m_dropout_prob = memory(prob_md, eng);
+            out.m_dropout_seed = memory(seed_md, eng);
+            float prob = p.dropout.probability;
+            int64_t seed = p.dropout.seed;
+            write_to_dnnl_memory(&prob, out.m_dropout_prob, eng, strm);
+            write_to_dnnl_memory(&seed, out.m_dropout_seed, eng, strm);
+            if (p.dropout.offset != 0) {
+                auto offset_md
+                        = memory::desc({1}, mdt::s64, memory::format_tag::a);
+                out.m_dropout_offset = memory(offset_md, eng);
+                int64_t off = p.dropout.offset;
+                write_to_dnnl_memory(&off, out.m_dropout_offset, eng, strm);
+            }
+        }
+    }
+
     fill_random(query_data, query_md);
+    fill_random(diff_output_data, output_md);
     fill_random_quantized(key_quantized_data, key_quantized_md,
             (p.key.dt == mdt::u4 || p.key.dt == mdt::u8));
     fill_random_quantized(val_quantized_data, val_quantized_md,
@@ -912,6 +1044,8 @@ sdpa_tensors_t get_descriptors(dnnl::engine &eng, dnnl::stream &strm,
     // Write data to tensor object's handle.
     write_to_dnnl_memory(query_data.data(), out.m_query, eng, strm);
 
+    write_to_dnnl_memory(diff_output_data.data(), out.m_diff_output, eng, strm);
+
     write_to_dnnl_memory(
             key_quantized_data.data(), out.m_key_quantized, eng, strm);
 
@@ -962,6 +1096,7 @@ sdpa_tensors_t get_descriptors(dnnl::engine &eng, dnnl::stream &strm,
         setup_device_scale(&out.m_scale);
     setup_device_scale(&out.m_scale_prim);
 
+    write_to_dnnl_memory(dS_data.data(), out.m_dS, eng, strm);
     return out;
 }
 
@@ -1023,6 +1158,7 @@ void prim_sdpa_quant(const sdpa_dims_t &p, const sdpa_tensors_t &t,
         dnnl::memory::data_type scale_dt, dnnl::memory &scale_device,
         dnnl::memory &mask, dnnl::memory &value, dnnl::memory &value_scales,
         dnnl::memory &value_zp, dnnl::memory &output, bool invert_scale,
+        dnnl::memory *dropout_mask_out,
         std::vector<dnnl_memory_t> &doubled_memory) {
     using namespace dnnl;
     primitive_attr bmm1_attr;
@@ -1153,9 +1289,9 @@ void prim_sdpa_quant(const sdpa_dims_t &p, const sdpa_tensors_t &t,
     }
     auto bmm1_pd = is_kq_acc_f16
             ? matmul::primitive_desc(eng, grouped_query_md,
-                    key_dequantized.get_desc(), score_f16_md, bmm1_attr)
+                      key_dequantized.get_desc(), score_f16_md, bmm1_attr)
             : matmul::primitive_desc(eng, grouped_query_md,
-                    key_dequantized.get_desc(), score_md, bmm1_attr);
+                      key_dequantized.get_desc(), score_md, bmm1_attr);
     auto bmm1_prim = matmul(bmm1_pd);
 
     // reorder primitive to convert f16 to f32 after bmm1
@@ -1163,7 +1299,7 @@ void prim_sdpa_quant(const sdpa_dims_t &p, const sdpa_tensors_t &t,
             = dnnl::reorder::primitive_desc(eng, score_f16_md, eng, score_md);
     auto f16_to_f32_prim = dnnl::reorder(f16_to_f32_pd);
 
-    // binary primitive for scaling (f32)
+    // binary primitive for scaling
     primitive_attr binary_attr;
     auto scale_algo
             = invert_scale ? algorithm::binary_div : algorithm::binary_mul;
@@ -1187,13 +1323,26 @@ void prim_sdpa_quant(const sdpa_dims_t &p, const sdpa_tensors_t &t,
     // softmax primitive
     primitive_attr softmax_attr;
     softmax_attr.set_scratchpad_mode(scratchpad_mode::library);
-    auto softmax_pd = softmax_forward::primitive_desc(eng,
+    if (p.dropout.enabled()) {
+        memory::desc mask_desc;
+        if (p.dropout.has_output_mask()) {
+            // Dropout mask must match the softmax src/dst shape (score_sz),
+            // not q_sz (which has head_size in the last dim, not seq_len.kv).
+            // score_sz is 5D so always use abcde.
+            mask_desc = memory::desc(
+                    score_sz, mdt::u8, memory::format_tag::abcde);
+        }
+        softmax_attr.set_dropout(mask_desc, p.dropout.seed_dt,
+                p.dropout.offset != 0, p.dropout.use_host_scalars);
+    }
+    softmax_forward::primitive_desc softmax_pd;
+    softmax_forward softmax_prim;
+    softmax_pd = softmax_forward::primitive_desc(eng,
             prop_kind::forward_inference,
             (algorithm)dnnl::impl::alg_kind::softmax_accurate_inf_as_zero,
             score.get_desc(), score.get_desc(), 4, softmax_attr);
-    auto softmax_prim = softmax_forward(softmax_pd);
+    softmax_prim = softmax_forward(softmax_pd);
 
-    // reorder primitive to convert f32 to f16 before bmm2
     auto f32_to_f16_pd
             = dnnl::reorder::primitive_desc(eng, score_md, eng, score_f16_md);
     auto f32_to_f16_prim = dnnl::reorder(f32_to_f16_pd);
@@ -1214,9 +1363,9 @@ void prim_sdpa_quant(const sdpa_dims_t &p, const sdpa_tensors_t &t,
     // matmul primitive for VS
     auto bmm2_pd = is_vs_acc_f16
             ? matmul::primitive_desc(eng, score_f16_md, grouped_value_md,
-                    grouped_output_f16_md, bmm2_attr)
+                      grouped_output_f16_md, bmm2_attr)
             : matmul::primitive_desc(eng, score_md, grouped_value_md,
-                    grouped_query_md, bmm2_attr);
+                      grouped_query_md, bmm2_attr);
     auto bmm2_prim = matmul(bmm2_pd);
 
     // reorder primitive to convert f16 to f32 after bmm2
@@ -1281,11 +1430,22 @@ void prim_sdpa_quant(const sdpa_dims_t &p, const sdpa_tensors_t &t,
         }
 
         // softmax
-        softmax_prim.execute(strm,
-                {
-                        {DNNL_ARG_SRC, score},
-                        {DNNL_ARG_DST, score2},
-                });
+        std::unordered_map<int, memory> softmax_args
+                = {{DNNL_ARG_SRC, score}, {DNNL_ARG_DST, score2}};
+        if (p.dropout.enabled()) {
+            softmax_args[DNNL_ARG_ATTR_DROPOUT_PROBABILITY] = t.m_dropout_prob;
+            softmax_args[DNNL_ARG_ATTR_DROPOUT_SEED] = t.m_dropout_seed;
+            if (p.dropout.offset != 0) {
+                softmax_args[DNNL_ARG_ATTR_DROPOUT_OFFSET] = t.m_dropout_offset;
+            }
+            if (p.dropout.has_output_mask()) {
+                auto dropout_mask_md = softmax_pd.query_md(
+                        dnnl::query::exec_arg_md, DNNL_ARG_ATTR_DROPOUT_MASK);
+                *dropout_mask_out = memory(dropout_mask_md, eng);
+                softmax_args[DNNL_ARG_ATTR_DROPOUT_MASK] = *dropout_mask_out;
+            }
+        }
+        softmax_prim.execute(strm, softmax_args);
 
         if (is_vs_acc_f16) {
             // convert f16 output back to f32
@@ -1309,12 +1469,516 @@ void prim_sdpa_quant(const sdpa_dims_t &p, const sdpa_tensors_t &t,
     loop();
 
     strm.wait();
+
     void *output_ptr_ = (void *)output.map_data();
     void *grouped_output_ptr_ = (void *)grouped_output.map_data();
     memcpy(output_ptr_, grouped_output_ptr_, grouped_query_md.get_size());
     grouped_output.unmap_data(grouped_output_ptr_);
     output.unmap_data(output_ptr_);
     strm.wait();
+}
+
+std::vector<std::chrono::nanoseconds> timeit(
+        const std::function<void()> &func, dnnl::stream &str, int iterations) {
+    using namespace std::chrono;
+    func();
+    func();
+    std::vector<std::chrono::nanoseconds> times;
+    for (int j = 0; j < 5; j++) {
+        auto e = steady_clock::now();
+        str.wait();
+        auto s = steady_clock::now();
+        for (int i = 0; i < iterations; i++) {
+            func();
+        }
+        str.wait();
+        e = steady_clock::now();
+        times.push_back(std::chrono::duration_cast<nanoseconds>(e - s));
+    }
+    return times;
+}
+
+std::chrono::nanoseconds prim_sdpa_quant_bwd(const sdpa_dims_t &p,
+        const sdpa_tensors_t &t, dnnl::engine &eng, dnnl::stream &strm,
+        dnnl::memory &query, dnnl::memory &key,
+        dnnl::memory::data_type scale_dt, dnnl::memory &scale,
+        dnnl::memory &mask, dnnl::memory &value, dnnl::memory &output,
+        dnnl::memory &diff_output, bool invert_scale,
+        std::vector<dnnl_memory_t> &doubled_memory, dnnl::memory &diff_query,
+        dnnl::memory &diff_key, dnnl::memory &diff_value,
+        bool with_timing = false) {
+
+    using namespace dnnl;
+
+    primitive_attr bmm1_attr;
+    bmm1_attr.set_scratchpad_mode(dnnl::scratchpad_mode::library);
+
+    post_ops bmm1_po;
+    auto scale_f32 = as(strm, scale, mdt::f32);
+    auto mask_f32 = as(strm, mask, mdt::f32);
+    auto mask_sz = mask.get_desc().get_dims();
+
+    if (scale_dt != mdt::undef) {
+        scale_f32 = reshape(strm, scale_f32,
+                {{1, 1, 1, 1, 1}, mdt::f32, memory::format_tag::abcde});
+        if (invert_scale)
+            bmm1_po.append_binary(algorithm::binary_div, scale_f32.get_desc());
+        else
+            bmm1_po.append_binary(algorithm::binary_mul, scale_f32.get_desc());
+    }
+    if (p.mask.type != mask_type::no_mask) {
+        mask_f32 = reshape(strm, mask_f32,
+                {{mask_sz[0], 1, 1, mask_sz[2], mask_sz[3]}, mdt::f32,
+                        memory::format_tag::abcde});
+        bmm1_po.append_binary(algorithm::binary_add, mask_f32.get_desc());
+    }
+    bmm1_attr.set_post_ops(bmm1_po);
+    // Keep a copy of the 5D scale for the backward pass.
+    // bmm1_args will std::move scale_f32, so save it before that happens.
+    memory scale_f32_bwd = scale_f32;
+
+    int head_kv_group_size = 0;
+    int head_q_group_size = 0;
+    int head_group_batches = 0;
+    if (p.heads.kv == p.heads.q) {
+        head_kv_group_size = p.heads.kv;
+        head_q_group_size = p.heads.q;
+        head_group_batches = 1;
+    } else {
+        head_kv_group_size = 1;
+        head_q_group_size = p.heads.q / p.heads.kv;
+        head_group_batches = p.heads.kv;
+    }
+
+    auto original_k_sz = key.get_desc().get_dims();
+    const memory::dims k_sz {p.mb, head_group_batches, head_kv_group_size,
+            original_k_sz[2], original_k_sz[3]};
+    const memory::dims v_sz {p.mb, head_group_batches, head_kv_group_size,
+            p.seq_len.kv, p.head_group.head_size};
+    const memory::dims q_sz {p.mb, head_group_batches, head_q_group_size,
+            p.seq_len.q, p.head_group.head_size};
+
+    memory::desc grouped_key_md(k_sz, p.dt.dt, memory::format_tag::abcde);
+    memory::desc grouped_value_md(v_sz, p.dt.dt, memory::format_tag::abcde);
+    memory::desc grouped_query_md(q_sz, p.dt.dt, memory::format_tag::abcde);
+
+    memory key_dequantized;
+    auto keytmp = as(strm, key, p.dt.dt);
+    grouped_key_md = p.key_format_tag == memory::format_tag::abcd
+            ? memory::desc(k_sz, p.dt.dt, memory::format_tag::abcde)
+            : memory::desc(k_sz, p.dt.dt, memory::format_tag::abced);
+
+    key_dequantized = reshape(strm, keytmp, grouped_key_md);
+
+    memory value_dequantized;
+    auto value32 = as(strm, value, p.dt.dt);
+    value_dequantized = reshape(strm, value32, grouped_value_md);
+
+    memory grouped_query = reshape(strm, query, grouped_query_md);
+
+    const memory::dims score_sz = {p.mb, head_group_batches, head_q_group_size,
+            p.seq_len.q, p.seq_len.kv};
+    memory::desc score_md {score_sz, mdt::f32, memory::format_tag::abcde};
+    memory::desc score_f16_md {score_sz, mdt::f16, memory::format_tag::abcde};
+
+    auto score = memory(score_md, eng);
+    auto score_f16 = memory(score_f16_md, eng);
+    auto score2 = memory(score_md, eng);
+    auto score2_f16 = memory(score_f16_md, eng);
+
+    // matmul primitive for QK
+    auto bmm1_pd = matmul::primitive_desc(eng, grouped_query_md,
+            key_dequantized.get_desc(), score_md, bmm1_attr);
+    auto bmm1_prim = matmul(bmm1_pd);
+
+    // softmax forward
+    primitive_attr softmax_attr;
+    auto softmax_fwd_pd = softmax_forward::primitive_desc(eng,
+            prop_kind::forward_training,
+            (algorithm)dnnl::impl::alg_kind::softmax_accurate_inf_as_zero,
+            score.get_desc(), score.get_desc(), 4, softmax_attr);
+    auto softmax_prim = softmax_forward(softmax_fwd_pd);
+
+    // Apply dropout as a separate eltwise (identity) primitive so that
+    // score2 retains the un-dropped softmax output P for the backward pass.
+    auto score2_dropped = p.dropout.enabled() ? memory(score_md, eng) : score2;
+    eltwise_forward dropout_eltwise;
+    if (p.dropout.enabled()) {
+        primitive_attr dropout_attr;
+        dropout_attr.set_scratchpad_mode(scratchpad_mode::library);
+        memory::desc mask_desc = {};
+        dropout_attr.set_dropout(mask_desc, p.dropout.seed_dt,
+                p.dropout.offset != 0, p.dropout.use_host_scalars);
+        auto dropout_pd = eltwise_forward::primitive_desc(eng,
+                prop_kind::forward_inference, algorithm::eltwise_linear,
+                score_md, score_md, 1.0f, 0.0f, dropout_attr);
+        dropout_eltwise = eltwise_forward(dropout_pd);
+    }
+
+    // attention_output = attention_probs x value
+    primitive_attr bmm2_attr;
+
+    bmm2_attr.set_scratchpad_mode(scratchpad_mode::library);
+    auto grouped_output
+            = double_and_resize(grouped_query_md, eng, strm, doubled_memory);
+    auto bmm2_pd = matmul::primitive_desc(
+            eng, score_md, grouped_value_md, grouped_query_md, bmm2_attr);
+    auto bmm2_prim = matmul(bmm2_pd);
+
+    // setup args
+    std::unordered_map<int, memory> bmm1_args = {{DNNL_ARG_SRC, grouped_query},
+            {DNNL_ARG_WEIGHTS, key_dequantized}, {DNNL_ARG_DST, score}};
+
+    if (scale_dt != mdt::undef) {
+        bmm1_args[DNNL_ARG_ATTR_MULTIPLE_POST_OP(0) | DNNL_ARG_SRC_1]
+                = std::move(scale_f32);
+        if (p.mask.type != mask_type::no_mask) {
+            bmm1_args[DNNL_ARG_ATTR_MULTIPLE_POST_OP(1) | DNNL_ARG_SRC_1]
+                    = std::move(mask_f32);
+        }
+    } else {
+        if (p.mask.type != mask_type::no_mask) {
+            bmm1_args[DNNL_ARG_ATTR_MULTIPLE_POST_OP(0) | DNNL_ARG_SRC_1]
+                    = std::move(mask_f32);
+        }
+    }
+
+    std::unordered_map<int, memory> bmm2_args = {{DNNL_ARG_SRC, score2_dropped},
+            {DNNL_ARG_WEIGHTS, value_dequantized},
+            {DNNL_ARG_DST, grouped_output}};
+
+    const auto fwd_loop = [&]() {
+        // QK
+        bmm1_prim.execute(strm, bmm1_args);
+
+        // softmax (no dropout — keeps un-dropped P in score2)
+        softmax_prim.execute(
+                strm, {{DNNL_ARG_SRC, score}, {DNNL_ARG_DST, score2}});
+
+        // apply dropout separately: score2 -> score2_dropped
+        if (p.dropout.enabled()) {
+            std::unordered_map<int, memory> dropout_args
+                    = {{DNNL_ARG_SRC, score2}, {DNNL_ARG_DST, score2_dropped}};
+            dropout_args[DNNL_ARG_ATTR_DROPOUT_PROBABILITY] = t.m_dropout_prob;
+            dropout_args[DNNL_ARG_ATTR_DROPOUT_SEED] = t.m_dropout_seed;
+            if (p.dropout.offset != 0) {
+                dropout_args[DNNL_ARG_ATTR_DROPOUT_OFFSET] = t.m_dropout_offset;
+            }
+            dropout_eltwise.execute(strm, dropout_args);
+        }
+
+        // SV (uses dropped P)
+        bmm2_prim.execute(strm, bmm2_args);
+    };
+
+    // Warmup run.
+    // Execute primitives of sdpa.
+    fwd_loop();
+    strm.wait();
+
+#if DEBUG_PRINT_MEM
+    print_mem(grouped_query, "FWD grouped_query");
+    print_mem(key_dequantized, "FWD keq_deq");
+    print_mem(scale, "FWD scale");
+    if (p.mask.type != mask_type::no_mask) { print_mem(mask, "FWD mask"); }
+    print_mem(score, "FWD intermediate score");
+    print_mem(score2, "FWD intermediate score2");
+#endif
+
+    void *output_ptr_ = (void *)output.map_data();
+    void *grouped_output_ptr_ = (void *)grouped_output.map_data();
+    memcpy(output_ptr_, grouped_output_ptr_, grouped_query_md.get_size());
+    grouped_output.unmap_data(grouped_output_ptr_);
+    output.unmap_data(output_ptr_);
+
+    strm.wait();
+
+    // end forward portion
+    // backwards pass of SDPA
+
+    // init incoming gradient, dO
+    memory::desc grouped_output_md = grouped_output.get_desc();
+    memory dO_mem = reshape(strm, diff_output, grouped_output_md);
+
+#if DEBUG_PRINT_MEM
+    printf("\n\n================\n\n\n");
+    print_mem(dO_mem, "BWD incoming dO");
+#endif
+
+    ///////// final MM
+    // matmul forward, O = s2 * v
+
+    // init v, score2 gradients
+    memory::desc diff_score2_md(score_sz, mdt::f32, memory::format_tag::abcde);
+    memory dV_mem(grouped_value_md, eng);
+    memory diff_score2_mem(diff_score2_md, eng);
+
+    // backwards pass gradient of s2 (dS2 = dO * v^t)
+    memory::desc v_t_md
+            = memory::desc({v_sz[0], v_sz[1], v_sz[2], v_sz[4], v_sz[3]},
+                    /*dO.get_dt*/ p.dt.dt, memory::format_tag::abced);
+    primitive_attr mm_bwd_dS2_attr;
+    mm_bwd_dS2_attr.set_scratchpad_mode(scratchpad_mode::library);
+    matmul::primitive_desc mm_bwd_dS2_pd(
+            eng, grouped_output_md, v_t_md, diff_score2_md, mm_bwd_dS2_attr);
+    matmul mm_bwd_dS2(mm_bwd_dS2_pd);
+    std::unordered_map<int, memory> mm_bwd_dS2_args
+            = {{DNNL_ARG_SRC, dO_mem}, {DNNL_ARG_WEIGHTS, value_dequantized},
+                    {DNNL_ARG_DST, diff_score2_mem}};
+    mm_bwd_dS2.execute(strm, mm_bwd_dS2_args);
+    strm.wait();
+
+#if DEBUG_PRINT_MEM
+    print_mem(diff_score2_mem, "BWD dS2");
+#endif
+
+    // backwards pass gradient of v (dV = s2^t * dO)
+
+    // downcast score to p.dt.dt
+    memory::desc s2_t_md = memory::desc(
+            {score_sz[0], score_sz[1], score_sz[2], score_sz[4], score_sz[3]},
+            p.dt.dt, memory::format_tag::abced);
+
+    // dV uses P_dropped (score2_dropped) to match the kernel
+    memory score2_downcast;
+    auto score32 = as(strm, score2_dropped, p.dt.dt);
+    score2_downcast = reshape(strm, score32, s2_t_md);
+
+    const bool is_gqa = (head_q_group_size != head_kv_group_size);
+    memory::dims dV_full_dims = {v_sz[0], v_sz[1],
+            is_gqa ? head_q_group_size : head_kv_group_size, v_sz[3], v_sz[4]};
+    memory::desc dV_full_md(dV_full_dims, p.dt.dt, memory::format_tag::abcde);
+    memory dV_full_mem = is_gqa ? memory(dV_full_md, eng) : dV_mem;
+    matmul::primitive_desc mm_bwd_dV_pd(
+            eng, s2_t_md, grouped_output_md, dV_full_mem.get_desc());
+    matmul mm_bwd_dV(mm_bwd_dV_pd);
+    mm_bwd_dV.execute(strm,
+            {{DNNL_ARG_SRC, score2_downcast}, {DNNL_ARG_WEIGHTS, dO_mem},
+                    {DNNL_ARG_DST, dV_full_mem}});
+    strm.wait();
+    // reduce [mb, groups, hq_group, kv, D] -> [mb, groups, 1, kv, D] for GQA
+    dnnl::reduction dV_reduce;
+    if (is_gqa) {
+        dnnl::reduction::primitive_desc dV_reduce_pd(eng,
+                algorithm::reduction_sum, dV_full_md, grouped_value_md, 0.f,
+                0.f);
+        dV_reduce = dnnl::reduction(dV_reduce_pd);
+        dV_reduce.execute(
+                strm, {{DNNL_ARG_SRC, dV_full_mem}, {DNNL_ARG_DST, dV_mem}});
+        strm.wait();
+    }
+
+#if DEBUG_PRINT_MEM
+    print_mem(dV_mem, "BWD dV");
+#endif
+
+    ///////// intermediate softmax(QK)
+
+    // compute softmax backward and scale in f32 to match kernel/graph
+    memory::desc diff_score_f32_md(
+            score_sz, mdt::f32, memory::format_tag::abcde);
+    memory diff_score_f32_mem(diff_score_f32_md, eng);
+
+    // Apply dropout Jacobian to dP_raw: dP = dP_raw * Z / q
+    if (p.dropout.enabled()) {
+        std::unordered_map<int, memory> dropout_bwd_args
+                = {{DNNL_ARG_SRC, diff_score2_mem},
+                        {DNNL_ARG_DST, diff_score2_mem}};
+        dropout_bwd_args[DNNL_ARG_ATTR_DROPOUT_PROBABILITY] = t.m_dropout_prob;
+        dropout_bwd_args[DNNL_ARG_ATTR_DROPOUT_SEED] = t.m_dropout_seed;
+        if (p.dropout.offset != 0) {
+            dropout_bwd_args[DNNL_ARG_ATTR_DROPOUT_OFFSET] = t.m_dropout_offset;
+        }
+        dropout_eltwise.execute(strm, dropout_bwd_args);
+        strm.wait();
+    }
+
+    // backwards pass gradient of softmax (uses un-dropped P as DST)
+    softmax_backward::primitive_desc softmax_bwd_pd(eng,
+            algorithm::softmax_accurate, diff_score_f32_md, diff_score2_md,
+            score_md, 4, softmax_fwd_pd);
+    softmax_backward softmax_bwd(softmax_bwd_pd);
+    softmax_bwd.execute(strm,
+            {{DNNL_ARG_DST, score2}, {DNNL_ARG_DIFF_DST, diff_score2_mem},
+                    {DNNL_ARG_DIFF_SRC, diff_score_f32_mem}});
+
+    binary scale_bwd_prim;
+    if (scale_dt != mdt::undef) {
+        auto scale_algo_bwd
+                = invert_scale ? algorithm::binary_div : algorithm::binary_mul;
+        auto scale_bwd_pd = binary::primitive_desc(eng, scale_algo_bwd,
+                diff_score_f32_md, scale_f32_bwd.get_desc(), diff_score_f32_md);
+        scale_bwd_prim = binary(scale_bwd_pd);
+        scale_bwd_prim.execute(strm,
+                {{DNNL_ARG_SRC_0, diff_score_f32_mem},
+                        {DNNL_ARG_SRC_1, scale_f32_bwd},
+                        {DNNL_ARG_DST, diff_score_f32_mem}});
+    }
+
+    // downcast dS from f32 to p.dt.dt for dQ/dK matmuls
+    memory::desc diff_score_md(score_sz, p.dt.dt, memory::format_tag::abcde);
+    memory diff_score_mem(diff_score_md, eng);
+    dnnl::reorder diff_score_cast(diff_score_f32_mem, diff_score_mem);
+    diff_score_cast.execute(strm, diff_score_f32_mem, diff_score_mem);
+
+    strm.wait();
+    // print softmax gradient
+#if DEBUG_PRINT_MEM
+    print_mem(diff_score_mem, "BWD dS");
+#endif
+
+    ///////// first MM
+    // matmul forward, s = q * k
+
+    // init q,k gradients
+    memory dQ_mem(grouped_query_md, eng);
+    memory dK_mem(key_dequantized.get_desc(), eng);
+
+    // backwards pass gradient of q (dQ = dS * k^t)
+    // k^t requires transposed format and dims
+    auto k_t_fmt = p.key_format_tag == memory::format_tag::abcd
+            ? memory::format_tag::abced
+            : memory::format_tag::abcde;
+    memory::desc k_t_md = memory::desc(
+            {k_sz[0], k_sz[1], k_sz[2], k_sz[4], k_sz[3]}, p.dt.dt, k_t_fmt);
+    matmul::primitive_desc mm_bwd_dq_pd(
+            eng, diff_score_md, k_t_md, grouped_query_md);
+    matmul mm_bwd_dq(mm_bwd_dq_pd);
+    mm_bwd_dq.execute(strm,
+            {{DNNL_ARG_SRC, diff_score_mem},
+                    {DNNL_ARG_WEIGHTS, key_dequantized},
+                    {DNNL_ARG_DST, dQ_mem}});
+    strm.wait();
+
+    // backwards pass gradient of k (dK = q^t * dS)
+    memory::desc q_t_md({q_sz[0], q_sz[1], q_sz[2], q_sz[4], q_sz[3]}, p.dt.dt,
+            memory::format_tag::abced);
+
+    // for GQA cases, perform additional reduction of dK along headq_group
+    auto key_fmt = p.key_format_tag == memory::format_tag::abcd
+            ? memory::format_tag::abcde
+            : memory::format_tag::abced;
+    memory::dims dK_full_dims = {k_sz[0], k_sz[1],
+            is_gqa ? head_q_group_size : head_kv_group_size, k_sz[3], k_sz[4]};
+    memory::desc dK_full_md(dK_full_dims, p.dt.dt, key_fmt);
+    memory dK_full_mem = is_gqa ? memory(dK_full_md, eng) : dK_mem;
+    matmul::primitive_desc mm_bwd_dk_pd(
+            eng, q_t_md, diff_score_md, dK_full_mem.get_desc());
+    matmul mm_bwd_dk(mm_bwd_dk_pd);
+    mm_bwd_dk.execute(strm,
+            {{DNNL_ARG_SRC, grouped_query}, {DNNL_ARG_WEIGHTS, diff_score_mem},
+                    {DNNL_ARG_DST, dK_full_mem}});
+    strm.wait();
+    // reduce [mb, groups, hq_group, D, K] -> [mb, groups, 1, D, K] for GQA cases
+    dnnl::reduction dK_reduce;
+    if (is_gqa) {
+        dnnl::reduction::primitive_desc dK_reduce_pd(eng,
+                algorithm::reduction_sum, dK_full_md,
+                key_dequantized.get_desc(), 0.f, 0.f);
+        dK_reduce = dnnl::reduction(dK_reduce_pd);
+        dK_reduce.execute(
+                strm, {{DNNL_ARG_SRC, dK_full_mem}, {DNNL_ARG_DST, dK_mem}});
+        strm.wait();
+    }
+
+    const auto bwd_loop = [&]() {
+        strm.wait();
+        mm_bwd_dS2.execute(strm, mm_bwd_dS2_args);
+        strm.wait();
+        mm_bwd_dV.execute(strm,
+                {{DNNL_ARG_SRC, score2_downcast}, {DNNL_ARG_WEIGHTS, dO_mem},
+                        {DNNL_ARG_DST, dV_full_mem}});
+        if (is_gqa)
+            dV_reduce.execute(strm,
+                    {{DNNL_ARG_SRC, dV_full_mem}, {DNNL_ARG_DST, dV_mem}});
+
+        // Apply dropout Jacobian to dP_raw in bwd_loop
+        if (p.dropout.enabled()) {
+            std::unordered_map<int, memory> dropout_bwd_args
+                    = {{DNNL_ARG_SRC, diff_score2_mem},
+                            {DNNL_ARG_DST, diff_score2_mem}};
+            dropout_bwd_args[DNNL_ARG_ATTR_DROPOUT_PROBABILITY]
+                    = t.m_dropout_prob;
+            dropout_bwd_args[DNNL_ARG_ATTR_DROPOUT_SEED] = t.m_dropout_seed;
+            if (p.dropout.offset != 0) {
+                dropout_bwd_args[DNNL_ARG_ATTR_DROPOUT_OFFSET]
+                        = t.m_dropout_offset;
+            }
+            dropout_eltwise.execute(strm, dropout_bwd_args);
+        }
+
+        softmax_bwd.execute(strm,
+                {{DNNL_ARG_DST, score2}, {DNNL_ARG_DIFF_DST, diff_score2_mem},
+                        {DNNL_ARG_DIFF_SRC, diff_score_f32_mem}});
+
+        if (scale_dt != mdt::undef) {
+            scale_bwd_prim.execute(strm,
+                    {{DNNL_ARG_SRC_0, diff_score_f32_mem},
+                            {DNNL_ARG_SRC_1, scale_f32_bwd},
+                            {DNNL_ARG_DST, diff_score_f32_mem}});
+        }
+
+        diff_score_cast.execute(strm, diff_score_f32_mem, diff_score_mem);
+
+        mm_bwd_dq.execute(strm,
+                {{DNNL_ARG_SRC, diff_score_mem},
+                        {DNNL_ARG_WEIGHTS, key_dequantized},
+                        {DNNL_ARG_DST, dQ_mem}});
+        mm_bwd_dk.execute(strm,
+                {{DNNL_ARG_SRC, grouped_query},
+                        {DNNL_ARG_WEIGHTS, diff_score_mem},
+                        {DNNL_ARG_DST, dK_full_mem}});
+        if (is_gqa)
+            dK_reduce.execute(strm,
+                    {{DNNL_ARG_SRC, dK_full_mem}, {DNNL_ARG_DST, dK_mem}});
+        strm.wait();
+    };
+    bwd_loop();
+    strm.wait();
+
+    using namespace std::chrono;
+    nanoseconds qtime_bwd {};
+
+    if (with_timing) {
+        auto loop_bwd_prim = [&] { bwd_loop(); };
+
+        int iterations = 20;
+        auto quantized_bwd_time = timeit(loop_bwd_prim, strm, iterations);
+
+        auto min_time = [](const std::vector<nanoseconds> &a) {
+            return *std::min_element(a.begin(), a.end());
+        };
+
+        qtime_bwd = min_time(quantized_bwd_time) / iterations;
+        printf("qtime_training_backwards_prim %f\n", (float)qtime_bwd.count());
+    }
+
+    // print q,k gradients
+#if DEBUG_PRINT_MEM
+    print_mem(dQ_mem, "BWD dQ");
+    print_mem(dK_mem, "BWD dK");
+#endif
+
+    // reshape gradients from grouped layout back to 4d
+    void *diff_query_ptr = (void *)diff_query.map_data();
+    void *dQ_ptr = (void *)dQ_mem.map_data();
+    memcpy(diff_query_ptr, dQ_ptr, grouped_query_md.get_size());
+    dQ_mem.unmap_data(dQ_ptr);
+    diff_query.unmap_data(diff_query_ptr);
+
+    void *diff_key_ptr = (void *)diff_key.map_data();
+    void *dK_ptr = (void *)dK_mem.map_data();
+    memcpy(diff_key_ptr, dK_ptr, key_dequantized.get_desc().get_size());
+    dK_mem.unmap_data(dK_ptr);
+    diff_key.unmap_data(diff_key_ptr);
+
+    void *diff_value_ptr = (void *)diff_value.map_data();
+    void *dV_ptr = (void *)dV_mem.map_data();
+    memcpy(diff_value_ptr, dV_ptr, grouped_value_md.get_size());
+    dV_mem.unmap_data(dV_ptr);
+    diff_value.unmap_data(diff_value_ptr);
+
+    return qtime_bwd;
 }
 
 template <typename T>
@@ -1380,10 +2044,59 @@ void check_memory(dnnl::stream &strm, memory &gold, memory &test,
     gold.unmap_data(mapped_ptr_gold);
     test.unmap_data(mapped_ptr_test);
 
-    int threshold = total * 0.0006;
+    int threshold = total * 0.002;
 
     ASSERT_LE(mismatches, threshold) << mismatches << " out of: " << total;
     ASSERT_LE(max_diff, max_diff_threshold);
+}
+
+template <typename T>
+void check_dropout_mask_memory(dnnl::stream &strm, memory &gold, memory &test) {
+    T *mapped_ptr_gold = (T *)gold.map_data();
+    T *mapped_ptr_test = (T *)test.map_data();
+    strm.wait();
+
+    auto dims = gold.get_desc().get_dims();
+    auto gold_strides = gold.get_desc().get_strides();
+    auto test_dims = test.get_desc().get_dims();
+    auto test_strides = test.get_desc().get_strides();
+
+    ASSERT_EQ(dims, test_dims)
+            << "[DROPOUT_MASK] Shape mismatch: reference and tested must have "
+               "the same dimensions before comparison";
+
+    std::vector<int64_t> index(dims.size(), 0);
+    int mismatches = 0;
+    int total = 0;
+
+    while (true) {
+        int64_t gold_offset = 0;
+        int64_t test_offset = 0;
+        for (size_t d = 0; d < dims.size(); d++) {
+            gold_offset += index[d] * gold_strides[d];
+            test_offset += index[d] * test_strides[d];
+        }
+
+        total++;
+        if (mapped_ptr_gold[gold_offset] != mapped_ptr_test[test_offset]) {
+            mismatches++;
+        }
+
+        int dim = (int)dims.size() - 1;
+        while (dim >= 0) {
+            index[dim]++;
+            if (index[dim] < dims[dim]) break;
+            index[dim] = 0;
+            dim--;
+        }
+        if (dim < 0) break;
+    }
+
+    gold.unmap_data(mapped_ptr_gold);
+    test.unmap_data(mapped_ptr_test);
+
+    ASSERT_EQ(mismatches, 0)
+            << "[DROPOUT_MASK] " << mismatches << " out of: " << total;
 }
 
 int to_attn_mask_type(mask_type t) {
@@ -1395,26 +2108,6 @@ int to_attn_mask_type(mask_type t) {
         default:;
     }
     return static_cast<int>(attn_mask);
-}
-
-std::vector<std::chrono::nanoseconds> timeit(
-        const std::function<void()> &func, dnnl::stream &str, int iterations) {
-    using namespace std::chrono;
-    func();
-    func();
-    std::vector<std::chrono::nanoseconds> times;
-    for (int j = 0; j < 5; j++) {
-        auto e = steady_clock::now();
-        str.wait();
-        auto s = steady_clock::now();
-        for (int i = 0; i < iterations; i++) {
-            func();
-        }
-        str.wait();
-        e = steady_clock::now();
-        times.push_back(std::chrono::duration_cast<nanoseconds>(e - s));
-    }
-    return times;
 }
 
 template <typename O, typename I>
@@ -1432,7 +2125,7 @@ public:
 
     byte_t(memory::data_type dt)
         : value(dnnl_data_type_size((dnnl_data_type_t)dt)
-                / ((dt == mdt::s4 || dt == mdt::u4) ? 2.f : 1.f)) {}
+                  / ((dt == mdt::s4 || dt == mdt::u4) ? 2.f : 1.f)) {}
 
     template <typename OR>
     byte_t(byte_t<OR> o) : value(magnitude_cast<Unit>(o).value) {}
@@ -1533,6 +2226,8 @@ public:
     void compare() {
         using namespace dnnl::impl;
         auto mask = t.m_mask.get_desc();
+        memory ref_dropout_mask;
+        memory test_dropout_mask;
 
         memory::desc *mask_ptr = nullptr;
 
@@ -1553,8 +2248,8 @@ public:
                     t.m_scale.get_desc(), t.m_output_quantized.get_desc(),
                     invert_scale, p.heads.kv, to_attn_mask_type(p.mask.type),
                     dnnl::impl::alg_kind::softmax_accurate_inf_as_zero,
-                    t.sdpa_attr_quantized, t.sdpa_kq_attr_quantized,
-                    t.sdpa_vs_attr_quantized);
+                    prop_kind::forward_inference, t.sdpa_attr_quantized,
+                    t.sdpa_kq_attr_quantized, t.sdpa_vs_attr_quantized);
             sdpa_quantized_p = sdpa(sdpa_quantized_pd);
         } catch (const dnnl::error &e) {
             if (e.status == dnnl_unimplemented)
@@ -1592,13 +2287,28 @@ public:
                         = t.m_value_zp;
         }
         if (mask_ptr) { sdpa_args[DNNL_ARG_ATTN_MASK] = t.m_mask; }
+        if (p.dropout.enabled()) {
+            sdpa_args[DNNL_ARG_ATTR_DROPOUT_PROBABILITY] = t.m_dropout_prob;
+            sdpa_args[DNNL_ARG_ATTR_DROPOUT_SEED] = t.m_dropout_seed;
+            if (p.dropout.offset != 0)
+                sdpa_args[DNNL_ARG_ATTR_DROPOUT_OFFSET] = t.m_dropout_offset;
+            // Query mask md from pd (benchdnn pattern); only when has_output_mask.
+            if (p.dropout.has_output_mask()) {
+                auto dropout_mask_md = sdpa_quantized_pd.query_md(
+                        dnnl::query::exec_arg_md, DNNL_ARG_ATTR_DROPOUT_MASK);
+                test_dropout_mask = memory(dropout_mask_md, eng);
+                sdpa_args[DNNL_ARG_ATTR_DROPOUT_MASK] = test_dropout_mask;
+            }
+        }
 
         sdpa_quantized_p.execute(strm, sdpa_args);
 
         prim_sdpa_quant(p, t, eng, strm, t.m_query, t.m_key_quantized,
                 t.m_key_scales, t.m_key_zp, scale_dt, t.m_scale_prim, t.m_mask,
                 t.m_value_quantized, t.m_value_scales, t.m_value_zp, t.m_output,
-                invert_scale, doubled_memory);
+                invert_scale,
+                p.dropout.has_output_mask() ? &ref_dropout_mask : nullptr,
+                doubled_memory);
 
 #if 0
     if (::getenv("SKIP_CHECK")) return;
@@ -1633,12 +2343,234 @@ public:
             check_memory<float_t>(strm, t.m_output, t.m_output_quantized,
                     max_diff_threshold, fthreshold);
 
+        if (p.dropout.enabled() && p.dropout.has_output_mask()) {
+            // The reference path (prim_sdpa_quant) reshapes Q/K/V into a 5D
+            // grouped layout {mb, N_kv, N_q/N_kv, seq_q, seq_kv} to handle
+            // GQA batching, so the softmax dropout mask it produces is also 5D.
+            // The SDPA primitive outputs the mask in the score shape derived
+            // from the original 4D query: {mb, N_q, seq_q, seq_kv}.
+            // Both have the same element count; reshape the reference mask to
+            // the 4D score shape so the comparison uses exact same-shape indexing.
+            const memory::dims score_sz_4d
+                    = {p.mb, p.heads.q, p.seq_len.q, p.seq_len.kv};
+            auto ref_mask_4d = reshape(strm, ref_dropout_mask,
+                    memory::desc(
+                            score_sz_4d, mdt::u8, memory::format_tag::abcd));
+            check_dropout_mask_memory<unsigned char>(
+                    strm, ref_mask_4d, test_dropout_mask);
+        }
+
 #if 0
     for (auto &kv : hist) {
         for (auto &kv2 : kv.second) {
             printf("hist[%d][%d] = %d\n", kv.first, kv2.first, kv2.second);
         }
     }
+#endif
+    }
+
+    void compare_bwd() {
+        using namespace dnnl::impl;
+
+        auto mask = t.m_mask.get_desc();
+
+        memory::desc *mask_ptr = nullptr;
+
+        switch (p.mask.type) {
+            case mask_type::no_mask:
+            case mask_type::causal_tl:
+            case mask_type::causal_br: mask_ptr = nullptr; break;
+            case mask_type::oneD:
+            case mask_type::twoD: mask_ptr = &mask; break;
+        }
+
+        auto dS_desc = t.m_dS.get_desc();
+        memory::desc *dS_ptr = nullptr;
+        //dS_ptr = &dS_desc; // uncomment for optional dS output
+
+        // fwd sdpa primitive to populate dst, col_maxes
+        sdpa::primitive_desc sdpa_fwd_pd;
+        sdpa sdpa_fwd;
+
+        sdpa_backward::primitive_desc sdpa_bwd_pd;
+        sdpa_backward sdpa_bwd;
+        try {
+            sdpa_fwd_pd = sdpa::primitive_desc(eng, t.m_query.get_desc(),
+                    t.m_key_quantized.get_desc(),
+                    t.m_value_quantized.get_desc(), mask_ptr,
+                    t.m_scale.get_desc(), t.m_output_quantized.get_desc(),
+                    invert_scale, p.heads.kv, to_attn_mask_type(p.mask.type),
+                    dnnl::impl::alg_kind::softmax_accurate_inf_as_zero,
+                    prop_kind::forward_training, t.sdpa_attr_quantized,
+                    t.sdpa_kq_attr_quantized, t.sdpa_vs_attr_quantized);
+            sdpa_fwd = sdpa(sdpa_fwd_pd);
+
+            sdpa_bwd_pd = sdpa_backward::primitive_desc(eng,
+                    t.m_query.get_desc(), t.m_key_quantized.get_desc(),
+                    t.m_value_quantized.get_desc(), mask_ptr,
+                    t.m_scale.get_desc(), t.m_output_quantized.get_desc(),
+                    t.m_diff_query_quantized.get_desc(),
+                    t.m_diff_key_quantized.get_desc(),
+                    t.m_diff_value_quantized.get_desc(),
+                    t.m_diff_output.get_desc(), dS_ptr, invert_scale,
+                    p.heads.kv, to_attn_mask_type(p.mask.type),
+                    dnnl::impl::alg_kind::softmax_accurate_inf_as_zero,
+                    sdpa_fwd_pd, t.sdpa_attr_quantized);
+            sdpa_bwd = sdpa_backward(sdpa_bwd_pd);
+        } catch (const dnnl::error &e) {
+            if (e.status == dnnl_unimplemented)
+                GTEST_SKIP() << "Unimplemented: " << e.what();
+            else
+                throw;
+        }
+
+        auto sdpa_fwd_workspace_memory
+                = memory(sdpa_fwd_pd.workspace_desc(), eng);
+
+        std::unordered_map<int, memory> sdpa_fwd_args
+                = {{DNNL_ARG_QUERIES, t.m_query},
+                        {DNNL_ARG_KEYS, t.m_key_quantized},
+                        {DNNL_ARG_VALUES, t.m_value_quantized},
+                        {DNNL_ARG_DST, t.m_output_quantized},
+                        {DNNL_ARG_WORKSPACE, sdpa_fwd_workspace_memory}};
+
+        if (scale_dt != mdt::undef) {
+            sdpa_fwd_args[DNNL_ARG_SCALE] = t.m_scale;
+        }
+        if (mask_ptr) { sdpa_fwd_args[DNNL_ARG_ATTN_MASK] = t.m_mask; }
+        if (p.dropout.enabled()) {
+            sdpa_fwd_args[DNNL_ARG_ATTR_DROPOUT_PROBABILITY] = t.m_dropout_prob;
+            sdpa_fwd_args[DNNL_ARG_ATTR_DROPOUT_SEED] = t.m_dropout_seed;
+            if (p.dropout.offset != 0) {
+                sdpa_fwd_args[DNNL_ARG_ATTR_DROPOUT_OFFSET]
+                        = t.m_dropout_offset;
+            }
+        }
+
+        strm.wait();
+        sdpa_fwd.execute(strm, sdpa_fwd_args);
+        strm.wait();
+
+        std::unordered_map<int, memory> sdpa_bwd_args
+                = {{DNNL_ARG_QUERIES, t.m_query},
+                        {DNNL_ARG_KEYS, t.m_key_quantized},
+                        {DNNL_ARG_VALUES, t.m_value_quantized},
+                        {DNNL_ARG_DST, t.m_output_quantized},
+                        {DNNL_ARG_DIFF_DST, t.m_diff_output},
+                        {DNNL_ARG_DIFF_QUERIES, t.m_diff_query_quantized},
+                        {DNNL_ARG_DIFF_KEYS, t.m_diff_key_quantized},
+                        {DNNL_ARG_DIFF_VALUES, t.m_diff_value_quantized},
+                        {DNNL_ARG_DS, t.m_dS},
+                        {DNNL_ARG_WORKSPACE, sdpa_fwd_workspace_memory}};
+
+#if DEBUG_PRINT_MEM
+        print_mem(t.m_query, "input t_m_query");
+        print_mem(t.m_key_quantized, "input t_m_key");
+        print_mem(t.m_value_quantized, "input t_m_value");
+        print_mem(t.m_diff_output, "input dA");
+#endif
+
+        if (scale_dt != mdt::undef) {
+            sdpa_bwd_args[DNNL_ARG_SCALE] = t.m_scale;
+        }
+        if (mask_ptr) { sdpa_bwd_args[DNNL_ARG_ATTN_MASK] = t.m_mask; }
+        if (p.dropout.enabled()) {
+            sdpa_bwd_args[DNNL_ARG_ATTR_DROPOUT_PROBABILITY] = t.m_dropout_prob;
+            sdpa_bwd_args[DNNL_ARG_ATTR_DROPOUT_SEED] = t.m_dropout_seed;
+            if (p.dropout.offset != 0) {
+                sdpa_bwd_args[DNNL_ARG_ATTR_DROPOUT_OFFSET]
+                        = t.m_dropout_offset;
+            }
+        }
+
+        sdpa_bwd.execute(strm, sdpa_bwd_args);
+        strm.wait();
+
+#if DEBUG_PRINT_MEM
+        print_mem(t.m_dS, "computed dS");
+        print_mem(t.m_diff_value_quantized, "dV bwd out");
+        printf("--------------  Primitives based implementation -------------- "
+               "\n");
+#endif
+
+        // perform primitives based backwards sdpa pass to generate "gold" gradient outputs
+        prim_sdpa_quant_bwd(p, t, eng, strm, t.m_query, t.m_key_quantized,
+                scale_dt, t.m_scale, t.m_mask, t.m_value_quantized, t.m_output,
+                t.m_diff_output, invert_scale, doubled_memory, t.m_diff_query,
+                t.m_diff_key, t.m_diff_value,
+                /*with_timing=*/false);
+
+        float max_diff_threshold = 0.3f;
+        // backward thresholds are higher than forward due to chained matmuls
+        // softmax backward potential catastrophic cancellation S*(dP - Di)
+        // and atomic adds across dQ accumulation
+        float fthreshold = 0.f;
+        if (p.dt.dt == mdt::bf16) {
+            fthreshold = 0.1f;
+        } else if (p.dt.dt == mdt::f16) {
+            fthreshold = 0.035f;
+        } else {
+            fthreshold = 0.002f;
+        }
+
+        strm.wait();
+
+        // GQA atomic adds across kv_group_size Q-heads introduce
+        // nondeterministic rounding in dK/dV. Relax threshold by sqrt(group)
+        const int kv_group_size = static_cast<int>(p.heads.q / p.heads.kv);
+        const float gqa_fthreshold
+                = fthreshold * std::sqrt(static_cast<float>(kv_group_size));
+
+        if (t.m_output.get_desc().get_data_type() == mdt::f16) {
+            check_memory<float16_t>(strm, t.m_output, t.m_output_quantized,
+                    max_diff_threshold, fthreshold);
+            check_memory<float16_t>(strm, t.m_diff_query,
+                    t.m_diff_query_quantized, max_diff_threshold, fthreshold);
+            check_memory<float16_t>(strm, t.m_diff_key, t.m_diff_key_quantized,
+                    max_diff_threshold, gqa_fthreshold);
+            check_memory<float16_t>(strm, t.m_diff_value,
+                    t.m_diff_value_quantized, max_diff_threshold,
+                    gqa_fthreshold);
+
+        } else if (t.m_output.get_desc().get_data_type() == mdt::bf16) {
+            check_memory<bfloat16_t>(strm, t.m_output, t.m_output_quantized,
+                    max_diff_threshold, fthreshold);
+            check_memory<bfloat16_t>(strm, t.m_diff_query,
+                    t.m_diff_query_quantized, max_diff_threshold, fthreshold);
+            check_memory<bfloat16_t>(strm, t.m_diff_key, t.m_diff_key_quantized,
+                    max_diff_threshold, gqa_fthreshold);
+            check_memory<bfloat16_t>(strm, t.m_diff_value,
+                    t.m_diff_value_quantized, max_diff_threshold,
+                    gqa_fthreshold);
+
+        } else if (t.m_output.get_desc().get_data_type() == mdt::f32) {
+            check_memory<float_t>(strm, t.m_output, t.m_output_quantized,
+                    max_diff_threshold, fthreshold);
+            check_memory<float_t>(strm, t.m_diff_query,
+                    t.m_diff_query_quantized, max_diff_threshold, fthreshold);
+            check_memory<float_t>(strm, t.m_diff_key, t.m_diff_key_quantized,
+                    max_diff_threshold, gqa_fthreshold);
+            check_memory<float_t>(strm, t.m_diff_value,
+                    t.m_diff_value_quantized, max_diff_threshold,
+                    gqa_fthreshold);
+        }
+
+#if DEBUG_PRINT_MEM
+        print_mem(t.m_output, "gold m_output");
+        print_mem(t.m_output_quantized, "test m_output");
+        printf("----------\n\n");
+
+        print_mem(t.m_diff_query, "gold m_diff_query");
+        print_mem(t.m_diff_query_quantized, "test m_diff_query");
+        printf("----------\n\n");
+
+        print_mem(t.m_diff_key, "gold m_diff_key");
+        print_mem(t.m_diff_key_quantized, "test m_diff_key");
+        printf("----------\n\n");
+
+        print_mem(t.m_diff_value, "gold m_diff_value");
+        print_mem(t.m_diff_value_quantized, "test m_diff_value");
+        printf("----------\n\n");
 #endif
     }
 
@@ -1665,8 +2597,8 @@ public:
                     t.m_scale.get_desc(), t.m_output_quantized.get_desc(),
                     invert_scale, p.heads.kv, to_attn_mask_type(p.mask.type),
                     alg_kind::softmax_accurate_inf_as_zero,
-                    t.sdpa_attr_quantized, t.sdpa_kq_attr_quantized,
-                    t.sdpa_vs_attr_quantized);
+                    prop_kind::forward_inference, t.sdpa_attr_quantized,
+                    t.sdpa_kq_attr_quantized, t.sdpa_vs_attr_quantized);
             sdpa_quantized_p = sdpa(sdpa_quantized_pd);
         } catch (const dnnl::error &e) {
             if (e.status == dnnl_unimplemented)
@@ -1695,6 +2627,18 @@ public:
                     = t.m_value_zp;
         }
         if (mask_ptr) { sdpa_args[DNNL_ARG_ATTN_MASK] = t.m_mask; }
+        if (p.dropout.enabled()) {
+            sdpa_args[DNNL_ARG_ATTR_DROPOUT_PROBABILITY] = t.m_dropout_prob;
+            sdpa_args[DNNL_ARG_ATTR_DROPOUT_SEED] = t.m_dropout_seed;
+            if (p.dropout.offset != 0)
+                sdpa_args[DNNL_ARG_ATTR_DROPOUT_OFFSET] = t.m_dropout_offset;
+            if (p.dropout.has_output_mask()) {
+                auto dropout_mask_md = sdpa_quantized_pd.query_md(
+                        dnnl::query::exec_arg_md, DNNL_ARG_ATTR_DROPOUT_MASK);
+                sdpa_args[DNNL_ARG_ATTR_DROPOUT_MASK]
+                        = memory(dropout_mask_md, eng);
+            }
+        }
 
         auto loop_quantized
                 = [&] { sdpa_quantized_p.execute(strm, sdpa_args); };
@@ -1788,6 +2732,195 @@ public:
                   << "|" << std::endl;
     }
 
+    void perf_bwd(bool time_reference = false) {
+        using namespace dnnl::impl;
+        auto mask = t.m_mask.get_desc();
+
+        memory::desc *mask_ptr = nullptr;
+
+        switch (p.mask.type) {
+            case mask_type::no_mask:
+            case mask_type::causal_tl:
+            case mask_type::causal_br: mask_ptr = nullptr; break;
+            case mask_type::oneD:
+            case mask_type::twoD: mask_ptr = &mask; break;
+        }
+
+        // Forward training pass (needed for workspace)
+        sdpa::primitive_desc sdpa_fwd_pd;
+        sdpa sdpa_fwd;
+
+        sdpa_backward::primitive_desc sdpa_bwd_pd;
+        sdpa_backward sdpa_bwd;
+        try {
+            sdpa_fwd_pd = sdpa::primitive_desc(eng, t.m_query.get_desc(),
+                    t.m_key_quantized.get_desc(),
+                    t.m_value_quantized.get_desc(), mask_ptr,
+                    t.m_scale.get_desc(), t.m_output_quantized.get_desc(),
+                    invert_scale, p.heads.kv, to_attn_mask_type(p.mask.type),
+                    dnnl::impl::alg_kind::softmax_accurate_inf_as_zero,
+                    prop_kind::forward_training, t.sdpa_attr_quantized,
+                    t.sdpa_kq_attr_quantized, t.sdpa_vs_attr_quantized);
+            sdpa_fwd = sdpa(sdpa_fwd_pd);
+
+            sdpa_bwd_pd = sdpa_backward::primitive_desc(eng,
+                    t.m_query.get_desc(), t.m_key_quantized.get_desc(),
+                    t.m_value_quantized.get_desc(), mask_ptr,
+                    t.m_scale.get_desc(), t.m_output_quantized.get_desc(),
+                    t.m_diff_query_quantized.get_desc(),
+                    t.m_diff_key_quantized.get_desc(),
+                    t.m_diff_value_quantized.get_desc(),
+                    t.m_diff_output.get_desc(), nullptr, invert_scale,
+                    p.heads.kv, to_attn_mask_type(p.mask.type),
+                    dnnl::impl::alg_kind::softmax_accurate_inf_as_zero,
+                    sdpa_fwd_pd, t.sdpa_attr_quantized);
+            sdpa_bwd = sdpa_backward(sdpa_bwd_pd);
+        } catch (const dnnl::error &e) {
+            if (e.status == dnnl_unimplemented)
+                GTEST_SKIP() << "Unimplemented: " << e.what();
+            else
+                throw;
+        }
+
+        // Execute forward pass to populate workspace
+        auto sdpa_fwd_workspace_memory
+                = memory(sdpa_fwd_pd.workspace_desc(), eng);
+
+        std::unordered_map<int, memory> sdpa_fwd_args
+                = {{DNNL_ARG_QUERIES, t.m_query},
+                        {DNNL_ARG_KEYS, t.m_key_quantized},
+                        {DNNL_ARG_VALUES, t.m_value_quantized},
+                        {DNNL_ARG_DST, t.m_output_quantized},
+                        {DNNL_ARG_WORKSPACE, sdpa_fwd_workspace_memory}};
+
+        if (scale_dt != mdt::undef) {
+            sdpa_fwd_args[DNNL_ARG_SCALE] = t.m_scale;
+        }
+        if (mask_ptr) { sdpa_fwd_args[DNNL_ARG_ATTN_MASK] = t.m_mask; }
+
+        sdpa_fwd.execute(strm, sdpa_fwd_args);
+        strm.wait();
+
+        // Build backward args
+        std::unordered_map<int, memory> sdpa_bwd_args
+                = {{DNNL_ARG_QUERIES, t.m_query},
+                        {DNNL_ARG_KEYS, t.m_key_quantized},
+                        {DNNL_ARG_VALUES, t.m_value_quantized},
+                        {DNNL_ARG_DST, t.m_output_quantized},
+                        {DNNL_ARG_DIFF_DST, t.m_diff_output},
+                        {DNNL_ARG_DIFF_QUERIES, t.m_diff_query_quantized},
+                        {DNNL_ARG_DIFF_KEYS, t.m_diff_key_quantized},
+                        {DNNL_ARG_DIFF_VALUES, t.m_diff_value_quantized},
+                        {DNNL_ARG_WORKSPACE, sdpa_fwd_workspace_memory}};
+
+        if (scale_dt != mdt::undef) {
+            sdpa_bwd_args[DNNL_ARG_SCALE] = t.m_scale;
+        }
+        if (mask_ptr) { sdpa_bwd_args[DNNL_ARG_ATTN_MASK] = t.m_mask; }
+
+        // Time backward pass
+        auto loop_bwd = [&] { sdpa_bwd.execute(strm, sdpa_bwd_args); };
+
+        int iterations = 20;
+        auto bwd_time = timeit(loop_bwd, strm, iterations);
+
+        using namespace std::chrono;
+        auto min_time = [](const std::vector<nanoseconds> &a) {
+            return *std::min_element(a.begin(), a.end());
+        };
+
+        auto qtime = min_time(bwd_time) / iterations;
+        printf("qtimebwd %f\n", (float)qtime.count() / 1e6);
+
+        // Backward reads: Q, K, V, O, dO, workspace(logsumexp)
+        // Backward writes: dQ, dK, dV
+        byte_t<> total_bytes = t.m_query.get_desc().get_size()
+                + t.m_key_quantized.get_desc().get_size()
+                + t.m_value_quantized.get_desc().get_size()
+                + t.m_output_quantized.get_desc().get_size()
+                + t.m_diff_output.get_desc().get_size()
+                + t.m_diff_query_quantized.get_desc().get_size()
+                + t.m_diff_key_quantized.get_desc().get_size()
+                + t.m_diff_value_quantized.get_desc().get_size()
+                + (mask_ptr ? t.m_mask.get_desc().get_size() : 0);
+
+        size_t kv_slice_tensor_elements
+                = (p.head_group.head_size * p.seq_len.kv);
+        auto mask_slice_elements = 0;
+        switch (p.mask.type) {
+            case mask_type::twoD:
+                mask_slice_elements = p.seq_len.kv * p.seq_len.q;
+                break;
+            case mask_type::oneD: mask_slice_elements = p.seq_len.kv; break;
+            default: mask_slice_elements = 0; break;
+        }
+        size_t batch_elements = p.mb * std::max(p.heads.q, p.heads.kv);
+
+        // Effective bytes: expand broadcast tensors to full batch size
+        // Reads: Q, K, V, O, dO (all expanded); Writes: dQ, dK, dV
+        byte_t<> total_bytes_effective = (batch_elements
+                * (byte_t<>(p.key.dt) * kv_slice_tensor_elements
+                        + byte_t<>(p.value.dt) * kv_slice_tensor_elements
+                        + byte_t<>(p.dt.dt)
+                                * (5 * p.head_group.head_size * p.seq_len.q)
+                        + byte_t<>(p.dt.dt) * (2 * kv_slice_tensor_elements)
+                        + (mask_ptr ? byte_t<>(p.mask.dt) * mask_slice_elements
+                                    : 0)));
+
+        // Backward has 5 matmuls: S=K*Q, dS2=V*dO, dV=S*dO, dK=dS*Q, dQ=dS*K
+        // plus softmax_bwd, scale, Di reduction
+        float causal_divisor = (p.mask.type == mask_type::causal_tl
+                                       || p.mask.type == mask_type::causal_br)
+                ? 2.f
+                : 1.f;
+
+        // 5 matmuls, flash-attention paper scales FWD flops by 5/2
+        // softmax_bwd (~5*K*Q), scale, Di
+        num_ops_t<> total_flops = std::max<size_t>(p.heads.kv, p.heads.q) * p.mb
+                * (2.f
+                                * (2.5f * 2.f * p.head_group.head_size
+                                        * p.seq_len.kv * p.seq_len.q)
+                        + (scale_dt != mdt::undef
+                                        ? (2 * p.seq_len.kv * p.seq_len.q)
+                                        : 0)
+                        + (p.mask.type != mask_type::no_mask
+                                        ? (p.seq_len.kv * p.seq_len.q)
+                                        : 0)
+                        + (5 * p.seq_len.kv * p.seq_len.q))
+                / causal_divisor;
+
+        // Just the 5 matmul flops
+        num_ops_t<> flash_flops
+                = (2.5f * 2.f * p.mb * p.heads.q * p.seq_len.kv * p.seq_len.q
+                          * p.head_group.head_size)
+                / causal_divisor;
+
+        std::call_once(header_flag, print_table_header);
+        std::cout << "BWD" << print_row(p) << "|" << qtime.count() << "|"
+                  << bandwidth(magnitude_cast<gigabyte>(total_bytes_effective),
+                             qtime)
+                  << "/"
+                  << bandwidth(magnitude_cast<gigabyte>(total_bytes), qtime)
+                  << "|" << compute(magnitude_cast<gigaops>(flash_flops), qtime)
+                  << "/" << compute(magnitude_cast<gigaops>(total_flops), qtime)
+                  << "|" << std::endl;
+
+        if (time_reference) {
+            auto ref_time = prim_sdpa_quant_bwd(p, t, eng, strm, t.m_query,
+                    t.m_key_quantized, scale_dt, t.m_scale, t.m_mask,
+                    t.m_value_quantized, t.m_output, t.m_diff_output,
+                    invert_scale, doubled_memory, t.m_diff_query, t.m_diff_key,
+                    t.m_diff_value,
+                    /*with_timing=*/true);
+
+            float speedup = ref_time.count() > 0
+                    ? (float)ref_time.count() / (float)qtime.count()
+                    : 0.f;
+            std::cout << "REF" << print_row(p) << "|" << ref_time.count() << "|"
+                      << speedup << "x speedup|" << std::endl;
+        }
+    }
+
 protected:
     dnnl::engine eng;
     dnnl::stream strm;
@@ -1804,180 +2937,193 @@ memory::format_tag no_key_transposed = memory::format_tag::abcd;
 
 using sdpa_test = sdpa_test_t<sdpa_dims_t>;
 using sdpa_test_datatypes = sdpa_test_t<sdpa_dims_t_tuple>;
+using sdpa_bwd_test = sdpa_test_t<sdpa_dims_t>;
+using sdpa_bwd_test_datatypes = sdpa_test_t<sdpa_dims_t_tuple>;
 
 // clang-format off
 
 INSTANTIATE_TEST_SUITE_P(ScaleTypes_f16, sdpa_test_datatypes,
-        testing::Combine(testing::Values(1), // mb
-                testing::Values(num_heads_t {2, 2}), // hd_num
-                testing::Values(seq_len_size_t {384, 384}, seq_len_size_t {1, 385}), // seq_len
-                testing::Values(head_group_size_t {128, 128, 128}), // hd_size
-                testing::Values(tensor_type_t("Q", mdt::f16)), // dt
-                testing::Values(tensor_type_t("K", mdt::f16)), // kdt
-                testing::Values(tensor_type_t("V", mdt::f16)), // vdt
-                testing::Values(quantize_type::per_token), // qtype
-                testing::Values(dnnl::memory::format_tag::abdc), // key_format_tag
-                testing::Values(mask_config_t {mask_type::no_mask}), // mask_type
-                testing::Values(scale_type::device_side,scale_type::host_side), // scale_type
-                testing::Values(accumulation_t {accumulation_mode::f32, accumulation_mode::f32}) // accumulation_mode
+        testing::Combine(::testing::Values(1), // mb
+                ::testing::Values(num_heads_t {2, 2}), // hd_num
+                ::testing::Values(seq_len_size_t {384, 384}, seq_len_size_t {1, 385}), // seq_len
+                ::testing::Values(head_group_size_t {128, 128, 128}), // hd_size
+                ::testing::Values(tensor_type_t("Q", mdt::f16)), // dt
+                ::testing::Values(tensor_type_t("K", mdt::f16)), // kdt
+                ::testing::Values(tensor_type_t("V", mdt::f16)), // vdt
+                ::testing::Values(quantize_type::per_token), // qtype
+                ::testing::Values(dnnl::memory::format_tag::abdc), // key_format_tag
+                ::testing::Values(mask_config_t {mask_type::no_mask}), // mask_type
+                ::testing::Values(scale_type::device_side,scale_type::host_side), // scale_type
+                ::testing::Values(accumulation_t {accumulation_mode::f32, accumulation_mode::f32}), // accumulation_mode
+                ::testing::Values(no_dropout) // dropout
                 ),
         &print_to_string2);
 INSTANTIATE_TEST_SUITE_P(ScaleTypes_bf16, sdpa_test_datatypes,
-        testing::Combine(testing::Values(1), // mb
-                testing::Values(num_heads_t {2, 2}), // hd_num
-                testing::Values(seq_len_size_t {384, 384}, seq_len_size_t {1, 385}), // seq_len
-                testing::Values(head_group_size_t {128, 128, 128}), // hd_size
-                testing::Values(tensor_type_t("Q", mdt::bf16)), // dt
-                testing::Values(tensor_type_t("K", mdt::bf16)), // kdt
-                testing::Values(tensor_type_t("V", mdt::bf16)), // vdt
-                testing::Values(quantize_type::per_token), // qtype
-                testing::Values(dnnl::memory::format_tag::abdc), // key_format_tag
-                testing::Values(mask_config_t {mask_type::no_mask}), // mask_type
-                testing::Values(scale_type::device_side,scale_type::host_side), // scale_type
-                testing::Values(accumulation_t {accumulation_mode::f32, accumulation_mode::f32}) // accumulation_mode
+        testing::Combine(::testing::Values(1), // mb
+                ::testing::Values(num_heads_t {2, 2}), // hd_num
+                ::testing::Values(seq_len_size_t {384, 384}, seq_len_size_t {1, 385}), // seq_len
+                ::testing::Values(head_group_size_t {128, 128, 128}), // hd_size
+                ::testing::Values(tensor_type_t("Q", mdt::bf16)), // dt
+                ::testing::Values(tensor_type_t("K", mdt::bf16)), // kdt
+                ::testing::Values(tensor_type_t("V", mdt::bf16)), // vdt
+                ::testing::Values(quantize_type::per_token), // qtype
+                ::testing::Values(dnnl::memory::format_tag::abdc), // key_format_tag
+                ::testing::Values(mask_config_t {mask_type::no_mask}), // mask_type
+                ::testing::Values(scale_type::device_side,scale_type::host_side), // scale_type
+                ::testing::Values(accumulation_t {accumulation_mode::f32, accumulation_mode::f32}), // accumulation_mode
+                ::testing::Values(no_dropout) // dropout
                 ),
         &print_to_string2);
 INSTANTIATE_TEST_SUITE_P(ScaleTypes_f32, sdpa_test_datatypes,
-        testing::Combine(testing::Values(1), // mb
-                testing::Values(num_heads_t {2, 2}), // hd_num
-                testing::Values(seq_len_size_t {384, 384}, seq_len_size_t {1, 385}), // seq_len
-                testing::Values(head_group_size_t {128, 128, 128}), // hd_size
-                testing::Values(tensor_type_t("Q", mdt::f32)), // dt
-                testing::Values(tensor_type_t("K", mdt::f32)), // kdt
-                testing::Values(tensor_type_t("V", mdt::f32)), // vdt
-                testing::Values(quantize_type::per_token), // qtype
-                testing::Values(dnnl::memory::format_tag::abdc), // key_format_tag
-                testing::Values(mask_config_t {mask_type::no_mask}), // mask_type
-                testing::Values(scale_type::device_side,scale_type::host_side), // scale_type
-                testing::Values(accumulation_t {accumulation_mode::f32, accumulation_mode::f32}) // accumulation_mode
+        testing::Combine(::testing::Values(1), // mb
+                ::testing::Values(num_heads_t {2, 2}), // hd_num
+                ::testing::Values(seq_len_size_t {384, 384}, seq_len_size_t {1, 385}), // seq_len
+                ::testing::Values(head_group_size_t {128, 128, 128}), // hd_size
+                ::testing::Values(tensor_type_t("Q", mdt::f32)), // dt
+                ::testing::Values(tensor_type_t("K", mdt::f32)), // kdt
+                ::testing::Values(tensor_type_t("V", mdt::f32)), // vdt
+                ::testing::Values(quantize_type::per_token), // qtype
+                ::testing::Values(dnnl::memory::format_tag::abdc), // key_format_tag
+                ::testing::Values(mask_config_t {mask_type::no_mask}), // mask_type
+                ::testing::Values(scale_type::device_side,scale_type::host_side), // scale_type
+                ::testing::Values(accumulation_t {accumulation_mode::f32, accumulation_mode::f32}), // accumulation_mode
+                ::testing::Values(no_dropout) // dropout
                 ),
         &print_to_string2);
 
 INSTANTIATE_TEST_SUITE_P(DataTypes_f16_s8, sdpa_test_datatypes,
-        testing::Combine(testing::Values(1), // mb
-                testing::Values(num_heads_t {2, 2}), // hd_num
-                testing::Values(seq_len_size_t {384, 384}, seq_len_size_t {1, 385}), // seq_len
-                testing::Values(head_group_size_t {128, 128, 128}, head_group_size_t {256, 256, 256}, head_group_size_t {512, 512, 512}), // hd_size
-                testing::Values(tensor_type_t("Q", mdt::f16)), // dt
-                testing::Values(tensor_type_t("K", mdt::f16), tensor_type_t("K", mdt::s8, mdt::f16, mdt::undef), tensor_type_t("K", mdt::s8, mdt::f16, mdt::s8) /*, tensor_type_t("K", mdt::s8, mdt::undef, mdt::s8)*/), // kdt
-                testing::Values(tensor_type_t("V", mdt::f16), tensor_type_t("V", mdt::s8, mdt::f16, mdt::undef), tensor_type_t("V", mdt::s8, mdt::f16, mdt::s8) /*, tensor_type_t("V", mdt::s8, mdt::undef, mdt::s8) */), // vdt
-                testing::Values(quantize_type::per_token), // qtype
-                testing::Values(dnnl::memory::format_tag::abdc), // key_format_tag
-                testing::Values(mask_config_t {mask_type::oneD, mdt::f16}, mask_config_t {mask_type::twoD, mdt::f32}), // mask_type
-                testing::Values(default_scale_type), // scale_type
-                testing::Values(accumulation_t {accumulation_mode::f32, accumulation_mode::f32}) // accumulation_mode
+        testing::Combine(::testing::Values(1), // mb
+                ::testing::Values(num_heads_t {2, 2}), // hd_num
+                ::testing::Values(seq_len_size_t {384, 384}, seq_len_size_t {1, 385}), // seq_len
+                ::testing::Values(head_group_size_t {128, 128, 128}, head_group_size_t {256, 256, 256}, head_group_size_t {512, 512, 512}), // hd_size
+                ::testing::Values(tensor_type_t("Q", mdt::f16)), // dt
+                ::testing::Values(tensor_type_t("K", mdt::f16), tensor_type_t("K", mdt::s8, mdt::f16, mdt::undef), tensor_type_t("K", mdt::s8, mdt::f16, mdt::s8) /*, tensor_type_t("K", mdt::s8, mdt::undef, mdt::s8)*/), // kdt
+                ::testing::Values(tensor_type_t("V", mdt::f16), tensor_type_t("V", mdt::s8, mdt::f16, mdt::undef), tensor_type_t("V", mdt::s8, mdt::f16, mdt::s8) /*, tensor_type_t("V", mdt::s8, mdt::undef, mdt::s8) */), // vdt
+                ::testing::Values(quantize_type::per_token), // qtype
+                ::testing::Values(dnnl::memory::format_tag::abcd, dnnl::memory::format_tag::abdc), // key_format_tag
+                ::testing::Values(mask_config_t {mask_type::oneD, mdt::f16}, mask_config_t {mask_type::twoD, mdt::f32}), // mask_type
+                ::testing::Values(default_scale_type), // scale_type
+                ::testing::Values(accumulation_t {accumulation_mode::f32, accumulation_mode::f32}), // accumulation_mode
+                ::testing::Values(no_dropout) // dropout
                 ),
         &print_to_string2);
 
 INSTANTIATE_TEST_SUITE_P(DataTypes_f16_s4, sdpa_test_datatypes,
-        testing::Combine(testing::Values(1), // mb
-                testing::Values(num_heads_t {2, 2}), // hd_num
-                testing::Values(seq_len_size_t {384, 384}, seq_len_size_t {1, 386}), // seq_len
-                testing::Values(head_group_size_t {128, 128, 128}, head_group_size_t {256, 256, 256}, head_group_size_t {512, 512, 512}), // hd_size
-                testing::Values(tensor_type_t("Q", mdt::f16)), // dt
-                testing::Values(tensor_type_t("K", mdt::f16), tensor_type_t("K", mdt::s4, mdt::f16, mdt::undef), tensor_type_t("K", mdt::s4, mdt::f16, mdt::s8)), // kdt
-                testing::Values(tensor_type_t("V", mdt::f16), tensor_type_t("V", mdt::s4, mdt::f16, mdt::undef), tensor_type_t("V", mdt::s4, mdt::f16, mdt::s8)), // vdt
-                testing::Values(quantize_type::per_token), // qtype
-                testing::Values(dnnl::memory::format_tag::abdc), // key_format_tag
-                testing::Values(mask_config_t {mask_type::oneD, mdt::f16}, mask_config_t {mask_type::twoD, mdt::f32}), // mask_type
-                testing::Values(default_scale_type), // scale_type
-                testing::Values(accumulation_t {accumulation_mode::f32, accumulation_mode::f32}) // accumulation_mode
+        testing::Combine(::testing::Values(1), // mb
+                ::testing::Values(num_heads_t {2, 2}), // hd_num
+                ::testing::Values(seq_len_size_t {384, 384}, seq_len_size_t {1, 386}), // seq_len
+                ::testing::Values(head_group_size_t {128, 128, 128}, head_group_size_t {256, 256, 256}, head_group_size_t {512, 512, 512}), // hd_size
+                ::testing::Values(tensor_type_t("Q", mdt::f16)), // dt
+                ::testing::Values(tensor_type_t("K", mdt::f16), tensor_type_t("K", mdt::s4, mdt::f16, mdt::undef), tensor_type_t("K", mdt::s4, mdt::f16, mdt::s8)), // kdt
+                ::testing::Values(tensor_type_t("V", mdt::f16), tensor_type_t("V", mdt::s4, mdt::f16, mdt::undef), tensor_type_t("V", mdt::s4, mdt::f16, mdt::s8)), // vdt
+                ::testing::Values(quantize_type::per_token), // qtype
+                ::testing::Values(dnnl::memory::format_tag::abdc), // key_format_tag
+                ::testing::Values(mask_config_t {mask_type::oneD, mdt::f16}, mask_config_t {mask_type::twoD, mdt::f32}), // mask_type
+                ::testing::Values(default_scale_type), // scale_type
+                ::testing::Values(accumulation_t {accumulation_mode::f32, accumulation_mode::f32}), // accumulation_mode
+                ::testing::Values(no_dropout) // dropout
                 ),
         &print_to_string2);
 
 INSTANTIATE_TEST_SUITE_P(DataTypes_bf16_s8, sdpa_test_datatypes,
-        testing::Combine(testing::Values(1), // mb
-                testing::Values(num_heads_t {2, 2}), // hd_num
-                testing::Values(seq_len_size_t {384, 384}, seq_len_size_t {1, 385}), // seq_len
-                testing::Values(head_group_size_t {128, 128, 128}, head_group_size_t {256, 256, 256}, head_group_size_t {512, 512, 512}), // hd_size
-                testing::Values(tensor_type_t("Q", mdt::bf16)), // dt
-                testing::Values(tensor_type_t("K", mdt::bf16) /*, tensor_type_t("K", mdt::s8, mdt::f16, mdt::s8), tensor_type_t("K", mdt::s8, mdt::f16, mdt::undef), tensor_type_t("K", mdt::s8, mdt::undef, mdt::s8)*/), // kdt
-                testing::Values(tensor_type_t("V", mdt::bf16) /*, tensor_type_t("V", mdt::s8, mdt::f16, mdt::s8), tensor_type_t("V", mdt::s8, mdt::f16, mdt::undef), tensor_type_t("V", mdt::s8, mdt::undef, mdt::s8)*/), // vdt
-                testing::Values(quantize_type::per_token), // qtype
-                testing::Values(dnnl::memory::format_tag::abdc), // key_format_tag
-                testing::Values(mask_config_t {mask_type::oneD, mdt::bf16}, mask_config_t {mask_type::twoD, mdt::bf16}), // mask_type
-                testing::Values(default_scale_type), // scale_type
-                testing::Values(accumulation_t {accumulation_mode::f32, accumulation_mode::f32}) // accumulation_mode
+        testing::Combine(::testing::Values(1), // mb
+                ::testing::Values(num_heads_t {2, 2}), // hd_num
+                ::testing::Values(seq_len_size_t {384, 384}, seq_len_size_t {1, 385}), // seq_len
+                ::testing::Values(head_group_size_t {128, 128, 128}, head_group_size_t {256, 256, 256}, head_group_size_t {512, 512, 512}), // hd_size
+                ::testing::Values(tensor_type_t("Q", mdt::bf16)), // dt
+                ::testing::Values(tensor_type_t("K", mdt::bf16) /*, tensor_type_t("K", mdt::s8, mdt::f16, mdt::s8), tensor_type_t("K", mdt::s8, mdt::f16, mdt::undef), tensor_type_t("K", mdt::s8, mdt::undef, mdt::s8)*/), // kdt
+                ::testing::Values(tensor_type_t("V", mdt::bf16) /*, tensor_type_t("V", mdt::s8, mdt::f16, mdt::s8), tensor_type_t("V", mdt::s8, mdt::f16, mdt::undef), tensor_type_t("V", mdt::s8, mdt::undef, mdt::s8)*/), // vdt
+                ::testing::Values(quantize_type::per_token), // qtype
+                ::testing::Values(dnnl::memory::format_tag::abcd, dnnl::memory::format_tag::abdc), // key_format_tag
+                ::testing::Values(mask_config_t {mask_type::oneD, mdt::bf16}, mask_config_t {mask_type::twoD, mdt::bf16}), // mask_type
+                ::testing::Values(default_scale_type), // scale_type
+                ::testing::Values(accumulation_t {accumulation_mode::f32, accumulation_mode::f32}), // accumulation_mode
+                ::testing::Values(no_dropout) // dropout
                 ),
         &print_to_string2);
 
 INSTANTIATE_TEST_SUITE_P(DataTypes_bf16_s4, sdpa_test_datatypes,
-        testing::Combine(testing::Values(1), // mb
-                testing::Values(num_heads_t {2, 2}), // hd_num
-                testing::Values(seq_len_size_t {384, 384}, seq_len_size_t {1, 386}), // seq_len
-                testing::Values(head_group_size_t {128, 128, 128}, head_group_size_t {256, 256, 256}, head_group_size_t {512, 512, 512}), // hd_size
-                testing::Values(tensor_type_t("Q", mdt::bf16)), // dt
-                testing::Values(tensor_type_t("K", mdt::bf16), tensor_type_t("K", mdt::s4, mdt::bf16, mdt::undef), tensor_type_t("K", mdt::s4, mdt::bf16, mdt::s8)), // kdt
-                testing::Values(tensor_type_t("V", mdt::bf16), tensor_type_t("V", mdt::s4, mdt::bf16, mdt::undef), tensor_type_t("V", mdt::s4, mdt::bf16, mdt::s8)), // vdt
-                testing::Values(quantize_type::per_token), // qtype
-                testing::Values(dnnl::memory::format_tag::abdc), // key_format_tag
-                testing::Values(mask_config_t {mask_type::oneD, mdt::bf16}, mask_config_t {mask_type::twoD, mdt::bf16}), // mask_type
-                testing::Values(default_scale_type), // scale_type
-                testing::Values(accumulation_t {accumulation_mode::f32, accumulation_mode::f32}) // accumulation_mode
+        testing::Combine(::testing::Values(1), // mb
+                ::testing::Values(num_heads_t {2, 2}), // hd_num
+                ::testing::Values(seq_len_size_t {384, 384}, seq_len_size_t {1, 386}), // seq_len
+                ::testing::Values(head_group_size_t {128, 128, 128}, head_group_size_t {256, 256, 256}, head_group_size_t {512, 512, 512}), // hd_size
+                ::testing::Values(tensor_type_t("Q", mdt::bf16)), // dt
+                ::testing::Values(tensor_type_t("K", mdt::bf16), tensor_type_t("K", mdt::s4, mdt::bf16, mdt::undef), tensor_type_t("K", mdt::s4, mdt::bf16, mdt::s8)), // kdt
+                ::testing::Values(tensor_type_t("V", mdt::bf16), tensor_type_t("V", mdt::s4, mdt::bf16, mdt::undef), tensor_type_t("V", mdt::s4, mdt::bf16, mdt::s8)), // vdt
+                ::testing::Values(quantize_type::per_token), // qtype
+                ::testing::Values(dnnl::memory::format_tag::abdc), // key_format_tag
+                ::testing::Values(mask_config_t {mask_type::oneD, mdt::bf16}, mask_config_t {mask_type::twoD, mdt::bf16}), // mask_type
+                ::testing::Values(default_scale_type), // scale_type
+                ::testing::Values(accumulation_t {accumulation_mode::f32, accumulation_mode::f32}), // accumulation_mode
+                ::testing::Values(no_dropout) // dropout
                 ),
         &print_to_string2);
 
 INSTANTIATE_TEST_SUITE_P(DataTypes_f32, sdpa_test_datatypes,
-        testing::Combine(testing::Values(1), // mb
-                testing::Values(num_heads_t {2, 2}), // hd_num
-                testing::Values(seq_len_size_t {384, 384}, seq_len_size_t {1, 385}, seq_len_size_t {1024, 1024}, seq_len_size_t {1, 1025}), // seq_len
-                testing::Values(head_group_size_t {32, 32, 32}, head_group_size_t {64, 64, 64}, head_group_size_t {128, 128, 128}, head_group_size_t {256, 256, 256}, head_group_size_t {512, 512, 512}), // hd_size
-                testing::Values(tensor_type_t("Q", mdt::f32)), // dt
-                testing::Values(tensor_type_t("K", mdt::f32), tensor_type_t("K", mdt::s8, mdt::f32)), // kdt
-                testing::Values(tensor_type_t("V", mdt::f32), tensor_type_t("V", mdt::s8, mdt::f32)), // vdt
-                testing::Values(quantize_type::per_token), // qtype
-                testing::Values(dnnl::memory::format_tag::abdc), // key_format_tag
-                testing::Values(mask_config_t {mask_type::twoD, mdt::f32}), // mask_type
-                testing::Values(default_scale_type), // scale_type
-                testing::Values(accumulation_t {accumulation_mode::f32, accumulation_mode::f32}) // accumulation_mode
+        testing::Combine(::testing::Values(1), // mb
+                ::testing::Values(num_heads_t {2, 2}), // hd_num
+                ::testing::Values(seq_len_size_t {384, 384}, seq_len_size_t {1, 385}, seq_len_size_t {1024, 1024}, seq_len_size_t {1, 1025}), // seq_len
+                ::testing::Values(head_group_size_t {32, 32, 32}, head_group_size_t {64, 64, 64}, head_group_size_t {128, 128, 128}, head_group_size_t {256, 256, 256}, head_group_size_t {512, 512, 512}), // hd_size
+                ::testing::Values(tensor_type_t("Q", mdt::f32)), // dt
+                ::testing::Values(tensor_type_t("K", mdt::f32), tensor_type_t("K", mdt::s8, mdt::f32)), // kdt
+                ::testing::Values(tensor_type_t("V", mdt::f32), tensor_type_t("V", mdt::s8, mdt::f32)), // vdt
+                ::testing::Values(quantize_type::per_token), // qtype
+                ::testing::Values(dnnl::memory::format_tag::abcd, dnnl::memory::format_tag::abdc), // key_format_tag
+                ::testing::Values(mask_config_t {mask_type::twoD, mdt::f32}), // mask_type
+                ::testing::Values(default_scale_type), // scale_type
+                ::testing::Values(accumulation_t {accumulation_mode::f32, accumulation_mode::f32}), // accumulation_mode
+                ::testing::Values(no_dropout) // dropout
                 ),
         &print_to_string2);
 
 INSTANTIATE_TEST_SUITE_P(AllMaskTypes, sdpa_test_datatypes,
-        testing::Combine(testing::Values(1), // mb
-                testing::Values(num_heads_t {2, 2}), // hd_num
-                testing::Values(seq_len_size_t {384, 384}, seq_len_size_t {1, 385}), // seq_len
-                testing::Values(head_group_size_t {64, 64, 64}, head_group_size_t {128, 128, 128}), // hd_size
-                testing::Values(tensor_type_t("Q", mdt::f16)), // dt
-                testing::Values(tensor_type_t("K", mdt::s8, mdt::f16, mdt::s8)), // kdt
-                testing::Values(tensor_type_t("V", mdt::s8, mdt::f16, mdt::s8)), // vdt
-                testing::Values(quantize_type::per_token), // qtype
-                testing::Values(dnnl::memory::format_tag::abdc), // key_format_tag
-                testing::Values(mask_config_t {mask_type::no_mask}, mask_config_t {mask_type::causal_tl}, mask_config_t {mask_type::causal_br}, mask_config_t {mask_type::oneD, mdt::f16}, mask_config_t {mask_type::twoD, mdt::f16}), // mask_type
-                testing::Values(default_scale_type), // scale_type
-                testing::Values(accumulation_t {accumulation_mode::f32, accumulation_mode::f32}) // accumulation_mode
+        testing::Combine(::testing::Values(1), // mb
+                ::testing::Values(num_heads_t {2, 2}), // hd_num
+                ::testing::Values(seq_len_size_t {384, 384}, seq_len_size_t {1, 385}), // seq_len
+                ::testing::Values(head_group_size_t {64, 64, 64}, head_group_size_t {128, 128, 128}), // hd_size
+                ::testing::Values(tensor_type_t("Q", mdt::f16)), // dt
+                ::testing::Values(tensor_type_t("K", mdt::s8, mdt::f16, mdt::s8)), // kdt
+                ::testing::Values(tensor_type_t("V", mdt::s8, mdt::f16, mdt::s8)), // vdt
+                ::testing::Values(quantize_type::per_token), // qtype
+                ::testing::Values(dnnl::memory::format_tag::abdc), // key_format_tag
+                ::testing::Values(mask_config_t {mask_type::no_mask}, mask_config_t {mask_type::causal_tl}, mask_config_t {mask_type::causal_br}, mask_config_t {mask_type::oneD, mdt::f16}, mask_config_t {mask_type::twoD, mdt::f16}), // mask_type
+                ::testing::Values(default_scale_type), // scale_type
+                ::testing::Values(accumulation_t {accumulation_mode::f32, accumulation_mode::f32}), // accumulation_mode
+                ::testing::Values(no_dropout) // dropout
                 ),
         &print_to_string2);
 
 INSTANTIATE_TEST_SUITE_P(GQA, sdpa_test_datatypes,
-        testing::Combine(testing::Values(1), // mb
-                testing::Values(num_heads_t {4, 2}, num_heads_t {8, 2}, num_heads_t {32, 2}, num_heads_t {64, 2}), // hd_num
-                testing::Values(seq_len_size_t {384, 384}, seq_len_size_t {1, 385}), // seq_len
-                testing::Values(head_group_size_t {128, 128, 128}), // hd_size
-                testing::Values(tensor_type_t("Q", mdt::f16)), // dt
-                testing::Values(tensor_type_t("K", mdt::f16)), // kdt
-                testing::Values(tensor_type_t("V", mdt::f16)), // vdt
-                testing::Values(quantize_type::no_quantization), // qtype
-                testing::Values(dnnl::memory::format_tag::abdc), // key_format_tag
-                testing::Values(mask_config_t {mask_type::no_mask}), // mask_type
-                testing::Values(default_scale_type), // scale_type
-                testing::Values(accumulation_t {accumulation_mode::f32, accumulation_mode::f32}) // accumulation_mode
+        testing::Combine(::testing::Values(1), // mb
+                ::testing::Values(num_heads_t {4, 2}, num_heads_t {8, 2}, num_heads_t {32, 2}, num_heads_t {64, 2}), // hd_num
+                ::testing::Values(seq_len_size_t {384, 384}, seq_len_size_t {1, 385}), // seq_len
+                ::testing::Values(head_group_size_t {128, 128, 128}), // hd_size
+                ::testing::Values(tensor_type_t("Q", mdt::f16)), // dt
+                ::testing::Values(tensor_type_t("K", mdt::f16)), // kdt
+                ::testing::Values(tensor_type_t("V", mdt::f16)), // vdt
+                ::testing::Values(quantize_type::no_quantization), // qtype
+                ::testing::Values(dnnl::memory::format_tag::abdc), // key_format_tag
+                ::testing::Values(mask_config_t {mask_type::no_mask}), // mask_type
+                ::testing::Values(default_scale_type), // scale_type
+                ::testing::Values(accumulation_t {accumulation_mode::f32, accumulation_mode::f32}), // accumulation_mode
+                ::testing::Values(no_dropout) // dropout
                 ),
         &print_to_string2);
 
 INSTANTIATE_TEST_SUITE_P(f16_accumulation, sdpa_test_datatypes,
-        testing::Combine(testing::Values(1), // mb
-                testing::Values(num_heads_t {16, 16}, num_heads_t {12, 2}), // hd_num
-                testing::Values(seq_len_size_t {1024, 1024}, seq_len_size_t {407, 407}), // seq_len
-                testing::Values(head_group_size_t {128, 128, 128}, head_group_size_t {80, 80, 80}), // hd_size
-                testing::Values(tensor_type_t("Q", mdt::f16)), // dt
-                testing::Values(tensor_type_t("K", mdt::f16)), // kdt
-                testing::Values(tensor_type_t("V", mdt::f16)), // vdt
-                testing::Values(quantize_type::no_quantization), // qtype
-                testing::Values(dnnl::memory::format_tag::abdc), // key_format_tag
-                testing::Values(mask_config_t {mask_type::no_mask}, mask_config_t {mask_type::twoD}, mask_config_t {mask_type::causal_tl}), // mask_type
-                testing::Values(default_scale_type), // scale_type
-                testing::Values(accumulation_t {accumulation_mode::f16, accumulation_mode::f16}, accumulation_t {accumulation_mode::f32, accumulation_mode::f16}, accumulation_t {accumulation_mode::f16, accumulation_mode::f32}) // accumulation_mode
+        testing::Combine(::testing::Values(1), // mb
+                ::testing::Values(num_heads_t {16, 16}, num_heads_t {12, 2}), // hd_num
+                ::testing::Values(seq_len_size_t {1024, 1024}, seq_len_size_t {407, 407}), // seq_len
+                ::testing::Values(head_group_size_t {128, 128, 128}, head_group_size_t {80, 80, 80}), // hd_size
+                ::testing::Values(tensor_type_t("Q", mdt::f16)), // dt
+                ::testing::Values(tensor_type_t("K", mdt::f16)), // kdt
+                ::testing::Values(tensor_type_t("V", mdt::f16)), // vdt
+                ::testing::Values(quantize_type::no_quantization), // qtype
+                ::testing::Values(dnnl::memory::format_tag::abdc), // key_format_tag
+                ::testing::Values(mask_config_t {mask_type::no_mask}, mask_config_t {mask_type::twoD}, mask_config_t {mask_type::causal_tl}), // mask_type
+                ::testing::Values(default_scale_type), // scale_type
+                ::testing::Values(accumulation_t {accumulation_mode::f16, accumulation_mode::f16}, accumulation_t {accumulation_mode::f32, accumulation_mode::f16}, accumulation_t {accumulation_mode::f16, accumulation_mode::f32}), // accumulation_mode
+                ::testing::Values(no_dropout) // dropout
                 ),
         &print_to_string2);
 
@@ -1991,7 +3137,7 @@ INSTANTIATE_TEST_SUITE_P(f16_accumulation, sdpa_test_datatypes,
 INSTANTIATE_TEST_SUITE_P(llama_2_7b_chat,
     sdpa_test,
                                // mb,hd_num,kv_hd_num,seq_len,qry_num,hd_size, kg_sz, vgrp_sz,       dt,       kdt,        ksdt,      kzpdt,        vdt,       vsdt,      vzpdt,     mskdt, qtype
-    testing::Values(
+    ::testing::Values(
                     sdpa_dims_t{   1,    32,       32,    384,    384,    128,   128,     128, mdt::f16,   mdt::s8,    mdt::f16,    mdt::s8,    mdt::s8,   mdt::f16,    mdt::s8, mdt::f16, quantize_type::per_token_with_groups,  with_key_transposed,  mask_type::causal_tl },
                     sdpa_dims_t{   1,    32,       32,    385,      1,    128,   128,     128, mdt::f16,   mdt::s8,    mdt::f16,    mdt::s8,    mdt::s8,   mdt::f16,    mdt::s8, mdt::f16, quantize_type::per_token_with_groups,  with_key_transposed,  mask_type::causal_tl },
                     sdpa_dims_t{   1,    32,       32,    512,    512,    128,   128,     128, mdt::f16,   mdt::s8,    mdt::f16,    mdt::s8,    mdt::s8,   mdt::f16,    mdt::s8, mdt::f16, quantize_type::per_token_with_groups,  with_key_transposed,  mask_type::causal_tl },
@@ -2005,7 +3151,7 @@ INSTANTIATE_TEST_SUITE_P(llama_2_7b_chat,
 INSTANTIATE_TEST_SUITE_P(llama_3_8b,
     sdpa_test,
                                // mb,hd_num,kv_hd_num,seq_len,qry_num,hd_size, kg_sz, vgrp_sz,       dt,       kdt,        ksdt,      kzpdt,       vdt,       vsdt,      vzpdt,    mskdt, qtype
-    testing::Values(
+    ::testing::Values(
                     sdpa_dims_t{   1,    32,        8,    384,    384,    128,   128,     128, mdt::f16,  mdt::f16,  mdt::undef, mdt::undef,  mdt::f16, mdt::undef, mdt::undef, mdt::f16, quantize_type::no_quantization,        with_key_transposed, mask_type::twoD },
                     sdpa_dims_t{   1,    32,        8,    386,    386,    128,   128,     128, mdt::f16,  mdt::f16,  mdt::undef, mdt::undef,  mdt::f16, mdt::undef, mdt::undef, mdt::f16, quantize_type::no_quantization,        with_key_transposed, mask_type::twoD },
                     sdpa_dims_t{   1,    32,        8,    385,      1,    128,   128,     128, mdt::f16,  mdt::f16,  mdt::undef, mdt::undef,  mdt::f16, mdt::undef, mdt::undef, mdt::f16, quantize_type::no_quantization,        with_key_transposed, mask_type::twoD },
@@ -2028,7 +3174,7 @@ INSTANTIATE_TEST_SUITE_P(llama_3_8b,
 INSTANTIATE_TEST_SUITE_P(minicpm_1b_st,
     sdpa_test,
                                // mb,hd_num,kv_hd_num,seq_len,qry_num,hd_size, kg_sz, vgrp_sz,       dt,     kdt,      ksdt,      kzpdt,      vdt,     vsdt,      vzpdt,    mskdt, qtype
-    testing::Values(
+    ::testing::Values(
                     sdpa_dims_t{   1,    24,        8,    384,    384,     64,    64,      64, mdt::f16, mdt::s8,  mdt::f16,    mdt::s8,  mdt::s8, mdt::f16,    mdt::s8, mdt::f16, quantize_type::per_token_with_groups,  with_key_transposed, mask_type::twoD },
                     sdpa_dims_t{   1,    24,        8,    385,      1,     64,    64,      64, mdt::f16, mdt::s8,  mdt::f16,    mdt::s8,  mdt::s8, mdt::f16,    mdt::s8, mdt::f16, quantize_type::per_token_with_groups,  with_key_transposed, mask_type::twoD },
                     sdpa_dims_t{   1,    24,        8,    512,    512,     64,    64,      64, mdt::f16, mdt::s8,  mdt::f16,    mdt::s8,  mdt::s8, mdt::f16,    mdt::s8, mdt::f16, quantize_type::per_token_with_groups,  with_key_transposed, mask_type::twoD },
@@ -2043,7 +3189,7 @@ INSTANTIATE_TEST_SUITE_P(minicpm_1b_st,
 INSTANTIATE_TEST_SUITE_P(qwen2_7b,
     sdpa_test,
                                // mb,hd_num,kv_hd_num,seq_len,qry_num,hd_size, kg_sz, vgrp_sz,       dt,     kdt,      ksdt,   kzpdt,      vdt,     vsdt,  vzpdt,    mskdt, qtype
-    testing::Values(
+    ::testing::Values(
                     sdpa_dims_t{   1,    28,        4,    384,    384,    128,   128,     128, mdt::f16, mdt::s8,  mdt::f16, mdt::s8,  mdt::s8, mdt::f16, mdt::s8, mdt::f16, quantize_type::per_token_with_groups,  with_key_transposed, mask_type::twoD },
                     sdpa_dims_t{   1,    28,        4,    385,      1,    128,   128,     128, mdt::f16, mdt::s8,  mdt::f16, mdt::s8,  mdt::s8, mdt::f16, mdt::s8, mdt::f16, quantize_type::per_token_with_groups,  with_key_transposed, mask_type::twoD },
                     sdpa_dims_t{   1,    28,        4,    512,    512,    128,   128,     128, mdt::f16, mdt::s8,  mdt::f16, mdt::s8,  mdt::s8, mdt::f16, mdt::s8, mdt::f16, quantize_type::per_token_with_groups,  with_key_transposed, mask_type::twoD },
@@ -2058,7 +3204,7 @@ INSTANTIATE_TEST_SUITE_P(qwen2_7b,
 INSTANTIATE_TEST_SUITE_P(phi3_mini_4k_instruct,
     sdpa_test,
                                // mb, hd_num,kv_grp_sz,seq_len, qry_num,hd_size,  kg_sz, vgrp_sz,       dt,     kdt,      ksdt,   kzpdt,      vdt,     vsdt,   vzpdt,    mskdt, qtype
-    testing::Values(
+    ::testing::Values(
                     sdpa_dims_t{   1,     32,       32,    384,     384,     96,     96,      96, mdt::f16, mdt::s8,  mdt::f16, mdt::s8,  mdt::s8, mdt::f16, mdt::s8, mdt::f16, quantize_type::per_token_with_groups,  with_key_transposed, mask_type::twoD },
                     sdpa_dims_t{   1,     32,       32,    384,     384,     96,     96,      96, mdt::f16, mdt::s8,  mdt::f16, mdt::s8,  mdt::s8, mdt::f16, mdt::s8, mdt::f16, quantize_type::per_token_with_groups,  with_key_transposed, mask_type::oneD },
                     sdpa_dims_t{   1,     32,       32,    384,     384,     96,     96,      96, mdt::f16, mdt::s8,  mdt::f16, mdt::s8,  mdt::s8, mdt::f16, mdt::s8, mdt::f16, quantize_type::per_token_with_groups,  with_key_transposed, mask_type::no_mask },
@@ -2071,6 +3217,21 @@ INSTANTIATE_TEST_SUITE_P(phi3_mini_4k_instruct,
                     sdpa_dims_t{   1,     32,       32,   2049,       1,     96,     96,      96, mdt::f16, mdt::s8,  mdt::f16, mdt::s8,  mdt::s8, mdt::f16, mdt::s8, mdt::f16, quantize_type::per_token_with_groups,  with_key_transposed, mask_type::twoD }
     ), &print_to_string);
 
+INSTANTIATE_TEST_SUITE_P(bwd_perf,
+    sdpa_bwd_test,
+                               // mb,hd_num,kv_hd_num,seq_len,qry_num,hd_size, kg_sz, vgrp_sz,       dt,    kdt,        ksdt,      kzpdt,       vdt,       vsdt,      vzpdt,    mskdt, qtype
+    testing::Values(
+                    sdpa_dims_t{   4,    4,        4,      4096,       4096,    32,      32,     32, mdt::f32, mdt::f32,  mdt::undef, mdt::undef,  mdt::f32, mdt::undef, mdt::undef, mdt::f32, quantize_type::no_quantization,  no_key_transposed, mask_type::no_mask },
+                    sdpa_dims_t{   4,    4,        4,      4096,       4096,    64,      64,     64, mdt::f32, mdt::f32,  mdt::undef, mdt::undef,  mdt::f32, mdt::undef, mdt::undef, mdt::f32, quantize_type::no_quantization,  no_key_transposed, mask_type::no_mask },
+                    sdpa_dims_t{   4,    4,        4,      4096,       4096,   128,     128,    128, mdt::f32, mdt::f32,  mdt::undef, mdt::undef,  mdt::f32, mdt::undef, mdt::undef, mdt::f32, quantize_type::no_quantization,  no_key_transposed, mask_type::no_mask },
+                    sdpa_dims_t{   4,    4,        4,      4096,       4096,    32,      32,     32, mdt::f16, mdt::f16,  mdt::undef, mdt::undef,  mdt::f16, mdt::undef, mdt::undef, mdt::f16, quantize_type::no_quantization,  no_key_transposed, mask_type::no_mask },
+                    sdpa_dims_t{   4,    4,        4,      4096,       4096,    64,      64,     64, mdt::f16, mdt::f16,  mdt::undef, mdt::undef,  mdt::f16, mdt::undef, mdt::undef, mdt::f16, quantize_type::no_quantization,  no_key_transposed, mask_type::no_mask },
+                    sdpa_dims_t{   4,    4,        4,      4096,       4096,    128,      128,     128, mdt::f16, mdt::f16,  mdt::undef, mdt::undef,  mdt::f16, mdt::undef, mdt::undef, mdt::f16, quantize_type::no_quantization,  no_key_transposed, mask_type::no_mask },
+                    sdpa_dims_t{   4,    4,        4,      4096,       4096,    32,      32,     32, mdt::f16, mdt::f16,  mdt::undef, mdt::undef,  mdt::f16, mdt::undef, mdt::undef, mdt::f16, quantize_type::no_quantization,  no_key_transposed, mask_type::causal_tl },
+                    sdpa_dims_t{   4,    4,        4,      4096,       4096,    64,      64,     64, mdt::f16, mdt::f16,  mdt::undef, mdt::undef,  mdt::f16, mdt::undef, mdt::undef, mdt::f16, quantize_type::no_quantization,  no_key_transposed, mask_type::causal_tl },
+                    sdpa_dims_t{   4,    4,        4,      4096,       4096,    128,      128,     128, mdt::f16, mdt::f16,  mdt::undef, mdt::undef,  mdt::f16, mdt::undef, mdt::undef, mdt::f16, quantize_type::no_quantization,  no_key_transposed, mask_type::causal_tl }
+   ), &print_to_string);
+
 // clang-format on
 
 GPU_TEST_P(sdpa_test, compare) {
@@ -2081,12 +3242,297 @@ GPU_TEST_P(sdpa_test_datatypes, compare) {
     compare();
 }
 
+GPU_TEST_P(sdpa_bwd_test_datatypes, compare_bwd) {
+    compare_bwd();
+}
+
+GPU_TEST_P(sdpa_bwd_test, compare_bwd) {
+    compare_bwd();
+}
+
 GPU_TEST_P(sdpa_test, perf) {
     perf();
 }
 
-/*
-GPU_TEST_P(sdpa_test_datatypes, perf) {
-    perf();
+GPU_TEST_P(sdpa_bwd_test, perf_bwd) {
+    /// long running benchmark,
+    /// commented to avoid timeouts in CI
+    //  const bool time_reference = true;
+    //  perf_bwd(time_reference);
+    //
 }
-*/
+
+// Equivalent of benchdnn --attr-dropout=PROBABILITY[:SEED[:TAG[:OFFSET[:HOST_SCALARS]]]]
+// Case 1: 0.5:12345678           -> no tag field => benchdnn default tag=any => has_output_mask
+// Case 2: 0.75:12345678:undef    -> tag=undef => no mask buffer written
+// Case 3: 0.25:843921:any:1238976:true -> output mask + non-zero offset + host scalars
+#define SDPA_DIMS_DROPOUT_SHARED_BASE \
+    1, 1, 1, 32, 32, 32, 32, 32, mdt::f16, mdt::f16, mdt::undef, mdt::undef, \
+            mdt::f16, mdt::undef, mdt::undef, mdt::f16, \
+            quantize_type::no_quantization, no_key_transposed, \
+            mask_type::no_mask, default_scale_type, accumulation_mode::f32, \
+            accumulation_mode::f32
+#define SDPA_DIMS_DROPOUT_BASE_TRANSPOSED \
+    1, 1, 1, 32, 32, 32, 32, 32, mdt::f16, mdt::f16, mdt::undef, mdt::undef, \
+            mdt::f16, mdt::undef, mdt::undef, mdt::f16, \
+            quantize_type::no_quantization, with_key_transposed, \
+            mask_type::no_mask, default_scale_type, accumulation_mode::f32, \
+            accumulation_mode::f32
+#define SDPA_DIMS_DROPOUT_MULTI \
+    2, 2, 2, 32, 32, 32, 32, 32, mdt::f16, mdt::f16, mdt::undef, mdt::undef, \
+            mdt::f16, mdt::undef, mdt::undef, mdt::f16, \
+            quantize_type::no_quantization, no_key_transposed, \
+            mask_type::no_mask, default_scale_type, accumulation_mode::f32, \
+            accumulation_mode::f32
+#define SDPA_DIMS_DROPOUT_LARGE \
+    1, 1, 1, 32, 256, 256, 32, 32, mdt::f16, mdt::f16, mdt::undef, mdt::undef, \
+            mdt::f16, mdt::undef, mdt::undef, mdt::f16, \
+            quantize_type::no_quantization, no_key_transposed, \
+            mask_type::no_mask, default_scale_type, accumulation_mode::f32, \
+            accumulation_mode::f32
+#define SDPA_DIMS_DROPOUT_SHARED_GQA \
+    2, 4, 2, 128, 128, 64, 64, 64, mdt::f16, mdt::f16, mdt::undef, mdt::undef, \
+            mdt::f16, mdt::undef, mdt::undef, mdt::f16, \
+            quantize_type::no_quantization, no_key_transposed, \
+            mask_type::no_mask, default_scale_type, accumulation_mode::f32, \
+            accumulation_mode::f32
+INSTANTIATE_TEST_SUITE_P(dropout_forward_minimal, sdpa_test,
+        testing::Values(
+                // 0.5:12345678:abcd — concrete tag => blocked format => has_output_mask
+                sdpa_dims_t {SDPA_DIMS_DROPOUT_SHARED_BASE,
+                        dropout_config_t {0.5f, 12345678, mdt::s64, 0, false,
+                                memory::format_tag::abcd}},
+                // 0.75:12345678:undef — explicit undef => no mask output
+                sdpa_dims_t {SDPA_DIMS_DROPOUT_SHARED_BASE,
+                        dropout_config_t {0.75f, 12345678, mdt::s64, 0, false,
+                                memory::format_tag::undef}},
+                // 0.25:843921:abcd:1238976:true — output mask, offset, host scalars, concrete tag
+                sdpa_dims_t {SDPA_DIMS_DROPOUT_SHARED_BASE,
+                        dropout_config_t {0.25f, 843921, mdt::s64, 1238976,
+                                true, memory::format_tag::abcd}},
+                // SDPA_DIMS with key transposed
+                sdpa_dims_t {SDPA_DIMS_DROPOUT_BASE_TRANSPOSED,
+                        dropout_config_t {0.5f, 12345678, mdt::s64, 0, false,
+                                memory::format_tag::abcd}},
+                sdpa_dims_t {SDPA_DIMS_DROPOUT_BASE_TRANSPOSED,
+                        dropout_config_t {0.75f, 12345678, mdt::s64, 0, false,
+                                memory::format_tag::undef}},
+                sdpa_dims_t {SDPA_DIMS_DROPOUT_BASE_TRANSPOSED,
+                        dropout_config_t {0.25f, 843921, mdt::s64, 1238976,
+                                true, memory::format_tag::abcd}},
+                // multi-batch, multi-head with all three variations
+                sdpa_dims_t {SDPA_DIMS_DROPOUT_MULTI,
+                        dropout_config_t {0.5f, 42, mdt::s64, 0, false,
+                                memory::format_tag::undef}},
+                sdpa_dims_t {SDPA_DIMS_DROPOUT_MULTI,
+                        dropout_config_t {0.5f, 42, mdt::s64, 0, false,
+                                memory::format_tag::abcd}},
+                sdpa_dims_t {SDPA_DIMS_DROPOUT_MULTI,
+                        dropout_config_t {0.5f, 42, mdt::s64, 1238976, true,
+                                memory::format_tag::abcd}},
+                // larger sequence (256x256) — all three variations
+                sdpa_dims_t {SDPA_DIMS_DROPOUT_LARGE,
+                        dropout_config_t {0.3f, 99999, mdt::s64, 0, false,
+                                memory::format_tag::abcd}},
+                sdpa_dims_t {SDPA_DIMS_DROPOUT_LARGE,
+                        dropout_config_t {0.3f, 99999, mdt::s64, 0, false,
+                                memory::format_tag::undef}},
+                sdpa_dims_t {SDPA_DIMS_DROPOUT_LARGE,
+                        dropout_config_t {0.3f, 99999, mdt::s64, 1238796, true,
+                                memory::format_tag::abcd}},
+                sdpa_dims_t {SDPA_DIMS_DROPOUT_SHARED_GQA,
+                        dropout_config_t {0.5f, 4242, mdt::s64, 0, false,
+                                memory::format_tag::abcd}},
+                sdpa_dims_t {SDPA_DIMS_DROPOUT_SHARED_GQA,
+                        dropout_config_t {0.75f, 4343, mdt::s64, 0, false,
+                                memory::format_tag::undef}},
+                sdpa_dims_t {SDPA_DIMS_DROPOUT_SHARED_GQA,
+                        dropout_config_t {0.25f, 4444, mdt::s64, 123456, true,
+                                memory::format_tag::abcd}}),
+        &print_to_string);
+#undef SDPA_DIMS_DROPOUT_MULTI
+#undef SDPA_DIMS_DROPOUT_LARGE
+
+INSTANTIATE_TEST_SUITE_P(dropout_backward_minimal, sdpa_bwd_test,
+        testing::Values(sdpa_dims_t {SDPA_DIMS_DROPOUT_SHARED_BASE,
+                                dropout_config_t {0.5f, 12345678, mdt::s64, 0,
+                                        false, memory::format_tag::undef}},
+                sdpa_dims_t {SDPA_DIMS_DROPOUT_SHARED_BASE,
+                        dropout_config_t {0.75f, 12345678, mdt::s64, 0, false,
+                                memory::format_tag::undef}},
+                sdpa_dims_t {SDPA_DIMS_DROPOUT_SHARED_BASE,
+                        dropout_config_t {0.25f, 843921, mdt::s64, 1238976,
+                                true, memory::format_tag::undef}},
+                // Base casae with key transposed
+                sdpa_dims_t {SDPA_DIMS_DROPOUT_BASE_TRANSPOSED,
+                        dropout_config_t {0.5f, 12345678, mdt::s64, 0, false,
+                                memory::format_tag::undef}},
+                sdpa_dims_t {SDPA_DIMS_DROPOUT_BASE_TRANSPOSED,
+                        dropout_config_t {0.75f, 12345678, mdt::s64, 0, false,
+                                memory::format_tag::undef}},
+                sdpa_dims_t {SDPA_DIMS_DROPOUT_BASE_TRANSPOSED,
+                        dropout_config_t {0.25f, 843921, mdt::s64, 1238976,
+                                true, memory::format_tag::undef}},
+                // GQA: concrete tag
+                sdpa_dims_t {SDPA_DIMS_DROPOUT_SHARED_GQA,
+                        dropout_config_t {0.5f, 4242, mdt::s64, 0, false,
+                                memory::format_tag::undef}},
+                sdpa_dims_t {SDPA_DIMS_DROPOUT_SHARED_GQA,
+                        dropout_config_t {0.75f, 4343, mdt::s64, 0, false,
+                                memory::format_tag::undef}},
+                sdpa_dims_t {SDPA_DIMS_DROPOUT_SHARED_GQA,
+                        dropout_config_t {0.25f, 4444, mdt::s64, 123456, true,
+                                memory::format_tag::undef}}),
+        &print_to_string);
+#undef SDPA_DIMS_DROPOUT_SHARED_BASE_TRANSPOSED
+#undef SDPA_DIMS_DROPOUT_SHARED_BASE
+#undef SDPA_DIMS_DROPOUT_SHARED_GQA
+
+// clang-format off
+
+// backward pass: f16
+INSTANTIATE_TEST_SUITE_P(bwd_f16, sdpa_bwd_test_datatypes,
+        testing::Combine(testing::Values(1, 2), // mb
+                testing::Values(num_heads_t {1, 1}, num_heads_t {2, 2}), // heads
+                testing::Values(seq_len_size_t {64, 64},
+                        seq_len_size_t {1024, 1024}), // seq_len
+                testing::Values(head_group_size_t {32, 32, 32},
+                        head_group_size_t {64, 64, 64},
+                        head_group_size_t {128, 128, 128}), // head_size
+                testing::Values(tensor_type_t("Q", mdt::f16)), // dt
+                testing::Values(tensor_type_t("K", mdt::f16)), // kdt
+                testing::Values(tensor_type_t("V", mdt::f16)), // vdt
+                testing::Values(quantize_type::no_quantization), // qtype
+                testing::Values(dnnl::memory::format_tag::abcd,
+                                dnnl::memory::format_tag::abdc), // key_format_tag
+                testing::Values(mask_config_t {mask_type::no_mask},
+                        mask_config_t {mask_type::causal_tl}, mask_config_t {mask_type::causal_br},
+                        mask_config_t {mask_type::twoD}, mask_config_t {mask_type::oneD}
+                        ), // mask_type
+                testing::Values(default_scale_type), // scale_type
+                testing::Values(
+                        accumulation_t {accumulation_mode::f32,
+                        accumulation_mode::f32}), // accumulation_mode
+                testing::Values(no_dropout) // dropout
+                ),
+        &print_to_string2);
+
+// backward pass: bf16
+INSTANTIATE_TEST_SUITE_P(bwd_bf16, sdpa_bwd_test_datatypes,
+        testing::Combine(testing::Values(1, 2), // mb
+                testing::Values(num_heads_t {1, 1}, num_heads_t {2, 2}), // heads
+                testing::Values(seq_len_size_t {32, 32}, seq_len_size_t {128, 128},
+                        seq_len_size_t {384, 384}), // seq_len
+                testing::Values(head_group_size_t {32, 32, 32},
+                        head_group_size_t {64, 64, 64},
+                        head_group_size_t {128, 128, 128}), // head_size
+                testing::Values(tensor_type_t("Q", mdt::bf16)), // dt
+                testing::Values(tensor_type_t("K", mdt::bf16)), // kdt
+                testing::Values(tensor_type_t("V", mdt::bf16)), // vdt
+                testing::Values(quantize_type::no_quantization), // qtype
+                testing::Values(dnnl::memory::format_tag::abcd,
+                                dnnl::memory::format_tag::abdc), // key_format_tag
+                testing::Values(mask_config_t {mask_type::causal_tl}), // mask_type
+                testing::Values(default_scale_type), // scale_type
+                testing::Values(
+                        accumulation_t {accumulation_mode::f32,
+                        accumulation_mode::f32}), // accumulation_mode
+                testing::Values(no_dropout) // dropout
+                ),
+        &print_to_string2);
+
+// backward pass: GQA configurations
+INSTANTIATE_TEST_SUITE_P(bwd_gqa, sdpa_bwd_test_datatypes,
+        testing::Combine(testing::Values(1), // mb
+                testing::Values(num_heads_t {4, 2}, num_heads_t {8, 2},
+                        num_heads_t {32, 2}), // heads (q > kv)
+                testing::Values(seq_len_size_t {32, 32}, seq_len_size_t {128, 128},
+                        seq_len_size_t {384, 384}), // seq_len
+                testing::Values(head_group_size_t {64, 64, 64},
+                        head_group_size_t {128, 128, 128}), // head_size
+                testing::Values(tensor_type_t("Q", mdt::f16)), // dt
+                testing::Values(tensor_type_t("K", mdt::f16)), // kdt
+                testing::Values(tensor_type_t("V", mdt::f16)), // vdt
+                testing::Values(quantize_type::no_quantization), // qtype
+                testing::Values(dnnl::memory::format_tag::abcd,
+                                dnnl::memory::format_tag::abdc), // key_format_tag
+                testing::Values(mask_config_t {mask_type::no_mask},
+                        mask_config_t {mask_type::causal_tl}), // mask_type
+                testing::Values(default_scale_type), // scale_type
+                testing::Values(
+                        accumulation_t {accumulation_mode::f32,
+                        accumulation_mode::f32}), // accumulation_mode
+                testing::Values(no_dropout) // dropout
+                ),
+        &print_to_string2);
+
+// backward pass: non-uniform sequence lengths (q != kv)
+INSTANTIATE_TEST_SUITE_P(bwd_nonuniform_seq, sdpa_bwd_test_datatypes,
+        testing::Combine(testing::Values(1), // mb
+                testing::Values(num_heads_t {2, 2}), // heads
+                testing::Values(seq_len_size_t {64, 513},
+                        seq_len_size_t {513, 64}),
+                testing::Values(head_group_size_t {32, 32, 32},
+                        head_group_size_t {64, 64, 64}), // head_size
+                testing::Values(tensor_type_t("Q", mdt::f16)), // dt
+                testing::Values(tensor_type_t("K", mdt::f16)), // kdt
+                testing::Values(tensor_type_t("V", mdt::f16)), // vdt
+                testing::Values(quantize_type::no_quantization), // qtype
+                testing::Values(dnnl::memory::format_tag::abcd), // key_format_tag
+                testing::Values(mask_config_t {mask_type::no_mask}), // mask_type
+                testing::Values(default_scale_type), // scale_type
+                testing::Values(
+                        accumulation_t {accumulation_mode::f32,
+                        accumulation_mode::f32}), // accumulation_mode
+                testing::Values(no_dropout) // dropout
+                ),
+        &print_to_string2);
+
+// backward pass: f32
+INSTANTIATE_TEST_SUITE_P(bwd_f32, sdpa_bwd_test_datatypes,
+        testing::Combine(testing::Values(1, 2), // mb
+                testing::Values(num_heads_t {1, 1}, num_heads_t {2, 2}), // heads
+                testing::Values(seq_len_size_t {32, 32},
+                        seq_len_size_t {384, 384},
+                        seq_len_size_t {4096, 4096}), // seq_len
+                testing::Values(
+                        head_group_size_t {32, 32, 32},
+                        head_group_size_t {64, 64, 64},
+                        head_group_size_t {128, 128, 128}), // head_size
+                testing::Values(tensor_type_t("Q", mdt::f32)), // dt
+                testing::Values(tensor_type_t("K", mdt::f32)), // kdt
+                testing::Values(tensor_type_t("V", mdt::f32)), // vdt
+                testing::Values(quantize_type::no_quantization), // qtype
+                testing::Values(dnnl::memory::format_tag::abcd), // key_format_tag
+                testing::Values(mask_config_t {mask_type::no_mask},
+                        mask_config_t {mask_type::causal_tl}), // mask_type
+                testing::Values(default_scale_type), // scale_type
+                testing::Values(
+                        accumulation_t {accumulation_mode::f32,
+                        accumulation_mode::f32}), // accumulation_mode
+                testing::Values(no_dropout) // dropout
+                ),
+        &print_to_string2);
+
+
+// backward pass: large batch and head counts
+INSTANTIATE_TEST_SUITE_P(bwd_large_batch, sdpa_bwd_test_datatypes,
+        testing::Combine(testing::Values(4), // mb
+                testing::Values(num_heads_t {4, 4}), // heads
+                testing::Values(seq_len_size_t {4096, 4096}), // seq_len
+                testing::Values(head_group_size_t {32, 32, 32}), // head_size
+                testing::Values(tensor_type_t("Q", mdt::f16)), // dt
+                testing::Values(tensor_type_t("K", mdt::f16)), // kdt
+                testing::Values(tensor_type_t("V", mdt::f16)), // vdt
+                testing::Values(quantize_type::no_quantization), // qtype
+                testing::Values(dnnl::memory::format_tag::abcd), // key_format_tag
+                testing::Values(mask_config_t {mask_type::no_mask}), // mask_type
+                testing::Values(default_scale_type), // scale_type
+                testing::Values(
+                        accumulation_t {accumulation_mode::f32,
+                        accumulation_mode::f32}), // accumulation_mode
+                testing::Values(no_dropout) // dropout
+                ),
+        &print_to_string2);
+
+// clang-format on

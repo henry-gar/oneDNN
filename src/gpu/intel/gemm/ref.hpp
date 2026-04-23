@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -43,6 +43,7 @@ struct ref_jit_params_t : public trivially_serializable_t<ref_jit_params_t> {
     compute::kernel_ctx_t get_kernel_ctx() const {
         compute::kernel_ctx_t kernel_ctx;
         kernel_ctx.set_data_type(c_dt);
+        kernel_ctx.require_stateless_addressing(require_stateless_addressing);
         def_data_type(kernel_ctx, a_dt, "A");
         def_data_type(kernel_ctx, b_dt, "B");
         def_data_type(kernel_ctx, c_dt, "C");
@@ -55,8 +56,6 @@ struct ref_jit_params_t : public trivially_serializable_t<ref_jit_params_t> {
 
         kernel_ctx.define_int("WITH_POST_OP", with_post_ops);
         if (with_post_ops) {
-            def_binary_alg_kinds(kernel_ctx);
-            def_eltwise_alg_kinds(kernel_ctx);
             kernel_ctx.define_int("ELTWISE_ALG", eltwise_alg);
         }
         kernel_ctx.define_int("WITH_SUM", with_sum);
@@ -68,7 +67,7 @@ struct ref_jit_params_t : public trivially_serializable_t<ref_jit_params_t> {
         kernel_ctx.define_int("WITH_HOST_DST_ZP", with_host_dst_zp);
 
         return kernel_ctx;
-    };
+    }
 
     data_type_t a_dt = {};
     data_type_t b_dt = {};
@@ -83,9 +82,10 @@ struct ref_jit_params_t : public trivially_serializable_t<ref_jit_params_t> {
     bool with_host_src_zp = {};
     bool with_host_wei_zp = {};
     bool with_host_dst_zp = {};
+    bool require_stateless_addressing = {};
     // NOTE: Padding required for trivial serialization alignment.
     // When adding bool fields, might need to adjust padding.
-    // uint8_t pad[0] = {};
+    uint8_t pad[3] = {};
     int eltwise_alg = {};
 };
 
@@ -134,6 +134,12 @@ struct ref_t : public primitive_t {
                     VERBOSE_INCONSISTENT_NDIMS_WITH_VALS, "desc()->a_desc",
                     "desc()->b_desc", static_cast<int>(desc()->a_desc.dims[0]),
                     static_cast<int>(desc()->b_desc.dims[0]));
+            // Bug in runtime dims support; defer to ref_matmul
+            VDISPATCH_GEMM(
+                    !utils::one_of(DNNL_RUNTIME_DIM_VAL, desc()->m(),
+                            desc()->n(), desc()->k(), desc()->lda(),
+                            desc()->ldb(), desc()->ldc(), desc()->batch()),
+                    VERBOSE_RUNTIMEDIM_UNSUPPORTED);
             VDISPATCH_GEMM(IMPLICATION(acc_dt != s32 && !wei_decompress,
                                    attr()->zero_points_.has_default_values()),
                     VERBOSE_UNSUPPORTED_ZP_CFG);
@@ -190,6 +196,7 @@ struct ref_t : public primitive_t {
             conf.c_dt = c_dt;
             conf.bia_dt = bia_dt;
             conf.acc_dt = acc_dt;
+            conf.require_stateless_addressing = has_large_buffers();
             conf.with_post_ops = attr()->post_ops_.len() > 0;
             conf.with_sum = attr_info.with_sum;
             conf.with_src_zpoints = attr_info.with_src_zpoints;

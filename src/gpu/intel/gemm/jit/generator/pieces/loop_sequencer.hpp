@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2025 Intel Corporation
+* Copyright 2021 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -14,8 +14,8 @@
 * limitations under the License.
 *******************************************************************************/
 
-#ifndef GEMMSTONE_GUARD_LOOP_SEQUENCER_HPP
-#define GEMMSTONE_GUARD_LOOP_SEQUENCER_HPP
+#ifndef GEMMSTONE_GENERATOR_PIECES_LOOP_SEQUENCER_HPP
+#define GEMMSTONE_GENERATOR_PIECES_LOOP_SEQUENCER_HPP
 
 #include <array>
 #include <functional>
@@ -261,4 +261,4 @@ using loop_sequencer::LoopSequencer;
 
 GEMMSTONE_NAMESPACE_END
 
-#endif /* GEMMSTONE_GUARD_LOOP_SEQUENCER_HPP */
+#endif /* GEMMSTONE_GENERATOR_PIECES_LOOP_SEQUENCER_HPP */

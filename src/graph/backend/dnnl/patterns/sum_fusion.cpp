@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2023 Intel Corporation
+* Copyright 2021 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -14,7 +14,6 @@
 * limitations under the License.
 *******************************************************************************/
 
-#include "graph/backend/dnnl/internal_ops.hpp"
 #include "graph/backend/dnnl/kernels/sum.hpp"
 #include "graph/backend/dnnl/patterns/fusions.hpp"
 #include "graph/backend/dnnl/patterns/pattern_matcher_pass.hpp"
@@ -41,12 +40,11 @@ DNNL_BACKEND_REGISTER_PATTERN_MATCHER_PASS(dnnl, sum_fusion)
                             = pgraph->append_op(graph::op_kind::Add);
                     add_base->append_decision_function(
                             [](op_t *graph_op) -> bool {
-                                return !graph_op->has_attr(
-                                               op_attr::auto_broadcast)
-                                        || graph_op->get_attr<std::string>(
-                                                   op_attr::auto_broadcast)
-                                        == "none";
-                            });
+                        return !graph_op->has_attr(op_attr::auto_broadcast)
+                                || graph_op->get_attr<std::string>(
+                                           op_attr::auto_broadcast)
+                                == "none";
+                    });
 
                     auto addgraph = std::make_shared<pb_graph>();
                     pm::pb_op_t *add = addgraph->append_op(graph::op_kind::Add);

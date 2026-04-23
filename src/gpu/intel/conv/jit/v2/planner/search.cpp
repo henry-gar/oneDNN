@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -113,7 +113,7 @@ struct tile_info_t {
         return oss.str();
     }
 
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 };
 
 class tile_scheme_t {
@@ -183,7 +183,7 @@ struct dim_tile_t {
         return oss.str();
     }
 
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 };
 
 std::ostream &operator<<(std::ostream &out, const dim_tile_t &tile) {
@@ -212,7 +212,7 @@ struct tiling_desc_t {
         return oss.str();
     }
 
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 };
 
 class dim_tile_set_t {
@@ -340,7 +340,8 @@ public:
         descs_.push_back(desc);
     }
 
-    bench_input_params_t bench_input_params(int nprbs, const hw_t &hw) const {
+    bench_input_params_t bench_input_params(
+            int nprbs, const dsl::hw_t &hw) const {
         if (descs_.empty()) return bench_input_params_t();
         auto &kd = descs_.front();
         bench_input_params_t params;
@@ -529,8 +530,8 @@ public:
         }
         std::sort(entry_it_, entries_.end(),
                 [&](const entry_t &a, const entry_t &b) {
-                    return min_dists[a.id] < min_dists[b.id];
-                });
+            return min_dists[a.id] < min_dists[b.id];
+        });
     }
 
 private:

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2024-2025 Intel Corporation
+* Copyright 2024 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -127,7 +127,7 @@ impl::status_t sdp_decomp_config_t::construct_params(
 
     // Update SDPA input params. Sequence length for query and key/value are
     // NOT always same.
-    const auto &lt_wei = sdp_op[1]->get_input_value(1)->get_logical_tensor();
+    const auto &lt_wei = sdp_op[1]->get_input_logical_tensor(1);
     const ltw ltw_wei(lt_wei);
     seq_len_kv = ltw_wei.vdims()[last_dim];
 
@@ -141,8 +141,7 @@ impl::status_t sdp_decomp_config_t::construct_params(
     memory::data_type dt_inter = quantized
             ? dt
             : static_cast<memory::data_type>(
-                    ltw(sdp_op[1]->get_output_value(0)->get_logical_tensor())
-                            .data_type());
+                      ltw(sdp_op[1]->get_output_logical_tensor(0)).data_type());
 
     ////////////////////////////////////////////////////////////////////////
     ////////////// Start Creating primitives ///////////////////////////////
@@ -178,8 +177,7 @@ impl::status_t sdp_decomp_config_t::construct_params(
     // create reorder1 primitive attr
     dnnl::primitive_attr sub_reorder1_attr = make_primitive_attr(sdp_op[0]);
     dims sub_wei1_dims = {head_size_qk, seq_len_kv};
-    auto wei_md = make_dnnl_memory_desc(
-            sdp_op[1]->get_input_value(1)->get_logical_tensor());
+    auto wei_md = make_dnnl_memory_desc(sdp_op[1]->get_input_logical_tensor(1));
     wei1_strides = wei_md.get_strides();
     sub_wei1_user_md = memory::desc(sub_wei1_dims, dt_wei_user,
             {wei1_strides[second_last_dim], wei1_strides[last_dim]});
@@ -261,11 +259,9 @@ impl::status_t sdp_decomp_config_t::construct_params(
     //select
     if (has_select && !select_fusiable) {
         dnnl::primitive_attr sub_select_attr = make_primitive_attr(sdp_op[5]);
-        auto select_cond_lt
-                = sdp_op[5]->get_input_value(2)->get_logical_tensor();
+        auto select_cond_lt = sdp_op[5]->get_input_logical_tensor(2);
         auto select_cond_ltw = ltw(select_cond_lt);
-        auto select_src0_lt
-                = sdp_op[5]->get_input_value(0)->get_logical_tensor();
+        auto select_src0_lt = sdp_op[5]->get_input_logical_tensor(0);
         auto select_src0_ltw = ltw(select_src0_lt);
         sub_select_cond_md = memory::desc(
                 {select_cond_ltw.vdims()[second_last_dim],
@@ -312,7 +308,7 @@ impl::status_t sdp_decomp_config_t::construct_params(
     const auto mode = sdp_op[2]->get_attr<std::string>(op_attr::mode);
     const dnnl::algorithm algo = mode == "inf_as_zero"
             ? static_cast<dnnl::algorithm>(
-                    dnnl::impl::alg_kind::softmax_accurate_inf_as_zero)
+                      dnnl::impl::alg_kind::softmax_accurate_inf_as_zero)
             : dnnl::algorithm::softmax_accurate;
     auto sub_softmax_pd = softmax_forward::primitive_desc(p_engine,
             prop_kind::forward_inference, algo, sub_mm1_dst_md,
@@ -352,7 +348,7 @@ impl::status_t sdp_decomp_config_t::construct_params(
     primitive_attr sub_reorder3_attr;
     sub_reorder3_attr.set_scratchpad_mode(dnnl::scratchpad_mode::user);
     dims sub_dst_dims = {seq_len_q, head_size_v};
-    auto out_lt = sdp_op[4]->get_output_value(0)->get_logical_tensor();
+    auto out_lt = sdp_op[4]->get_output_logical_tensor(0);
     dst_strides = ltw(out_lt).vstrides();
     sub_dst_md = memory::desc(sub_dst_dims, dt_src_user, format_tag::ab);
     sub_dst_user_md = memory::desc(sub_dst_dims, dt_src_user,
@@ -674,17 +670,18 @@ impl::status_t sdp_decomp_config_t::record_input_offset(
         ///                 |                                 |
         ///             Succeeding_op                    Succeeding_op
         ///              (pattern1)                      (pattern2)
-        int cond_id = find_graph_inport(select->get_input_value(0));
-        int src0_id = find_graph_inport(select->get_input_value(1));
-        int src1_id = find_graph_inport(select->get_input_value(2));
-        VCHECK_SDP_DECOMP((src0_id != -1 || src1_id != -1) && cond_id != -1,
+        int sel_cond_id = find_graph_inport(select->get_input_value(0));
+        int sel_src0_id = find_graph_inport(select->get_input_value(1));
+        int sel_src1_id = find_graph_inport(select->get_input_value(2));
+        VCHECK_SDP_DECOMP(
+                (sel_src0_id != -1 || sel_src1_id != -1) && sel_cond_id != -1,
                 status::invalid_graph, "failed to find graph inport");
-        if (src1_id != -1) select_fusiable = true;
-        graph_inport.emplace_back(cond_id);
-        if (src0_id != -1)
-            graph_inport.emplace_back(src0_id);
+        if (sel_src1_id != -1) select_fusiable = true;
+        graph_inport.emplace_back(sel_cond_id);
+        if (sel_src0_id != -1)
+            graph_inport.emplace_back(sel_src0_id);
         else
-            graph_inport.emplace_back(src1_id);
+            graph_inport.emplace_back(sel_src1_id);
     } else {
         //placeholder
         graph_inport.emplace_back(-1);
@@ -699,7 +696,7 @@ impl::status_t sdp_decomp_config_t::record_sdp_ops(
         auto in_val = op->get_input_value(1);
         if (in_val->has_producer()) {
             auto *producer = &in_val->get_producer();
-            if (producer->get_kind() == op_kind::dnnl_permute) {
+            if (producer->get_kind() == op_kind::_permute) {
                 in_val = producer->get_input_value(0);
                 if (in_val->has_producer())
                     producer = &in_val->get_producer();
@@ -707,7 +704,7 @@ impl::status_t sdp_decomp_config_t::record_sdp_ops(
                     return nullptr;
             }
             if (producer == nullptr
-                    || producer->get_kind() != op_kind::dnnl_reorder)
+                    || producer->get_kind() != op_kind::_reorder)
                 return nullptr;
             return producer->shared_from_this();
         } else
@@ -715,11 +712,11 @@ impl::status_t sdp_decomp_config_t::record_sdp_ops(
     };
 
     for (const auto &cur_op : sg->get_ops()) {
-        if (!cur_op || cur_op->get_kind() != op_kind::dnnl_matmul) continue;
+        if (!cur_op || cur_op->get_kind() != op_kind::_matmul) continue;
         auto post_op = get_post_op(cur_op);
         op_ptr select;
         if (has_select && !select_fusiable) {
-            if (!post_op || post_op->get_kind() != op_kind::dnnl_binary
+            if (!post_op || post_op->get_kind() != op_kind::_binary
                     || post_op->get_attr<int64_t>(op_attr::alg_kind)
                             != alg_kind::binary_select)
                 continue;
@@ -727,7 +724,7 @@ impl::status_t sdp_decomp_config_t::record_sdp_ops(
             post_op = get_post_op(select);
         }
 
-        if (!post_op || post_op->get_kind() != op_kind::dnnl_softmax) continue;
+        if (!post_op || post_op->get_kind() != op_kind::_softmax) continue;
         auto ppost_op = get_post_op(post_op);
         VCHECK_SDP_DECOMP(ppost_op != nullptr, status::invalid_graph,
                 "Failed to find post post op for matmul");
@@ -855,7 +852,7 @@ impl::status_t sdp_decomp_config_t::prepare_sdp_scales_zps(
             args.insert({DNNL_ARG_ATTR_ZERO_POINTS | DNNL_ARG_DST, sub_dst_zp});
         }
     }
-    if (op && op->get_kind() == op_kind::dnnl_reorder) {
+    if (op && op->get_kind() == op_kind::_reorder) {
         if (op->has_attr(op_attr::with_runtime_dst_zps)
                 && op->get_attr<bool>(op_attr::with_runtime_dst_zps)) {
             memory::desc sub_dst_zp_md
@@ -879,7 +876,7 @@ dnnl::primitive_attr sdp_decomp_config_t::make_primitive_attr(
                 = op->get_attr<fusion_info_t>(op_attr::fusion_info);
         attr = make_dnnl_primitive_attr(op, fusion_info);
     }
-    if (op && op->get_kind() == op_kind::dnnl_reorder) {
+    if (op && op->get_kind() == op_kind::_reorder) {
         // generate mask
         int mask = 0;
         if (op->has_attr(op_attr::axis) && op->has_attr(op_attr::qtype)) {
@@ -898,33 +895,6 @@ dnnl::primitive_attr sdp_decomp_config_t::make_primitive_attr(
     }
     attr.set_scratchpad_mode(dnnl::scratchpad_mode::user);
     return attr;
-}
-
-#define DECLARE_RESET_ENGINE(primitive_name, primitive_type) \
-    { \
-        const auto desc_t = (primitive_name).get_primitive_desc()->impl(); \
-        dnnl_primitive_desc new_pd_t(desc_t, p_engine.get()); \
-        primitive_type::primitive_desc new_pd(&new_pd_t); \
-        (primitive_name) = primitive_type(new_pd); \
-    }
-
-impl::status_t sdp_decomp_config_t::reset_engine(const dnnl::engine &p_engine) {
-#if DNNL_CPU_RUNTIME == DNNL_RUNTIME_OMP
-    omp_set_num_threads(1);
-#endif
-    DECLARE_RESET_ENGINE(sub_mm1_prim, matmul);
-    DECLARE_RESET_ENGINE(sub_softmax_prim, softmax_forward);
-    DECLARE_RESET_ENGINE(sub_mm2_prim, matmul);
-    if (has_select && !select_fusiable)
-        DECLARE_RESET_ENGINE(sub_select_prim, binary);
-    sub_reorder0.reset_engine(p_engine);
-    sub_reorder1.reset_engine(p_engine);
-    sub_reorder2.reset_engine(p_engine);
-    sub_reorder3.reset_engine(p_engine);
-#if DNNL_CPU_RUNTIME == DNNL_RUNTIME_OMP
-    omp_set_num_threads(nthr);
-#endif
-    return dnnl_success;
 }
 
 template status_t

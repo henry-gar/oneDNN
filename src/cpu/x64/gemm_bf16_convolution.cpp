@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -356,7 +356,7 @@ status_t gemm_bf16_convolution_fwd_t<dst_data_type>::execute_forward_nspc(
             = binary_injector::prepare_binary_args(
                     this->pd()->attr()->post_ops_, ctx);
 
-    auto scratchpad = ctx.get_scratchpad_grantor();
+    const auto &scratchpad = ctx.get_scratchpad_grantor();
     const conv_gemm_conf_t &jcp = pd()->jcp_;
 
     float *bia_base = nullptr;
@@ -489,20 +489,16 @@ status_t gemm_bf16_convolution_fwd_t<dst_data_type>::execute_forward_thr_nspc(
             if (do_postprocess) {
                 parallel_nd_ext(jcp.nthr == 1 ? 0 : 1, N,
                         [&](size_t ithr, size_t nthr, size_t os) {
-                            const float *__restrict acc_arr = acc + os * jcp.oc;
-                            const float *__restrict bia_arr
-                                    = (bia_base == nullptr)
-                                    ? nullptr
-                                    : bia_base + g * jcp.oc;
-                            dst_data_t *__restrict dst_arr
-                                    = dst + os * dst_os_stride;
+                    const float *__restrict acc_arr = acc + os * jcp.oc;
+                    const float *__restrict bia_arr = (bia_base == nullptr)
+                            ? nullptr
+                            : bia_base + g * jcp.oc;
+                    dst_data_t *__restrict dst_arr = dst + os * dst_os_stride;
 
-                            (*pp_ker_)(dst_arr,
-                                    acc_needed ? acc_arr : (float *)dst_arr,
-                                    bia_arr, sum_scale, jcp.oc,
-                                    post_ops_binary_rhs_arg_vec, dst_base,
-                                    g * jcp.oc);
-                        });
+                    (*pp_ker_)(dst_arr, acc_needed ? acc_arr : (float *)dst_arr,
+                            bia_arr, sum_scale, jcp.oc,
+                            post_ops_binary_rhs_arg_vec, dst_base, g *jcp.oc);
+                });
             }
         }
         nd_iterator_step(n, jcp.mb, g, jcp.ngroups, ohb, nb_oh, owb, nb_ow);
@@ -526,7 +522,7 @@ status_t gemm_bf16_convolution_fwd_t<dst_data_type>::execute_forward_ncsp(
             key_conv_gemm_col);
     acc_data_t *acc_base = is_bf16_dst
             ? ctx.get_scratchpad_grantor().template get<acc_data_t>(
-                    key_conv_int_dat_in_acc_dt)
+                      key_conv_int_dat_in_acc_dt)
             : nullptr;
 
     const conv_gemm_conf_t &jcp = this->pd()->jcp_;
@@ -609,7 +605,7 @@ status_t gemm_bf16_convolution_fwd_t<dst_data_type>::execute_forward_ncsp(
             float *bias_ptr = bias ? bias + groups * jcp.oc + oc : nullptr;
             (*pp_ker_)(dst_local, acc, bias_ptr, sum_scale, dst_str, acc_str, m,
                     oc_block, post_ops_binary_rhs_arg_vec.data(), dst,
-                    groups * jcp.oc + oc);
+                    groups *jcp.oc + oc);
         }
     };
 
@@ -672,7 +668,7 @@ status_t gemm_bf16_convolution_bwd_data_t<diff_src_data_type>::
     auto wei_base = CTX_IN_MEM(const wei_data_t *, DNNL_ARG_WEIGHTS);
     auto diff_src_base = CTX_OUT_MEM(diff_src_data_t *, DNNL_ARG_DIFF_SRC);
 
-    auto scratchpad = ctx.get_scratchpad_grantor();
+    const auto &scratchpad = ctx.get_scratchpad_grantor();
     const conv_gemm_conf_t &jcp = pd()->jcp_;
 
     std::atomic<status_t> st(status::success);
@@ -752,26 +748,24 @@ status_t gemm_bf16_convolution_bwd_data_t<
             parallel_nd_ext(jcp.nthr == 1 ? 0 : 1,
                     static_cast<size_t>(jcp.is) * jcp.id,
                     [&](size_t ithr, size_t nthr, size_t is) {
-                        diff_src_data_t *__restrict diff_src_loc
-                                = diff_src + is * diff_src_os_stride;
-                        const acc_data_t *__restrict acc_loc
-                                = acc + is * jcp.ic;
-                        cvt_float_to_bfloat16((bfloat16_t *)diff_src_loc,
-                                (const float *)acc_loc, jcp.ic);
-                    });
+                diff_src_data_t *__restrict diff_src_loc
+                        = diff_src + is * diff_src_os_stride;
+                const acc_data_t *__restrict acc_loc = acc + is * jcp.ic;
+                cvt_float_to_bfloat16((bfloat16_t *)diff_src_loc,
+                        (const float *)acc_loc, jcp.ic);
+            });
         } else {
             assert(diff_src_data_type == data_type::f32);
             parallel_nd_ext(jcp.nthr == 1 ? 0 : 1,
                     static_cast<size_t>(jcp.is) * jcp.id,
                     [&](size_t ithr, size_t nthr, size_t is) {
-                        diff_src_data_t *__restrict diff_src_loc
-                                = diff_src + is * diff_src_os_stride;
-                        const acc_data_t *__restrict acc_loc
-                                = acc + is * jcp.ic;
-                        PRAGMA_OMP_SIMD()
-                        for (int ic = 0; ic < jcp.ic; ++ic)
-                            diff_src_loc[ic] = acc_loc[ic];
-                    });
+                diff_src_data_t *__restrict diff_src_loc
+                        = diff_src + is * diff_src_os_stride;
+                const acc_data_t *__restrict acc_loc = acc + is * jcp.ic;
+                PRAGMA_OMP_SIMD()
+                for (int ic = 0; ic < jcp.ic; ++ic)
+                    diff_src_loc[ic] = acc_loc[ic];
+            });
         }
         nd_iterator_step(n, jcp.mb, g, jcp.ngroups);
     }
@@ -789,7 +783,7 @@ status_t gemm_bf16_convolution_bwd_data_t<diff_src_data_type>::
             key_conv_gemm_col);
     acc_data_t *acc_base = diff_src_data_type == data_type::bf16
             ? ctx.get_scratchpad_grantor().template get<acc_data_t>(
-                    key_conv_int_dat_in_acc_dt)
+                      key_conv_int_dat_in_acc_dt)
             : nullptr;
 
     const conv_gemm_conf_t &jcp = this->pd()->jcp_;
@@ -964,7 +958,7 @@ status_t gemm_bf16_convolution_bwd_weights_t<diff_wei_data_type>::
 
     acc_data_t *acc_base = diff_wei_data_type == data_type::bf16
             ? ctx.get_scratchpad_grantor().template get<acc_data_t>(
-                    key_conv_int_dat_in_acc_dt)
+                      key_conv_int_dat_in_acc_dt)
             : (acc_data_t *)diff_weights;
 
     float *diff_bias = nullptr;
@@ -1171,7 +1165,7 @@ status_t gemm_bf16_convolution_bwd_weights_t<diff_wei_data_type>::
 
     acc_data_t *acc_base = diff_wei_data_type == data_type::bf16
             ? ctx.get_scratchpad_grantor().template get<acc_data_t>(
-                    key_conv_int_dat_in_acc_dt)
+                      key_conv_int_dat_in_acc_dt)
             : (acc_data_t *)diff_weights;
 
     float *diff_bias = nullptr;

@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright 2021-2025 Intel Corporation
+ * Copyright 2021 Intel Corporation
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,7 +21,6 @@
 #include "graph/interface/c_types_map.hpp"
 #include "graph/interface/value.hpp"
 
-#include "graph/backend/dnnl/internal_attrs.hpp"
 #include "graph/backend/dnnl/op_executable.hpp"
 #include "graph/backend/dnnl/passes/compile_ops.hpp"
 
@@ -46,33 +45,31 @@ status_t compile_ops(std::shared_ptr<subgraph_t> &sg) {
     bool use_block_layout = sg->can_use_blocked_layout_;
 
     return topo_order_visit(sg->get_output_ops(), [&](op_t *op) {
-        const op_schema_t *opm
-                = op_schema_registry_t::get_op_schema(op->get_kind());
-
-        VCHECK_COMPILE_OPS(opm != nullptr, status::invalid_graph_op,
-                "no schema for current op %s", op->get_name().c_str());
-
-        VCHECK_COMPILE_OPS(opm->has_additional_item("executable_creator"),
-                status::invalid_graph_op,
+        auto creator = op_func_t::get_executable_creator(op->get_kind());
+        VCHECK_COMPILE_OPS(creator != nullptr, status::invalid_graph_op,
                 "no executable creator in schema of op %s",
                 op->get_name().c_str());
-
         auto cur_op = op->shared_from_this();
-        auto creator = opm->get_additional_item<executable_creator_func>(
-                "executable_creator");
-
         std::shared_ptr<op_executable_t> exec
                 = creator(cur_op, p_engine, pd_cache, fpm, use_block_layout);
         VCHECK_COMPILE_OPS(exec != nullptr, status::invalid_graph_op,
                 "unimplemented op, can't compile op %s",
                 op->get_name().c_str());
-        if (cur_op->get_kind() == op_kind::dnnl_sdpa) {
+        if (cur_op->get_kind() == op_kind::_sdpa) {
             auto sdpa_exec = std::dynamic_pointer_cast<sdpa_executable_t>(exec);
             VCHECK_COMPILE_OPS(sdpa_exec->is_initialized(),
                     status::unimplemented,
                     "failed to create executable for op %s",
                     op->get_name().c_str());
+        } else if (cur_op->get_kind() == op_kind::_sdpa_bwd) {
+            auto sdpa_bwd_exec
+                    = std::dynamic_pointer_cast<sdpa_bwd_executable_t>(exec);
+            VCHECK_COMPILE_OPS(sdpa_bwd_exec->is_initialized(),
+                    status::unimplemented,
+                    "failed to create executable for op %s",
+                    op->get_name().c_str());
         }
+
         sg->execs_.emplace_back(exec);
 
         sg->is_constant_.push_back(op->has_attr(op_attr::is_constant)

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -40,7 +40,8 @@ inline bool eltwise_injector_f32_is_supported(alg_kind_t alg) {
             eltwise_tanh, eltwise_tanh_use_dst_for_bwd, eltwise_abs,
             eltwise_round, eltwise_linear, eltwise_clip, eltwise_clip_v2,
             eltwise_clip_v2_use_dst_for_bwd, eltwise_logistic,
-            eltwise_logistic_use_dst_for_bwd, eltwise_stochastic_round);
+            eltwise_logistic_use_dst_for_bwd, eltwise_stochastic_round,
+            eltwise_mx_scale);
 }
 
 template <typename ngen_generator_t>
@@ -69,9 +70,9 @@ struct eltwise_injector_f32_t {
 
     void prepare();
     void compute(const ngen::GRF &reg) { compute(ngen::GRFRange(reg, 1)); }
-    void compute(const ngen::GRFRange &regs, int seed = -1, int seed_off = -1,
+    void compute(const ngen::GRFRange &regs, int seed = -1, int seed_off = 0,
             ngen::DataType = ngen::DataType::invalid);
-    void compute(const int *grfs, int ngrf, int seed = -1, int seed_off = -1,
+    void compute(const int *grfs, int ngrf, int seed = -1, int seed_off = 0,
             ngen::DataType = ngen::DataType::invalid);
 
 private:
@@ -123,6 +124,9 @@ private:
     void sround_compute_fwd(int simd, const ngen::GRF &r, int phase,
             const ngen::Subregister &seed, const ngen::DataType dst_dt,
             int off);
+    void mx_scale_compute_fwd(int simd, const ngen::GRF &r, int phase,
+            const ngen::Subregister &dst_base, int dst_off,
+            const ngen::DataType dst_dt, int off);
     void philox_4x32(
             int simd, const ngen::Subregister &seed, const ngen::GRF &bias);
     void swish_compute_fwd(int simd, const ngen::GRF &r, int phase, int off);

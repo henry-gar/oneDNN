@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -17,7 +17,6 @@
 #ifndef GPU_INTEL_JIT_IR_BLOCKING_HPP
 #define GPU_INTEL_JIT_IR_BLOCKING_HPP
 
-#include "gpu/intel/jit/ir/core.hpp"
 #include "gpu/intel/jit/ir/problem.hpp"
 #include "gpu/intel/logging.hpp"
 
@@ -123,17 +122,34 @@ public:
         return ret;
     }
 
-    IR_DEFINE_DUMP()
+    // Arbitrary lexicographic ordering to enable deterministic operation.
+    bool operator<(const blocking_t &other) const {
+        if (simd_ != other.simd_) return simd_ < other.simd_;
+        auto tile_compare = [](const tile_t &a, const tile_t &b) {
+            auto a_it = a.begin(), b_it = b.begin();
+            auto a_end = a.end(), b_end = b.end();
+            while (a_it != a_end && b_it != b_end) {
+                if (a_it.idx() != b_it.idx()) return a_it.idx() < b_it.idx();
+                if (a_it.value() != b_it.value())
+                    return a_it.value() < b_it.value();
+                a_it++;
+                b_it++;
+            }
+            return a_it == a_end && b_it != b_end;
+        };
+        if (loop_ != other.loop_) return tile_compare(loop_, other.loop_);
+        if (thread_group_ != other.thread_group_)
+            return tile_compare(thread_group_, other.thread_group_);
+        return tile_compare(iter_, other.iter_);
+    }
+
+    XE_DEFINE_DUMP()
 
 private:
     int simd_ = 0;
     tile_t loop_;
     tile_t thread_group_;
     tile_t iter_;
-};
-
-struct blocking_hash_t {
-    size_t operator()(const blocking_t &b) const { return b.get_hash(); }
 };
 
 // Flags specifying blocking restrictions for a prb dimension.
@@ -244,7 +260,7 @@ public:
         return oss.str();
     }
 
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
     dim_t loop = 0;
     int thread_group = 0;
@@ -288,13 +304,15 @@ public:
     blocking_scheme_t(const std::string &s) {
         gpu_assert(s[s.length() - 1] == ']');
         auto parts = gpu_utils::split(s.substr(0, s.length() - 1), "],");
+        const std::string colon = ":";
+        const std::string comma = ",";
         for (auto &p : parts) {
-            auto p_parts = gpu_utils::split(p, ":");
+            auto p_parts = gpu_utils::split(p, colon);
             auto &key = p_parts[0];
             auto &vec = p_parts[1];
             gpu_assert(vec[0] == '[');
             auto s_dims
-                    = gpu_utils::split(vec.substr(1, vec.length() - 1), ",");
+                    = gpu_utils::split(vec.substr(1, vec.length() - 1), comma);
             for (auto &s : s_dims)
                 set(key, s);
         }
@@ -344,7 +362,7 @@ public:
         return oss.str();
     }
 
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
 private:
     void set(const std::string &s_tile, const std::string &_s_dim) {
@@ -450,7 +468,7 @@ private:
     void generate_sample(int vec_size, const blocking_checker_t &chk,
             const level_tile_set_t &level_tile_set);
 
-    std::unordered_set<blocking_t, blocking_hash_t> blockings_;
+    std::set<blocking_t> blockings_;
 };
 
 class blocking_params_t {
@@ -497,7 +515,7 @@ public:
         return oss.str();
     }
 
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
     static std::vector<std::string> csv_keys() {
         return {"simd", "loop", "tg", "iter", "bufs_hint"};
@@ -527,6 +545,7 @@ public:
     const std::vector<blocking_params_t> &params_vec() const {
         return params_vec_;
     }
+    std::vector<blocking_params_t> &params_vec() { return params_vec_; }
 
     bool is_empty() const { return params_vec_.empty(); }
 
@@ -558,8 +577,11 @@ public:
         gpu_assert(end >= beg && end <= configs());
         std::sort(params_vec_.begin() + beg, params_vec_.begin() + end,
                 [&](const blocking_params_t &a, const blocking_params_t &b) {
-                    return key_func(a) < key_func(b);
-                });
+            auto a_eval = key_func(a);
+            auto b_eval = key_func(b);
+            if (a_eval == b_eval) return a.id() < b.id();
+            return a_eval < b_eval;
+        });
     }
 
     template <typename PredicateFuncT>
@@ -739,8 +761,8 @@ public:
         auto sorted_points = points_;
         std::sort(sorted_points.begin(), sorted_points.end(),
                 [&](const bench_point_t &a, const bench_point_t &b) {
-                    return a.nsec < b.nsec;
-                });
+            return a.nsec < b.nsec;
+        });
         std::vector<int> ret;
         for (int i = 0; i < std::min((int)sorted_points.size(), n); i++) {
             auto &p = sorted_points[i];

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -229,7 +229,7 @@ void Generator<hw>::setupAddr(Type T, const GRFRange &addr, const BO &ptr, const
                         eadd(simd2, addr[2].uq(), addr[udStride].ud(0)(udStride), ptrShifted, strategy, state);
                     eadd(simd1, addr[0].uq(), addr[0].ud(0)(udStride), ptrShifted, strategy, state);
                 } else if (ptrShifted != 0) {
-                    if (consecutive > 1 || tblock > 1)
+                    if (consecutive > 1 || tblock > 1 || hw >= HW::Xe3p)
                     {
                         mulConstant<uint32_t>(simdSize, addr, iv, stride);
                         add<uint32_t>(simdSize, addr, addr, ptrShifted);
@@ -378,8 +378,11 @@ void Generator<hw>::setupAddr(Type T, const GRFRange &addr, const BO &ptr, const
                 auto pitch = bw * bcount * block.ebytes;
                 if (pitch < 64 || pitch & 0xF) hw_unsupported();
                 mov(1, addr[0].ud(4), pitch - 1);
-            } else
+            } else {
                 add(1, addr[0].ud(4), bld, -1);
+                if (!doBaseAdjust)
+                    max_<uint32_t>(1, addr[0].ud(4), addr[0].ud(4), addr[0].ud(2));
+	    }
 
             mov(1, addr[0].ud(7), (bw - 1) | ((bh - 1) << 8) | ((bcount - 1) << 16));
 

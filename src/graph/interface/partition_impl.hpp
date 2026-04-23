@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2025 Intel Corporation
+* Copyright 2021 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -126,7 +126,8 @@ public:
     ///     with the in/outputs_. Backend should do the reorder inside this
     ///     function's implementation.
     virtual status_t infer_shape(std::vector<const logical_tensor_t *> &inputs,
-            std::vector<logical_tensor_t *> &outputs) const = 0;
+            std::vector<logical_tensor_t *> &outputs) const
+            = 0;
 
     /// Compile the partition with specific inputs and outputs logical tensors
     /// and engine. A partition can be compiled multiple times with different
@@ -173,7 +174,8 @@ public:
     virtual status_t compile(compiled_partition_t *compiled_partition,
             const std::vector<logical_tensor_t> &inputs,
             const std::vector<logical_tensor_t> &outputs,
-            const engine_t *aengine) const = 0;
+            const engine_t *aengine) const
+            = 0;
 
     /// get partition_impl id
     size_t id() const { return id_; }
@@ -277,10 +279,10 @@ public:
             const std::vector<logical_tensor_t> &inputs,
             const std::vector<logical_tensor_t> &outputs,
             const std::vector<inplace_pair_t> &inplace_pairs)
-        : engine_(const_cast<engine_t *>(&engine))
+        : engine_(&engine)
         , inputs_(inputs)
         , outputs_(outputs)
-        , inplace_pairs_(inplace_pairs) {};
+        , inplace_pairs_(inplace_pairs) {}
 
     virtual ~compiled_partition_impl_t() = default;
 
@@ -288,8 +290,6 @@ public:
 
     /// The getters for engine_, which is used in C API implementation
     const engine_t *get_engine() const { return engine_; }
-
-    virtual status_t reset_engine(const engine_t *engine) = 0;
 
     /// The getters for inputs_, which is used in verbose mode
     const std::vector<logical_tensor_t> &get_inputs() const { return inputs_; }
@@ -375,7 +375,7 @@ protected:
     /// The engine which this compiled_partition_impl_t is specialized
     /// for. Should directly store the engine that is given when calling
     /// partition_impl_t::compile
-    engine_t *engine_;
+    const engine_t *engine_;
 
     /// The inputs logical tensors which this compiled_partition_impl_t
     /// is specialized for.Should have exact shape/dtype/layout and be

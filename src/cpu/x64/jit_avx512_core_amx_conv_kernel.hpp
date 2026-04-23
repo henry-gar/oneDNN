@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -99,12 +99,12 @@ private:
         return Xbyak::Zmm(idx);
     }
     int get_ow_start(int ki, int pad_l) const {
-        return nstl::max(0,
-                utils::div_up(pad_l - ki * (jcp.dilate_w + 1), jcp.stride_w));
+        return utils::div_up(
+                nstl::max(0, pad_l - ki * (jcp.dilate_w + 1)), jcp.stride_w);
     }
     int get_ow_end(int ur_w, int ki, int pad_r) const {
         int filter_overlap = pad_r - (jcp.kw - 1 - ki) * (jcp.dilate_w + 1);
-        return ur_w - nstl::max(0, utils::div_up(filter_overlap, jcp.stride_w));
+        return ur_w - utils::div_up(nstl::max(0, filter_overlap), jcp.stride_w);
     }
 };
 
@@ -532,7 +532,8 @@ private:
     const Xbyak::Reg64 reg_wsp_ptr = r12;
 
     const Xbyak::Reg64 reg_bias = r11;
-    const Xbyak::Reg64 reg_ptr_scales = r10;
+    const Xbyak::Reg64 reg_ptr_src_scales = r10;
+    const Xbyak::Reg64 reg_ptr_wei_scales = r10;
     const Xbyak::Reg64 reg_ptr_dst_scales = r10;
     const Xbyak::Reg64 reg_ptr_sum_scale = r9;
     const Xbyak::Reg64 reg_ptr_sum_zp = abi_not_param1;
@@ -557,8 +558,6 @@ private:
     const Xbyak::Zmm zmm_zero = zmm30;
     const Xbyak::Zmm zmm_prev_dst = zmm29;
     const Xbyak::Zmm zmm_sum_zp = zmm28;
-    /* dst scale */
-    const Xbyak::Zmm &zmm_dst_scale = zmm27;
 
     // AUX: Steps, shifts and offsets
     size_t get_inp_ocb_step() const;
@@ -737,7 +736,7 @@ private:
                         + static_cast<dim_t>(kh) * jcp.kw * jcp.ic_block
                                 * jcp.oc_block
                         + static_cast<dim_t>(kw) * jcp.ic_block * jcp.oc_block);
-    };
+    }
 
     inline void setup_stack_space();
     int ic_block_step_stack_size = 0;

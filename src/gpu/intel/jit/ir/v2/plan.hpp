@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2024-2025 Intel Corporation
+* Copyright 2024 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -37,7 +37,7 @@ struct reduce_plan_t : public base_plan_t {
     using base_plan_t::base_plan_t;
 
     reduce_plan_t() = default;
-    reduce_plan_t(const hw_t &hw, const layout_t &src, const layout_t &dst)
+    reduce_plan_t(const dsl::hw_t &hw, const layout_t &src, const layout_t &dst)
         : base_plan_t(hw), src(src), dst(dst) {}
 
     int grf_usage_bytes() const {
@@ -54,7 +54,7 @@ struct reduce_plan_t : public base_plan_t {
         return oss.str();
     }
 
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 };
 
 struct reorder_plan_t : public base_plan_t {
@@ -64,7 +64,8 @@ struct reorder_plan_t : public base_plan_t {
     using base_plan_t::base_plan_t;
 
     reorder_plan_t() = default;
-    reorder_plan_t(const hw_t &hw, const layout_t &src, const layout_t &dst)
+    reorder_plan_t(
+            const dsl::hw_t &hw, const layout_t &src, const layout_t &dst)
         : base_plan_t(hw), src(src), dst(dst) {}
 
     int grf_usage_bytes() const {
@@ -81,7 +82,7 @@ struct reorder_plan_t : public base_plan_t {
         return oss.str();
     }
 
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 };
 
 } // namespace v2

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -295,10 +295,8 @@ void jit_uni_brgemm_conv_comp_pad_kernel_t<Vmm>::bwd_kw_iw_loop(const int icb,
             if (o_test % SW == 0) break;
             s++;
         }
-        const int k_f
-                = nstl::min(jcp_.kw, static_cast<int>(div_up(iw + LP + 1, DW)));
-        int k_s = nstl::max(
-                0, static_cast<int>(div_up(iw + LP - jcp_.ow * SW + 1, DW)));
+        const int k_f = nstl::min(jcp_.kw, div_up(iw + LP + 1, DW));
+        int k_s = div_up(nstl::max(0, iw + LP - jcp_.ow * SW + 1), DW);
         while (k_s % SW != s)
             k_s++;
 

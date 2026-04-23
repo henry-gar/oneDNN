@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -17,9 +17,12 @@
 /// @example sum.cpp
 /// > Annotated version: @ref sum_example_cpp
 
-/// @page sum_example_cpp Sum Primitive Example
-/// This C++ API example demonstrates how to create and execute a
+/// @page sum_example_cpp_brief
+/// @brief This C++ API example demonstrates how to create and execute a
 /// [Sum](@ref dev_guide_sum) primitive.
+
+/// @page sum_example_cpp Sum Primitive Example
+/// \copybrief sum_example_cpp_brief
 ///
 /// Key optimizations included in this example:
 /// - Identical memory formats for source (src) and destination (dst) tensors.

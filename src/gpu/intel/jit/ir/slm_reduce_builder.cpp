@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -18,9 +18,8 @@
 
 #include <algorithm>
 
-#include "gpu/intel/jit/ir/message.hpp"
 #include "gpu/intel/jit/ir/reduce.hpp"
-#include "gpu/intel/jit/utils/trace.hpp"
+#include "gpu/intel/jit/ir/send_builder.hpp"
 #include "gpu/intel/jit/utils/utils.hpp"
 
 namespace dnnl {
@@ -42,9 +41,10 @@ slm_reduce_builder_t::slm_reduce_builder_t(ir_context_t &ir_ctx,
     gpu_assert((dim_ != dim_idx::invalid) && (dim_ <= 2));
     gpu_assert(tg_grid_.dim(dim_) > 1);
 
-    tmp_reg_buf_ = ir_ctx.create_tmp_var(type_t::byte(type::attr_t::ptr));
+    tmp_reg_buf_
+            = ir_ctx.create_tmp_var(dsl::type_t::byte(dsl::type::attr_t::ptr));
     slm_buf_ = ir_ctx.create_tmp_var(
-            type_t::byte(type::attr_t::ptr), "reduce_slm");
+            dsl::type_t::byte(dsl::type::attr_t::ptr), "reduce_slm");
     tg_ndims_ = (dim_ != dim_idx_t(2)) ? dim_ + 1 : tg_grid_.ndims();
 
     build();

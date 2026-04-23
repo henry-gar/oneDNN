@@ -4,7 +4,7 @@
 
   GPL LICENSE SUMMARY
 
-  Copyright (c) 2017-2020 Intel Corporation. All rights reserved.
+  Copyright (c) 2017 Intel Corporation. All rights reserved.
 
   This program is free software; you can redistribute it and/or modify
   it under the terms of version 2 of the GNU General Public License as
@@ -26,7 +26,7 @@
 
   BSD LICENSE
 
-  Copyright (c) 2017-2020 Intel Corporation. All rights reserved.
+  Copyright (c) 2017 Intel Corporation. All rights reserved.
   All rights reserved.
 
   Redistribution and use in source and binary forms, with or without
@@ -764,3 +764,8 @@ __itt_pt_write:
 //        ptwrite rcx
         .byte   0xF3, 0x48, 0x0F, 0xAE, 0xE1
         ret
+
+// Ensure the stack is non-executable
+#if defined(__ELF__)
+.section .note.GNU-stack,"",@progbits
+#endif

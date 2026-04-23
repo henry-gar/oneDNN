@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -17,10 +17,10 @@
 #ifndef GPU_INTEL_CONV_JIT_V2_KERNEL_HPP
 #define GPU_INTEL_CONV_JIT_V2_KERNEL_HPP
 
+#include "gemmstone/../../dsl/ir/ir.hpp"
 #include "gpu/intel/conv/jit/v2/builder.hpp"
 #include "gpu/intel/conv/jit/v2/kernel_desc.hpp"
-#include "gpu/intel/jit/codegen/kernel.hpp"
-#include "gpu/intel/jit/ir/ir.hpp"
+#include "gpu/intel/jit/codegen/kernel_ext.hpp"
 #include "gpu/intel/jit/ir/v2/builder.hpp"
 
 namespace dnnl {

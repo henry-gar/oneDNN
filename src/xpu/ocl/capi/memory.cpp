@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -27,11 +27,10 @@
 #include "xpu/ocl/memory_storage.hpp"
 
 using namespace dnnl::impl;
-using namespace dnnl::impl::xpu::ocl;
 
 status_t dnnl_ocl_interop_memory_create_v2(memory_t **memory,
-        const memory_desc_t *md, engine_t *engine, memory_kind_t memory_kind,
-        int nhandles, void **handles) {
+        const memory_desc_t *md, engine_t *engine,
+        xpu::ocl::memory_kind_t memory_kind, int nhandles, void **handles) {
 
     bool ok = !utils::any_null(memory, md, engine, handles) && nhandles > 0
             && engine->runtime_kind() == runtime_kind::ocl;
@@ -53,7 +52,7 @@ status_t dnnl_ocl_interop_memory_create_v2(memory_t **memory,
         handles_vec[i] = h;
     }
 
-    bool is_usm = memory_kind == memory_kind::usm;
+    bool is_usm = memory_kind == xpu::ocl::memory_kind::usm;
     std::vector<std::unique_ptr<memory_storage_t>> mem_storages(nhandles);
 
     if (is_usm) {
@@ -85,8 +84,8 @@ status_t dnnl_ocl_interop_memory_create_v2(memory_t **memory,
 }
 
 status_t dnnl_ocl_interop_memory_create(memory_t **memory,
-        const memory_desc_t *md, engine_t *engine, memory_kind_t memory_kind,
-        void *handle) {
+        const memory_desc_t *md, engine_t *engine,
+        xpu::ocl::memory_kind_t memory_kind, void *handle) {
 
     bool ok = !utils::any_null(memory, md, engine)
             && engine->runtime_kind() == runtime_kind::ocl;
@@ -102,7 +101,7 @@ status_t dnnl_ocl_interop_memory_create(memory_t **memory,
             : memory_flags_t::use_runtime_ptr;
     void *handle_ptr = (handle == DNNL_MEMORY_ALLOCATE) ? nullptr : handle;
 
-    bool is_usm = memory_kind == memory_kind::usm;
+    bool is_usm = memory_kind == xpu::ocl::memory_kind::usm;
 
     std::unique_ptr<memory_storage_t> mem_storage;
     if (is_usm) {
@@ -143,14 +142,15 @@ status_t dnnl_ocl_interop_memory_get_mem_object(
 
 status_t dnnl_ocl_interop_memory_set_mem_object(
         memory_t *memory, cl_mem mem_object) {
-    bool args_ok = (memory->engine()->runtime_kind() == runtime_kind::ocl);
+    bool args_ok = memory != nullptr
+            && memory->engine()->runtime_kind() == runtime_kind::ocl;
     if (!args_ok) return status::invalid_arguments;
 
     return memory->set_data_handle(static_cast<void *>(mem_object));
 }
 
 status_t dnnl_ocl_interop_memory_get_memory_kind(
-        const memory_t *memory, memory_kind_t *memory_kind) {
+        const memory_t *memory, xpu::ocl::memory_kind_t *memory_kind) {
 
     bool ok = !utils::any_null(memory, memory_kind)
             && memory->engine()->runtime_kind() == runtime_kind::ocl;

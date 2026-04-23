@@ -1,7 +1,7 @@
 /*******************************************************************************
-* Copyright 2016-2023 Intel Corporation
+* Copyright 2016 Intel Corporation
 * Copyright 2020-2025 FUJITSU LIMITED
-* Copyright 2025 Arm Ltd. and affiliates
+* Copyright 2025-2026 Arm Ltd. and affiliates
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -20,8 +20,8 @@
 #define CPU_AARCH64_JIT_GENERATOR_HPP
 
 #include <limits.h>
+#include <vector>
 
-#include "common/bit_cast.hpp"
 #include "common/type_helpers.hpp"
 #include "common/utils.hpp"
 
@@ -36,8 +36,12 @@
 #endif
 
 #define DECLARE_CPU_JIT_AUX_FUNCTIONS(jit_name) \
-    const char *name() const override { return STRINGIFY(jit_name); } \
-    const char *source_file() const override { return __FILE__; }
+    const char *name() const override { \
+        return STRINGIFY(jit_name); \
+    } \
+    const char *source_file() const override { \
+        return __FILE__; \
+    }
 
 #define LD_MUL_VL(mn, op, mask, addr, off, size) \
     do { \
@@ -93,6 +97,31 @@ const Xbyak_aarch64::XReg abi_param1(Xbyak_aarch64::Operand::X0),
         abi_param7(Xbyak_aarch64::Operand::X6),
         abi_param8(Xbyak_aarch64::Operand::X7),
         abi_not_param1(Xbyak_aarch64::Operand::X15);
+
+template <typename T,
+        typename std::enable_if<std::is_unsigned<T>::value,
+                std::nullptr_t>::type
+        = nullptr>
+bool is_imm12(T imm) {
+    uint64_t bit_ptn = static_cast<uint64_t>(imm);
+
+    const uint64_t IMM12_MASK = ~uint64_t(0xfff);
+    // <= 4095
+    return ((bit_ptn & IMM12_MASK) == 0);
+}
+
+template <typename T,
+        typename std::enable_if<std::is_signed<T>::value, std::nullptr_t>::type
+        = nullptr>
+bool is_imm12(T imm) {
+    /* Sign bit must be extended. */
+    int64_t bit_ptn = static_cast<int64_t>(imm);
+    const uint64_t IMM12_MASK = ~uint64_t(0xfff);
+
+    // <= 4095
+    return (imm >= 0) && ((bit_ptn & IMM12_MASK) == 0);
+}
+
 } // namespace
 
 class jit_generator_t : public Xbyak_aarch64::CodeGenerator,
@@ -257,6 +286,51 @@ public:
         return (off_mod == 0 && -8 <= off_mul_vl && off_mul_vl <= 7);
     }
 
+    inline void add_vl_or_imm(Xbyak_aarch64::XReg dst, Xbyak_aarch64::XReg src,
+            int offset, Xbyak_aarch64::XReg tmp) {
+        // If offset is a multiple of the vector length and
+        // offset / vector_length is compatible with addvl
+        // use the addvl instruction. Refer to https://developer.arm.com/documentation/ddi0596/2021-03/SVE-Instructions/ADDVL--Add-multiple-of-vector-register-size-to-scalar-register-
+        // for details.
+        if ((offset % cpu_sveLen == 0)
+                && (offset / static_cast<int>(cpu_sveLen) >= -32)
+                && (offset / cpu_sveLen <= 31))
+            addvl(dst, src, offset / cpu_sveLen);
+        else
+            add_imm(dst, src, offset, tmp);
+    }
+
+    // Return XReg which points to base + stride_bytes * n in as few instructions as possible
+    // We return a XReg so that we can use the dst or base reg
+    Xbyak_aarch64::XReg strided_addr(const Xbyak_aarch64::XReg &dst,
+            const Xbyak_aarch64::XReg &base,
+            const Xbyak_aarch64::XReg &reg_stride_bytes,
+            const int32_t stride_bytes, const int32_t n,
+            const Xbyak_aarch64::XReg &tmp) {
+        int32_t offset_bytes = stride_bytes * n;
+        if (n == 0) {
+            // (0 instructions) Use the base
+            return base;
+        } else if (is_imm12(offset_bytes)) {
+            // (1 instruction) The byte offset can be expressed as an int12 immediate in the add instruction
+            add(dst, base, static_cast<uint32_t>(offset_bytes & 0xfff));
+            return dst;
+        } else {
+            const auto LSL = Xbyak_aarch64::ShMod::LSL;
+            switch (n) {
+                case 1:
+                    // 1 instruction
+                    add(dst, base, reg_stride_bytes);
+                    return dst;
+                case 2: add(dst, base, reg_stride_bytes, LSL, 1); return dst;
+                case 4: add(dst, base, reg_stride_bytes, LSL, 2); return dst;
+                case 8: add(dst, base, reg_stride_bytes, LSL, 3); return dst;
+                case 16: add(dst, base, reg_stride_bytes, LSL, 4); return dst;
+                default: add_imm(dst, base, offset_bytes, tmp); return dst;
+            }
+        }
+    }
+
     template <typename PRegBHSD, typename T>
     void set_preg(const PRegBHSD &p, T tail_size,
             const Xbyak_aarch64::XReg x_tmp0 = Xbyak_aarch64::XReg(DUMMY_IDX),
@@ -324,9 +398,18 @@ public:
         sub(r, divend, r);
     }
 
-    void uni_clear(const Xbyak_aarch64::VReg &dst) { eor(dst.b, dst.b, dst.b); }
-
-    void uni_clear(const Xbyak_aarch64::ZReg &dst) { eor(dst.d, dst.d, dst.d); }
+    void uni_clear(const Xbyak_aarch64::VReg &dst) {
+        // movi 0 on any part of the SIMD&FP reg will also zero out the rest of the
+        // SIMD vector (see the Arm ARM C7.1.1).
+        // We use this because movi d is zero latency on Neoverse V2
+        movi(Xbyak_aarch64::DReg(dst.getIdx()), 0);
+    }
+    void uni_clear(const Xbyak_aarch64::ZReg &dst) {
+        // movi 0 on any part of the SIMD&FP reg will also zero out the rest of the SVE vector
+        // (see the Arm ARM C7.1.1 and B1.4.3 R_WKYLB)
+        // We use this because movi d is zero latency on Neoverse V2
+        movi(Xbyak_aarch64::DReg(dst.getIdx()), 0);
+    }
 
     template <typename T>
     void uni_fadd(const T &dst, const T &src, const T &src2) {
@@ -591,6 +674,65 @@ public:
             dup(v_tmp, w_tmp);
     }
 
+    // Roughly equivalent to:
+    // for(index = max - 1; index >= 0; --index) {
+    //   body();
+    // }
+    template <typename TReg, typename Func>
+    void asm_for(const TReg &index_reg, const TReg &max_reg, const Func &body) {
+        Xbyak_aarch64::Label loop_begin, loop_end;
+
+        // check for early exit
+        cmp(max_reg, 0);
+        ble(loop_end);
+
+        sub(index_reg, max_reg, 1);
+        L(loop_begin);
+
+        body();
+
+        subs(index_reg, index_reg, 1);
+        bge(loop_begin);
+
+        L(loop_end);
+    }
+
+    // Only providing a 64-bit version so we don't have to worry about bad
+    // immediate ranges, and signed vs unsigned concerns
+    // (e.g, Using a WReg but providing max_imm > INT32_MAX).
+    template <typename Func>
+    void asm_for(const Xbyak_aarch64::XReg &index_reg, int64_t max_imm,
+            const Func &body) {
+        Xbyak_aarch64::Label loop_begin;
+
+        // check for early exit
+        if (max_imm <= 0) { return; }
+
+        mov_imm(index_reg, max_imm - 1);
+        L(loop_begin);
+
+        body();
+
+        subs(index_reg, index_reg, 1);
+        bge(loop_begin);
+    }
+
+    // Roughly equivalent to:
+    // do {
+    //   body();
+    // } while (--n > 0)
+    template <typename TReg, typename Func>
+    void asm_do_while(const TReg &index_reg, const Func &body) {
+        Xbyak_aarch64::Label loop_begin;
+
+        L(loop_begin);
+
+        body();
+
+        subs(index_reg, index_reg, 1);
+        bgt(loop_begin);
+    }
+
     template <typename Vmm>
     void init_saturate_f32(Vmm vmm_lbound, Vmm vmm_ubound,
             Xbyak_aarch64::XReg reg_tmp, data_type_t idt, data_type_t odt,
@@ -675,13 +817,10 @@ public:
     void runtime_tail_process(const Xbyak_aarch64::XReg &reg_tail,
             const Xbyak_aarch64::XReg &reg_tmp,
             const std::function<void(int)> &tail_process) {
-        constexpr int simd_w_ymm = 8;
-        constexpr int f32_bits = sizeof(float) * 8;
-        const auto simd_w = cpu_isa_traits<isa>::vlen * 8 / f32_bits;
-        assert(simd_w != cpu_isa_traits<isa>::vlen * 8 / f32_bits);
+        const size_t simd_w = simd_elems(data_type_t::dnnl_f32, isa);
 
         Xbyak_aarch64::Label label_tbl, label_tbl_end;
-        Xbyak_aarch64::Label l_case[simd_w_ymm];
+        std::vector<Xbyak_aarch64::Label> l_case(simd_w);
 
         adr(reg_tmp, label_tbl);
         mov_imm(X_TMP_0, sizeof(void *));
@@ -709,8 +848,9 @@ public:
     jit_generator_t(void *code_ptr = nullptr, size_t code_size = MAX_CODE_SIZE,
             bool use_autogrow = true, cpu_isa_t max_cpu_isa = isa_all)
         : Xbyak_aarch64::CodeGenerator(code_size,
-                (code_ptr == nullptr && use_autogrow) ? Xbyak_aarch64::AutoGrow
-                                                      : code_ptr)
+                  (code_ptr == nullptr && use_autogrow)
+                          ? Xbyak_aarch64::AutoGrow
+                          : code_ptr)
         , max_cpu_isa_(max_cpu_isa) {}
     ~jit_generator_t() override = default;
 

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -69,12 +69,12 @@ void compute_ref_brgemm(const prb_t *prb, const args_t &args) {
             = !prb->attr.zero_points.get(DNNL_ARG_WEIGHTS).is_def();
     const bool has_dst_zp = !prb->attr.zero_points.get(DNNL_ARG_DST).is_def();
 
-    const int src_zp_mask = attr_t::get_default_mask(
-            prb->attr.zero_points.get(DNNL_ARG_SRC).policy, src_m.ndims());
+    const int src_zp_mask = prb->attr.zero_points.get_mask(
+            DNNL_ARG_SRC, dnnl_matmul, src_m.ndims());
     const int wei_zp_mask = prb->attr.zero_points.get_mask(
             DNNL_ARG_WEIGHTS, dnnl_matmul, wei_m.ndims());
-    const int dst_zp_mask = attr_t::get_default_mask(
-            prb->attr.zero_points.get(DNNL_ARG_DST).policy, dst_m.ndims());
+    const int dst_zp_mask = prb->attr.zero_points.get_mask(
+            DNNL_ARG_DST, dnnl_matmul, dst_m.ndims());
 
     const int64_t BS = prb->batch_size;
     const int64_t M = prb->m;
@@ -109,9 +109,9 @@ void compute_ref_brgemm(const prb_t *prb, const args_t &args) {
                 int src_zp = has_src_zp
                         ? src_zps.get_elem(src_zp_mask > 0 ? k : 0)
                         : 0;
-                int wei_zp = has_wei_zp ? wei_zps.get_elem(
-                                     wei_zp_stride_k * (k / wei_zp_group_k)
-                                     + wei_zp_stride_n * n)
+                int wei_zp = has_wei_zp ? wei_zps.get_elem(wei_zp_stride_k
+                                                          * (k / wei_zp_group_k)
+                                                  + wei_zp_stride_n * n)
                                         : 0;
 
                 auto s = src[src_off_f(prb, bs, m, k)] - src_zp;

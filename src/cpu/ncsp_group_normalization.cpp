@@ -43,7 +43,7 @@ status_t ncsp_group_normalization_fwd_t::execute_forward(
     auto shift = CTX_IN_MEM(const float *, DNNL_ARG_SHIFT);
     auto dst = CTX_OUT_MEM(void *, DNNL_ARG_DST);
 
-    auto scratchpad = ctx.get_scratchpad_grantor();
+    const auto &scratchpad = ctx.get_scratchpad_grantor();
     float *__restrict cvt_scratch
             = scratchpad.template get<float>(key_gnorm_cvt);
 
@@ -59,9 +59,15 @@ status_t ncsp_group_normalization_fwd_t::execute_forward(
         }
     }
 
-    DEFINE_ARG_SCALES_BUFFER(src_scales, DNNL_ARG_SRC);
-    DEFINE_ARG_SCALES_BUFFER(dst_scales, DNNL_ARG_DST);
-    const float combined_scale = src_scales[0] * dst_scales[0];
+    const float *src_scales
+            = CTX_IN_MEM(const float *, DNNL_ARG_ATTR_SCALES | DNNL_ARG_SRC);
+    const float *dst_scales
+            = CTX_IN_MEM(const float *, DNNL_ARG_ATTR_SCALES | DNNL_ARG_DST);
+
+    const bool with_src_scales
+            = !pd()->attr()->scales_.has_default_values(DNNL_ARG_SRC);
+    const bool with_dst_scales
+            = !pd()->attr()->scales_.has_default_values(DNNL_ARG_DST);
 
     const dim_t N = pd()->MB();
     const dim_t G = pd()->desc()->groups;
@@ -71,7 +77,7 @@ status_t ncsp_group_normalization_fwd_t::execute_forward(
     const float eps = pd()->desc()->group_norm_epsilon;
 
     const dim_t C_PER_G = C / G;
-    auto get_c_start = [&C_PER_G](dim_t g) { return g * C_PER_G; };
+    auto get_c_start = [C_PER_G](dim_t g) { return g * C_PER_G; };
 
     const dim_t sp_block_nelems
             = static_cast<dim_t>(pd_t::cvt_per_thread_size_);
@@ -80,7 +86,7 @@ status_t ncsp_group_normalization_fwd_t::execute_forward(
 
     const int nthr = pd()->nthr_;
 
-    auto kernel = [&](int ithr, int, const dim_t n, const dim_t g) {
+    auto kernel = [=](int ithr, int, const dim_t n, const dim_t g) {
         float m = 0.0f;
         float v = 0.0f;
         if (calculate_stats) {
@@ -181,6 +187,8 @@ status_t ncsp_group_normalization_fwd_t::execute_forward(
         }
 
         const float sqrt_variance = sqrtf(v + eps);
+        const float combined_scale = (with_src_scales ? src_scales[0] : 1.f)
+                / (with_dst_scales ? dst_scales[0] : 1.f);
 
         for (dim_t c = get_c_start(g); c < get_c_start(g + 1); ++c) {
             const size_t s_off = (size_t)n * C * SP + c * SP;

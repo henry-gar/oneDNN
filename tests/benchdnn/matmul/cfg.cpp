@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -18,7 +18,8 @@
 
 namespace matmul {
 
-cfg_t::cfg_t(const prb_t *prb, const std::vector<data_kind_t> &kinds) {
+cfg_t::cfg_t(const prb_t *prb, const std::vector<data_kind_t> &kinds)
+    : base_cfg_t {prb->attr.acc_mode} {
     for (const auto kind : kinds) {
         auto orig_data_type = prb->get_dt(kind);
         auto data_type = deduce_cfg_data_type(orig_data_type, prb->attr, kind);

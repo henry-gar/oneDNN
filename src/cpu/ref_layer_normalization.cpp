@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@
 #include <math.h>
 
 #include "common/c_types_map.hpp"
+#include "common/compiler_workarounds.hpp"
 #include "common/dnnl_thread.hpp"
 #include "common/type_helpers.hpp"
 
@@ -76,7 +77,7 @@ status_t ref_layer_normalization_fwd_t::execute_forward(
         return status::success;
     }
 
-    parallel_nd(N, [&](dim_t n) {
+    parallel_nd(N, [= COMPAT_THIS_CAPTURE](dim_t n) {
         const size_t s_off = stat_d.off_l(n);
         auto v_mean = (calculate_stats || skip_mean) ? 0 : mean[s_off];
         auto v_variance = calculate_stats ? 0 : variance[s_off];
@@ -194,7 +195,7 @@ status_t ref_layer_normalization_bwd_t::execute_backward(
     const bool skip_mean = pd()->skip_mean();
 
     if (diff_scale || diff_shift) {
-        parallel_nd(C, [&](dim_t c) {
+        parallel_nd(C, [=](dim_t c) {
             float diff_gamma = 0.f;
             float diff_beta = 0.f;
 
@@ -220,7 +221,7 @@ status_t ref_layer_normalization_bwd_t::execute_backward(
         });
     }
 
-    parallel_nd(N, [&](dim_t n) {
+    parallel_nd(N, [=](dim_t n) {
         const size_t s_off = stat_d.off_l(n);
         float inv_sqrt_variance = 1.f / sqrtf(variance[s_off] + eps);
         float dd_gamma = 0.f;
@@ -229,7 +230,7 @@ status_t ref_layer_normalization_bwd_t::execute_backward(
             for (dim_t c = 0; c < C; ++c) {
                 const float gamma = scale
                         ? io::load_float_value(
-                                sc_d.data_type(), scale, sc_d.off(c))
+                                  sc_d.data_type(), scale, sc_d.off(c))
                         : 1.f;
                 const auto src_off = src_d.off_l(n * C + c);
                 const auto diff_dst_off = diff_dst_d.off_l(n * C + c);

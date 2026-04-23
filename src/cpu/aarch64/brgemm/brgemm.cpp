@@ -1,6 +1,6 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
-* Copyright 2023-2025 FUJITSU LIMITED
+* Copyright 2020 Intel Corporation
+* Copyright 2023-2026 FUJITSU LIMITED
 * Copyright 2024-2025 Arm Ltd. and affiliates
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,6 +17,7 @@
 *******************************************************************************/
 
 #include "cpu/aarch64/brgemm/brgemm.hpp"
+#include "cpu/aarch64/brgemm/brgemm_types.hpp"
 #include "cpu/aarch64/brgemm/brgemm_utils.hpp"
 
 #include "common/c_types_map.hpp"
@@ -148,7 +149,7 @@ void brgemm_kernel_execute_postops(const brgemm_kernel_t *brg_kernel, int bs,
     (*brg_kernel)(&brgemm_p);
 }
 
-status_t brgemm_desc_init(brgemm_t *brg, cpu_isa_t isa,
+status_t brgemm_desc_init(brgemm_desc_t *brg, cpu_isa_t isa,
         brgemm_batch_kind_t type, impl::data_type_t dt_a,
         impl::data_type_t dt_b, bool transA, bool transB,
         brgemm_layout_t layout, float alpha, float beta, dim_t LDA, dim_t LDB,
@@ -175,8 +176,9 @@ status_t brgemm_desc_init(brgemm_t *brg, cpu_isa_t isa,
             alpha, beta, LDA, LDB, LDC, M, N, K, strides));
 
     if (M <= 0 || N <= 0 || K <= 0) return status::invalid_arguments;
-    bool ldx_check = (brg->is_row_major()) ? (LDA < K)
-                                           : (LDA < M || LDB < K || LDC < M);
+    bool ldx_check = (brg->is_gemv || brg->is_row_major())
+            ? (LDA < K)
+            : (LDA < M || LDB < K || LDC < M);
     if (ldx_check) return status::invalid_arguments;
 
     if (utils::everyone_is(
@@ -188,7 +190,7 @@ status_t brgemm_desc_init(brgemm_t *brg, cpu_isa_t isa,
     return status::success;
 }
 
-status_t brdgmm_desc_init(brgemm_t *brg, cpu_isa_t isa,
+status_t brdgmm_desc_init(brgemm_desc_t *brg, cpu_isa_t isa,
         brgemm_batch_kind_t type, impl::data_type_t dt_a,
         impl::data_type_t dt_b, bool transA, brgemm_layout_t layout,
         float alpha, float beta, dim_t LDA, dim_t LDC, dim_t M, dim_t N,
@@ -213,12 +215,20 @@ status_t brdgmm_desc_init(brgemm_t *brg, cpu_isa_t isa,
     return status::success;
 }
 
-status_t brgemm_desc_set_postops(brgemm_t *brg, const primitive_attr_t *attr,
-        const memory_desc_t *dst_md, int LDD, impl::data_type_t dt_bias) {
+status_t brgemm_desc_set_postops(brgemm_desc_t *brg,
+        const primitive_attr_t *attr, const memory_desc_t *dst_md, int LDD,
+        impl::data_type_t dt_bias) {
     if (!brg || !dst_md) return status::invalid_arguments;
 
     brg->attr = attr;
     brg->dst_md = dst_md;
+
+    if ((sme == brg->isa_impl)
+            && ((data_type::undef != dt_bias) || attr->post_ops_.len()
+                    || !attr->scales_.get(DNNL_ARG_SRC).has_default_values()
+                    || !attr->scales_.get(DNNL_ARG_WEIGHTS).has_default_values()
+                    || !attr->scales_.get(DNNL_ARG_DST).has_default_values()))
+        return status::unimplemented;
 
     brg->with_bias = (dt_bias == data_type::undef) ? false : true;
     brg->dt_bias = dt_bias;
@@ -232,7 +242,7 @@ status_t brgemm_desc_set_postops(brgemm_t *brg, const primitive_attr_t *attr,
     if (brg->is_int8) {
         if ((brg->dt_a == data_type::s8 && brg->dt_b == data_type::u8)
                 || (!one_of(dt_bias, data_type::undef, data_type::s8,
-                        data_type::u8, data_type::f32))
+                        data_type::u8, data_type::f32, data_type::s32))
                 || (!one_of(dt_d, data_type::s8, data_type::u8, data_type::s32,
                         data_type::f32, data_type::bf16)))
             return status::unimplemented;
@@ -240,12 +250,12 @@ status_t brgemm_desc_set_postops(brgemm_t *brg, const primitive_attr_t *attr,
     if ((brg->dt_a == data_type::bf16 && brg->dt_b == data_type::bf16)
             && ((!one_of(dt_d, data_type::bf16, data_type::f32))
                     || (!one_of(dt_bias, data_type::undef, data_type::bf16,
-                            data_type::f32))))
+                            data_type::f32, data_type::s32))))
         return status::unimplemented;
     if ((brg->dt_a == data_type::f32 && brg->dt_b == data_type::f32)
             && (!one_of(dt_d, data_type::f32))
             && (!one_of(dt_bias, data_type::undef, data_type::s8, data_type::u8,
-                    data_type::f32)))
+                    data_type::f32, data_type::s32)))
         return status::unimplemented;
 
     brg->dt_d = dt_d;
@@ -355,7 +365,8 @@ status_t brgemm_desc_set_postops(brgemm_t *brg, const primitive_attr_t *attr,
     return status::success;
 }
 
-status_t brgemm_desc_set_attr(brgemm_t *brg, const brgemm_attr_t &brgattr) {
+status_t brgemm_desc_set_attr(
+        brgemm_desc_t *brg, const brgemm_attr_t &brgattr) {
     if (brg == nullptr) return status::invalid_arguments;
 
     // negative padding is not supported
@@ -364,8 +375,8 @@ status_t brgemm_desc_set_attr(brgemm_t *brg, const brgemm_attr_t &brgattr) {
 
     if (!brg->is_dgmm) {
         // virtual padding size is restricted by MAX_VPAD value
-        if (brgattr.max_top_vpad > brgemm_t::MAX_VPAD
-                || brgattr.max_bottom_vpad > brgemm_t::MAX_VPAD)
+        if (brgattr.max_top_vpad > brgemm_desc_t::MAX_VPAD
+                || brgattr.max_bottom_vpad > brgemm_desc_t::MAX_VPAD)
             return status::unimplemented;
     }
 
@@ -429,19 +440,22 @@ status_t brgemm_desc_set_attr(brgemm_t *brg, const brgemm_attr_t &brgattr) {
     return status::success;
 }
 
-status_t brgemm_desc_finalize(brgemm_t *brg) {
+status_t brgemm_desc_finalize(brgemm_desc_t *brg) {
     // TODO: implement functionality here similar to corresponding one in x64
     return status::success;
 }
 
 status_t brgemm_kernel_create(
-        brgemm_kernel_t **brg_kernel, const brgemm_t &brg) {
+        brgemm_kernel_t **brg_kernel, const brgemm_desc_t &brg) {
     if (!brg_kernel) return status::invalid_arguments;
     *brg_kernel = nullptr;
 
     if (brg.is_dgmm) {
         CHECK(safe_ptr_assign<brgemm_kernel_t>(
                 *brg_kernel, new brdgmm_kernel_t(brg)));
+    } else if (sme == brg.isa_impl) {
+        CHECK(safe_ptr_assign<brgemm_kernel_t>(
+                *brg_kernel, new brgemm_sme_kernel_t(brg)));
     } else {
         CHECK(safe_ptr_assign<brgemm_kernel_t>(
                 *brg_kernel, new brgemm_kernel_common_t(brg)));
@@ -455,7 +469,7 @@ status_t brgemm_kernel_destroy(brgemm_kernel_t *brg_kernel) {
     return status::success;
 }
 
-status_t brgemm_init_tiles(const brgemm_t &brg, char palette[64]) {
+status_t brgemm_init_tiles(const brgemm_desc_t &brg, char palette[64]) {
     return status::unimplemented;
 }
 
@@ -465,17 +479,17 @@ inline int sign(T v) {
     return (v > 0) ? 1 : ((v < 0) ? -1 : 0);
 }
 
-int brgemm_cmp(const brgemm_t &lhs, const brgemm_t &rhs) {
+int brgemm_cmp(const brgemm_desc_t &lhs, const brgemm_desc_t &rhs) {
     // The macro CMP_BRGEMM_FIELD is designed to compare numerical parameters.
     // Float parameters must not be NaN
 #define CMP_BRGEMM_FIELD(x) \
     if ((lhs.x) != (rhs.x)) return sign((lhs.x) - (rhs.x))
 
-    // This function compares brgemm_t objects within a single brgemm primitive.
+    // This function compares brgemm_desc_t objects within a single brgemm primitive.
     // Comparison of objects from different primitives is not guaranteed due to
     // dependencies of brgemm descriptor on a primitive attributes.
 
-    // Compare all non-pointer parameters of brgemm_t except derived
+    // Compare all non-pointer parameters of brgemm_desc_t except derived
     CMP_BRGEMM_FIELD(bcast_dim);
     CMP_BRGEMM_FIELD(load_dim);
     CMP_BRGEMM_FIELD(reduce_dim);
@@ -571,11 +585,11 @@ int brgemm_cmp(const brgemm_t &lhs, const brgemm_t &rhs) {
 }
 } // namespace
 
-bool brgemm_t::operator==(const brgemm_t &rhs) const {
+bool brgemm_desc_t::operator==(const brgemm_desc_t &rhs) const {
     return (brgemm_cmp(*this, rhs) == 0);
 }
 
-bool brgemm_t::operator<(const brgemm_t &rhs) const {
+bool brgemm_desc_t::operator<(const brgemm_desc_t &rhs) const {
     return (brgemm_cmp(*this, rhs) < 0);
 }
 

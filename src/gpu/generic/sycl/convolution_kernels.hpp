@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2024-2025 Intel Corporation
+* Copyright 2024 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -85,7 +85,7 @@ struct convolution_kernel_fwd_t {
 
         float sm_weights = (conf_.do_scale_weights && conf_.single_weight_scale
                         ? load_float_value(
-                                scales_weights_dt_, weights_scale_ptr(), 0)
+                                  scales_weights_dt_, weights_scale_ptr(), 0)
                         : 1.f);
 
         const float sm_dst = (conf_.do_scale_dst
@@ -339,7 +339,7 @@ struct convolution_kernel_bwd_data_t {
 
         float sm_weights = (conf_.do_scale_weights && conf_.single_weight_scale
                         ? load_float_value(
-                                scales_weights_dt_, weights_scale_ptr(), 0)
+                                  scales_weights_dt_, weights_scale_ptr(), 0)
                         : 1.f);
 
         const float sm_dst = (conf_.do_scale_dst
@@ -638,9 +638,9 @@ struct convolution_kernel_bwd_weights_t {
                 kw = logical_index[4];
             }
 
-            auto bias_backprop_lambda = [&](int D, int H, int W, int OC, int ic,
-                                                int oc, void *diff_ptr,
-                                                xpu::sycl::md_t diff_md) {
+            auto bias_backprop_lambda
+                    = [&](int D, int H, int W, int OC, int ic, int oc,
+                              void *diff_ptr, xpu::sycl::md_t diff_md) {
                 if (ic == 0 && kh == 0 && kw == 0 & kd == 0) {
                     float accumulator_bias = 0;
                     for (int n = 0; n < MB; ++n) {

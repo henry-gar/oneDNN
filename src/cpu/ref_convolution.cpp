@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2016-2024 Intel Corporation
+* Copyright 2016 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
 *******************************************************************************/
 
 #include "common/c_types_map.hpp"
+#include "common/compiler_workarounds.hpp"
 #include "common/dnnl_thread.hpp"
 #include "common/dnnl_traits.hpp"
 #include "common/math_utils.hpp"
@@ -121,8 +122,8 @@ status_t ref_convolution_fwd_t::execute_forward(const exec_ctx_t &ctx) const {
     const dim_t weights_kw_stride
             = (ndims >= 3) ? weights_str[ndims - 1 + gr_shift] : 0;
 
-    auto ker_plain = [=](dim_t g, dim_t mb, dim_t oc, dim_t od, dim_t oh,
-                             dim_t ow) {
+    auto ker_plain
+            = [=](dim_t g, dim_t mb, dim_t oc, dim_t od, dim_t oh, dim_t ow) {
         assert(3 <= ndims && ndims <= 5);
         float d = 0;
 
@@ -187,40 +188,41 @@ status_t ref_convolution_fwd_t::execute_forward(const exec_ctx_t &ctx) const {
     auto sum_dt = pd()->attr()->post_ops_.get_sum_dt(dst_d.data_type());
 
     parallel_nd(G, MB, OC, OD, OH, OW,
-            [&](dim_t g, dim_t mb, dim_t oc, dim_t od, dim_t oh, dim_t ow) {
-                float acc = 0;
-                if (src_d.is_plain() && weights_d.is_plain()
-                        && src_ic_stride == 1 && weights_kw_stride == 1)
-                    acc += ker_plain(g, mb, oc, od, oh, ow);
-                else
-                    acc += ker(g, mb, oc, od, oh, ow);
+            [= COMPAT_THIS_CAPTURE](
+                    dim_t g, dim_t mb, dim_t oc, dim_t od, dim_t oh, dim_t ow) {
+        float acc = 0;
+        if (src_d.is_plain() && weights_d.is_plain() && src_ic_stride == 1
+                && weights_kw_stride == 1)
+            acc += ker_plain(g, mb, oc, od, oh, ow);
+        else
+            acc += ker(g, mb, oc, od, oh, ow);
 
-                float d = acc;
-                if (bias) {
-                    const auto bias_off = bias_d.off(g * OC + oc);
-                    const float b = io::load_float_value(
-                            bias_d.data_type(), bias, bias_off);
-                    d += b;
-                }
+        float d = acc;
+        if (bias) {
+            const auto bias_off = bias_d.off(g * OC + oc);
+            const float b
+                    = io::load_float_value(bias_d.data_type(), bias, bias_off);
+            d += b;
+        }
 
-                dim_t dst_off = ref_conv_utils::get_data_off(
-                        dst_d, ndims, mb, g * OC + oc, od, oh, ow);
+        dim_t dst_off = ref_conv_utils::get_data_off(
+                dst_d, ndims, mb, g * OC + oc, od, oh, ow);
 
-                dim_t dst_l_off = (mb * OC * G + g * OC + oc) * OD * OH * OW
-                        + od * OH * OW + oh * OW + ow;
+        dim_t dst_l_off = (mb * OC * G + g * OC + oc) * OD * OH * OW
+                + od * OH * OW + oh * OW + ow;
 
-                ref_post_ops_t::args_t args;
-                args.dst_val = io::load_float_value(sum_dt, dst, dst_off);
-                args.ctx = &ctx;
-                args.l_offset = dst_l_off;
-                args.dst_md = pd()->dst_md();
-                ref_post_ops->execute(d, args);
-                if (dst_rnd_mode == rounding_mode::stochastic)
-                    d = math::stochastic_round_fwd(
-                            d, dst_off, rnd_seed[0], dst_d.data_type());
+        ref_post_ops_t::args_t args;
+        args.dst_val = io::load_float_value(sum_dt, dst, dst_off);
+        args.ctx = &ctx;
+        args.l_offset = dst_l_off;
+        args.dst_md = pd()->dst_md();
+        ref_post_ops->execute(d, args);
+        if (dst_rnd_mode == rounding_mode::stochastic)
+            d = math::stochastic_round_fwd(
+                    d, dst_off, rnd_seed[0], dst_d.data_type());
 
-                io::store_float_value(dst_d.data_type(), d, dst, dst_off);
-            });
+        io::store_float_value(dst_d.data_type(), d, dst, dst_off);
+    });
 
     return status::success;
 }
@@ -317,8 +319,8 @@ status_t ref_convolution_bwd_data_t::execute_backward_data(
     const dim_t weights_kd_stride
             = (ndims >= 5) ? weights_str[ndims - 3 + gr_shift] : 0;
 
-    auto ker_plain = [=](dim_t g, dim_t mb, dim_t ic, dim_t id, dim_t ih,
-                             dim_t iw) {
+    auto ker_plain
+            = [=](dim_t g, dim_t mb, dim_t ic, dim_t id, dim_t ih, dim_t iw) {
         assert(3 <= ndims && ndims <= 5);
         float ds = 0;
         const dim_t diff_dst_loc_off = ref_conv_utils::get_data_off(
@@ -394,19 +396,19 @@ status_t ref_convolution_bwd_data_t::execute_backward_data(
     };
 
     parallel_nd(G, MB, IC, ID, IH, IW,
-            [&](dim_t g, dim_t mb, dim_t ic, dim_t id, dim_t ih, dim_t iw) {
-                float ds = 0;
-                if (diff_dst_d.is_plain() && weights_d.is_plain()
-                        && diff_dst_oc_stride == 1 && weights_kw_stride == 1)
-                    ds += ker_plain(g, mb, ic, id, ih, iw);
-                else
-                    ds += ker(g, mb, ic, id, ih, iw);
+            [=](dim_t g, dim_t mb, dim_t ic, dim_t id, dim_t ih, dim_t iw) {
+        float ds = 0;
+        if (diff_dst_d.is_plain() && weights_d.is_plain()
+                && diff_dst_oc_stride == 1 && weights_kw_stride == 1)
+            ds += ker_plain(g, mb, ic, id, ih, iw);
+        else
+            ds += ker(g, mb, ic, id, ih, iw);
 
-                const auto diff_src_off = ref_conv_utils::get_data_off(
-                        diff_src_d, ndims, mb, g * IC + ic, id, ih, iw);
-                io::store_float_value(
-                        diff_src_d.data_type(), ds, diff_src, diff_src_off);
-            });
+        const auto diff_src_off = ref_conv_utils::get_data_off(
+                diff_src_d, ndims, mb, g * IC + ic, id, ih, iw);
+        io::store_float_value(
+                diff_src_d.data_type(), ds, diff_src, diff_src_off);
+    });
 
     return status::success;
 }
@@ -546,7 +548,7 @@ status_t ref_convolution_bwd_weights_t::execute_backward_weights(
         }
     };
 
-    parallel_nd(G, OC, [&](dim_t g, dim_t oc) {
+    parallel_nd(G, OC, [=](dim_t g, dim_t oc) {
         if (diff_bias) {
             float db = 0;
             ker_bias(db, g, oc);

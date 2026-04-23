@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -99,13 +99,15 @@ dnnl_status_t init_pd(init_pd_args_t<prb_t> &init_pd_args) {
     bool force_f32_dt = init_pd_args.force_f32_dt;
 
     auto src0_d = dnn_mem_t::init_md(prb->ndims, prb->vdims[0].data(),
-            force_f32_dt ? dnnl_f32 : prb->sdt[0], prb->stag[0]);
+            force_f32_dt ? dnnl_f32 : prb->sdt[0], prb->stag[0],
+            prb->strides[0]);
 
     auto src1_d = dnn_mem_t::init_md(prb->ndims, prb->vdims[1].data(),
-            force_f32_dt ? dnnl_f32 : prb->sdt[1], prb->stag[1]);
+            force_f32_dt ? dnnl_f32 : prb->sdt[1], prb->stag[1],
+            prb->strides[1]);
 
     auto dst_d = dnn_mem_t::init_md(prb->ndims, prb->dst_dims.data(),
-            force_f32_dt ? dnnl_f32 : prb->ddt, prb->dtag);
+            force_f32_dt ? dnnl_f32 : prb->ddt, prb->dtag, prb->strides[2]);
 
     dnnl_alg_kind_t alg = attr_t::post_ops_t::kind2dnnl_kind(prb->alg);
 
@@ -123,9 +125,10 @@ dnnl_status_t init_pd(init_pd_args_t<prb_t> &init_pd_args) {
     // creating the primitive descriptor.
     auto src2_d = prb->is_ternary_op()
             ? dnn_mem_t::init_md(prb->ndims,
-                    prb->vdims.size() > 2 ? prb->vdims[2].data()
-                                          : prb->vdims[0].data(),
-                    dnnl_s8, prb->stag.size() > 2 ? prb->stag[2] : prb->stag[0])
+                      prb->vdims.size() > 2 ? prb->vdims[2].data()
+                                            : prb->vdims[0].data(),
+                      dnnl_s8,
+                      prb->stag.size() > 2 ? prb->stag[2] : prb->stag[0])
             : nullptr;
 
     TIME_C_PD(DNN_SAFE_STATUS(dnnl_binary_primitive_desc_create_v2(
@@ -194,20 +197,18 @@ void setup_cmp(compare::compare_t &cmp, const prb_t *prb, data_kind_t kind,
     // by value to avoid using dangling references.
     const auto binary_add_check
             = [prb](const compare::compare_t::driver_check_func_args_t &args) {
-                  // fp16 result can slightly mismatch for division due to
-                  // difference in backends implementations.
-                  return prb->alg == alg_t::DIV
-                          ? args.diff < epsilon_dt(args.dt)
-                          : false;
-              };
+        // fp16 result can slightly mismatch for division due to
+        // difference in backends implementations.
+        return prb->alg == alg_t::DIV ? args.diff < epsilon_dt(args.dt) : false;
+    };
     cmp.set_driver_check_function(binary_add_check);
 
     static const std::vector<alg_t> cmp_alg = {
             alg_t::GE, alg_t::GT, alg_t::LE, alg_t::LT, alg_t::EQ, alg_t::NE};
     const bool is_cmp = std::any_of(
             cmp_alg.cbegin(), cmp_alg.cend(), [&](const alg_t alg) {
-                return (prb->alg == alg) || prb->attr.post_ops.find(alg) >= 0;
-            });
+        return (prb->alg == alg) || prb->attr.post_ops.find(alg) >= 0;
+    });
 
     if (is_cmp) cmp.set_zero_trust_percent(99.f);
 }
@@ -220,7 +221,7 @@ std::vector<int> supported_exec_args(dir_t dir) {
             DNNL_ARG_DST,
     };
     return exec_args;
-};
+}
 
 int init_ref_memory_args(dnn_mem_map_t &ref_mem_map, dnn_mem_map_t &mem_map,
         dnnl_primitive_t prim, const prb_t *prb, res_t *res,
@@ -319,7 +320,7 @@ int doit(const std::vector<benchdnn_dnnl_wrapper_t<dnnl_primitive_t>> &v_prim,
 
     args_t args(mem_map), ref_args(ref_mem_map);
 
-    SAFE(execute_and_wait(prim, args, res), WARN);
+    SAFE(run_execution(prim, args, res), WARN);
 
     check_correctness(prb, {DST}, args, ref_args, setup_cmp, res, prb->dir);
     SAFE(check_bitwise(prim, {DST}, args, prb->attr, prb->inplace, res), WARN);

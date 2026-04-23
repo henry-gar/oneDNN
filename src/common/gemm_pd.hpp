@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -20,7 +20,6 @@
 #include "oneapi/dnnl/dnnl.h"
 
 #include "common/c_types_map.hpp"
-#include "common/gemm_utils.hpp"
 #include "common/primitive_desc.hpp"
 #include "common/utils.hpp"
 
@@ -35,6 +34,10 @@ namespace impl {
 #define VDISPATCH_GEMM_SC(f, msg, ...) \
     VCHECK(primitive, create, dispatch, gemm, (f), "%s," msg, \
             this->info(engine), ##__VA_ARGS__)
+
+#define VDISPATCH_GEMM_IC(cond, msg, ...) \
+    VCONDCHECK(primitive, create, dispatch, gemm, (cond), \
+            status::unimplemented, msg, ##__VA_ARGS__)
 
 // NOLINTBEGIN(google-default-arguments)
 struct gemm_pd_t : public primitive_desc_t {

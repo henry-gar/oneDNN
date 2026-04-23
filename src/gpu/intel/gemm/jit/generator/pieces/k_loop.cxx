@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -52,8 +52,8 @@ void Generator<hw>::kLoop(KLoop type, const GEMMProblem &problem, GEMMStrategy &
     auto Ta_load = state.Ta_load, Tb_load = state.Tb_load;
 
     bool cLoadAhead = strategy.cLoadAhead;
-    auto opCountMain = outerProductCount(hw, problem, strategy);
-    auto minOPCount = minOuterProductCount(hw, problem, strategy);
+    auto opCountMain = outerProductCount(problem, strategy);
+    auto minOPCount = minOuterProductCount(problem, strategy);
     auto opCountRem = minOPCount;
 
     auto A_copies = strategy.A_copies;
@@ -63,6 +63,7 @@ void Generator<hw>::kLoop(KLoop type, const GEMMProblem &problem, GEMMStrategy &
     auto ka_loadMain = strategy.ka_load, ka_loadRem = state.ka_loadRem;
     auto kb_loadMain = strategy.kb_load, kb_loadRem = state.kb_loadRem;
     auto ka_repackMain = state.ka_repack, ka_repackRem = state.ka_repackRem;
+    auto kb_repackRem = state.kb_repackRem;
     auto ka_pfStride = strategy.ka_pfStride;
     auto kb_pfStride = strategy.kb_pfStride;
     auto kInterleaveChunk = strategy.kInterleaveChunk;
@@ -153,10 +154,8 @@ void Generator<hw>::kLoop(KLoop type, const GEMMProblem &problem, GEMMStrategy &
 
     // Get r0 information where needed.
     GRF r0_info;
-    if (needBarrier) {
-        if (state.r0_info.isARF()) stub();
-        r0_info = GRF{state.r0_info.getBase()};
-    }
+    if (needBarrier)
+        r0_info = state.r0InfoGRF();
 
     // Unified barrier and SLM fence handling for k loop.
     auto &modBarrierFence = state.modBarrierFence;
@@ -312,7 +311,8 @@ void Generator<hw>::kLoop(KLoop type, const GEMMProblem &problem, GEMMStrategy &
     auto repackB = [&](Iteration h) { return B_remActive(h) ? state.repackBRem : state.repackB; };
     auto ka_load = [&](Iteration h) { return A_remActive(h) ? ka_loadRem : ka_loadMain; };
     auto kb_load = [&](Iteration h) { return B_remActive(h) ? kb_loadRem : kb_loadMain; };
-    auto ka_repack = [&](Iteration h) { return !state.repackA ? ka_load(h) : A_remActive(h) ? ka_repackRem : ka_repackMain; };
+    auto ka_repack = [&](Iteration h) { return !repackA(h) ? ka_load(h) : A_remActive(h) ? ka_repackRem : ka_repackMain; };
+    auto kb_repack = [&](Iteration h) { return !repackB(h) ? kb_load(h) : B_remActive(h) ? kb_repackRem : 0; };
     auto A_copy = [&](Iteration h) { return (h / ka_load(h)) % A_copies; };
     auto B_copy = [&](Iteration h) { return (h / kb_load(h)) % B_copies; };
     auto A_regs = [&](Iteration h) -> GRFMultirange& { return state.A_regs[A_copy(h)]; };
@@ -949,7 +949,6 @@ void Generator<hw>::kLoop(KLoop type, const GEMMProblem &problem, GEMMStrategy &
         auto Ar_sublayout = state.Ar_layout;
         bool s4Shift = true;
 
-        int hq = kaq_load ? (har % kaq_load) : 0;
         if (repackA) {
             auto layoutCopy = layout;
             layoutCopy.unlinkFromMemory();
@@ -969,11 +968,10 @@ void Generator<hw>::kLoop(KLoop type, const GEMMProblem &problem, GEMMStrategy &
             if (canDequantizeInt4(layout, state.Ar_layout, {}, {})) {
                 if (ha == 0) dequantizeInt4Shift(Ta_load, regs, strategy);
                 s4Shift = false;
-                hq = 0;
             }
         }
         if (dequantizeA)
-            gemmDequantizeAB(true, sublayout, Ar_sublayout, regs, state.Ar_regs, har, hq, problem, strategy, state, s4Shift);
+            gemmDequantizeAB(true, sublayout, Ar_sublayout, regs, state.Ar_regs, h, k_load, k_repack, kaq_load, problem, strategy, state, s4Shift);
         else
         if (repackA)
             copyRegisters(sublayout, Ar_sublayout, regs, state.Ar_regs, 0, har, false, strategy, state, false, s4Shift);
@@ -982,8 +980,8 @@ void Generator<hw>::kLoop(KLoop type, const GEMMProblem &problem, GEMMStrategy &
     };
 
     if (scheduleRepackA && readA) ls.schedule({
-        {reqRepackA,    [&](Iteration h) { doRepackA(state.A_layout,    A_regs(h), state.repackA,    h, ka_loadMain, ka_repackMain); }},
-        {reqRepackARem, [&](Iteration h) { doRepackA(state.A_layoutRem, A_regs(h), state.repackARem, h, ka_loadRem,  ka_repackRem);  }}
+        {reqRepackA,    [&](Iteration h) { doRepackA(A_layout(h), A_regs(h), repackA(h), h, ka_load(h), ka_repack(h));  }},
+        {reqRepackARem, [&](Iteration h) { doRepackA(A_layout(h), A_regs(h), repackA(h), h, ka_load(h), ka_repack(h));  }}
     });
 
     auto reqRepackB = every(kb_loadMain)
@@ -993,19 +991,22 @@ void Generator<hw>::kLoop(KLoop type, const GEMMProblem &problem, GEMMStrategy &
     bool convertB = (Tb != Tb_load) && (Tb.bits() == Tb_load.bits());
     bool scheduleRepackB = state.repackB || state.repackBRem || convertB || dequantizeB;
 
-    auto doRepackB = [&](RegisterLayout &layout, GRFMultirange &regs, bool repackB, int h, int hb) {
+    auto doRepackB = [&](RegisterLayout &layout, GRFMultirange &regs, bool repackB, int h, int k_load, int k_repack) {
+        k_repack = std::max(k_repack, 1);
+        int hbr = h % k_repack;
+
         if (dequantizeB)
-            gemmDequantizeAB(false, layout, state.Br_layout, regs, state.Br_regs, hb, h % kbq_load, problem, strategy, state);
+            gemmDequantizeAB(false, layout, state.Br_layout, regs, state.Br_regs, h, k_load, k_repack, kbq_load, problem, strategy, state);
         else
         if (repackB)
-            copyRegisters(layout, state.Br_layout, regs, state.Br_regs, hb, 0, false, strategy, state);
+            copyRegisters(layout, state.Br_layout, regs, state.Br_regs, hbr, 0, false, strategy, state);
         else if (convertB)
             convert(regs, Tb_load, Tb, strategy, state);
     };
 
     if (scheduleRepackB && readB) ls.schedule({
-        {reqRepackB,    [&](Iteration h) { doRepackB(state.B_layout,    B_regs(h), state.repackB,    h, 0);                                   }},
-        {reqRepackBRem, [&](Iteration h) { doRepackB(state.B_layoutRem, B_regs(h), state.repackBRem, h, h % std::max(state.kb_repackRem, 1)); }}
+        {reqRepackB,    [&](Iteration h) { doRepackB(B_layout(h), B_regs(h), repackB(h), h, kb_load(h), kb_repack(h)); }},
+        {reqRepackBRem, [&](Iteration h) { doRepackB(B_layout(h), B_regs(h), repackB(h), h, kb_load(h), kb_repack(h)); }}
     });
 
     if (scheduleRepackA && scheduleRepackB && loadBFirst)
@@ -1123,7 +1124,7 @@ void Generator<hw>::kLoop(KLoop type, const GEMMProblem &problem, GEMMStrategy &
 
     auto doSLMRepack = [&](Iteration h) {
         if (slmDequantizeA)
-            gemmDequantizeAB(true, Ai_layout(h), state.Ao_layout, Ai_regs(h), Ao_regs(h), 0, 0, problem, strategy, state);
+            gemmDequantizeAB(true, Ai_layout(h), state.Ao_layout, Ai_regs(h), Ao_regs(h), h, ka_load(h), ka_repack(h), kaq_load, problem, strategy, state);
         else
         if (slmA && !aioShare(h) && !(slmRemActive(h) && Ai_remIncrCopy))
             copyRegisters(Ai_layout(h), state.Ao_layout, Ai_regs(h), Ao_regs(h), strategy, state);
@@ -1131,7 +1132,7 @@ void Generator<hw>::kLoop(KLoop type, const GEMMProblem &problem, GEMMStrategy &
             convert(Ai_regs(h), Ta_ext, Ta, strategy, state);
 
         if (slmDequantizeB)
-            gemmDequantizeAB(false, Bi_layout(h), state.Bo_layout, Bi_regs(h), Bo_regs(h), 0, 0, problem, strategy, state);
+            gemmDequantizeAB(false, Bi_layout(h), state.Bo_layout, Bi_regs(h), Bo_regs(h), h, kb_load(h), kb_repack(h), kbq_load, problem, strategy, state);
         else
         if (slmB && !bioShare(h) && !(slmRemActive(h) && Bi_remIncrCopy))
             copyRegisters(Bi_layout(h), state.Bo_layout, Bi_regs(h), Bo_regs(h), strategy, state);
@@ -1566,6 +1567,16 @@ void Generator<hw>::kLoop(KLoop type, const GEMMProblem &problem, GEMMStrategy &
 
     // Similarly vflags may not be consistent.
     state.wipeActiveVFlags();
+
+    // Sync any tokens nGEN thinks might still be outstanding, except for DPAS.
+    // nGEN cannot always discover that these tokens are no longer alive.
+    bool isC[GRF::maxRegs(hw)] = {};
+    for (const auto &C_regs: state.C_regs)
+        for (int r = 0; r < C_regs.getLen(); r++)
+            isC[C_regs[r].getBase()] = true;
+    for (int i = 0; i < GRF::maxRegs(hw); i++)
+        if (!isC[i])
+            wrdep(GRF(i));
 }
 
 // Increment A pointer after load, inside GEMM k loop.
@@ -1748,7 +1759,7 @@ void Generator<hw>::gemmAiBiRemLoadInc(int h, bool incremental, bool incremental
     auto kSLMPMod = kSLMCountUp ? ge : gt;
 
     bool prezero = !willRemask && ((doA ? state.slmASums : state.slmBSums)
-                                       || (minOuterProductCount(hw, problem, strategy) > 1));
+                                       || (minOuterProductCount(problem, strategy) > 1));
 
     if (!incremental) {
         if (prezero) zeroMatrix(Xi_regs, strategy);
@@ -1896,11 +1907,12 @@ GRF Generator<hw>::kLoopGetBarrierHeader(const GEMMStrategy &strategy, GEMMState
 {
     kLoopAllocBarrierHeader(state);
     if (!state.barrierReady) {
-        if (state.r0_info.isARF()) stub();
         if (hw >= HW::XeHPG && strategy.activeThreads > 0)
-            barrierheader(state.barrierHeader, strategy.activeThreads, GRF{state.r0_info.getBase()});
-        else
+            barrierheader(state.barrierHeader, strategy.activeThreads);
+        else {
+            if (state.r0_info.isARF()) stub();
             barrierheader(state.barrierHeader, GRF{state.r0_info.getBase()});
+        }
         state.barrierReady = true;
     }
 
@@ -2049,7 +2061,7 @@ void Generator<hw>::kLoopActivateSLMRemainder(bool active, bool preactivate, con
     auto &effKMasksBi = shareKMasksAiBi ? state.kMasksAi : state.kMasksBi;
     auto &initSLMKOffset = state.initSLMKOffset;
 
-    auto minOPCount = minOuterProductCount(hw, problem, strategy);
+    auto minOPCount = minOuterProductCount(problem, strategy);
 
     // Calculate or recalculate SLM k remainders as needed.
     if (active && !preactivate && kSLMStorage.isInvalid()) {

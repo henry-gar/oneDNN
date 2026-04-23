@@ -1,5 +1,5 @@
 #===============================================================================
-# Copyright 2016-2025 Intel Corporation
+# Copyright 2016 Intel Corporation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -21,6 +21,17 @@ endif()
 # propagate EXAMPLE specific flags
 append(CMAKE_C_FLAGS "${CMAKE_EXAMPLE_CCXX_FLAGS}")
 append(CMAKE_CXX_FLAGS "${CMAKE_EXAMPLE_CCXX_FLAGS}")
+
+# Link the examples to the OpenCL runtime
+if(DNNL_GPU_RUNTIME STREQUAL "OCL")
+    find_package(OpenCL REQUIRED)
+    if(OpenCL_FOUND)
+        add_definitions(-DCL_TARGET_OPENCL_VERSION=120)
+        list(APPEND EXTRA_SHARED_LIBS OpenCL::OpenCL)
+    else()
+        message(FATAL_ERROR "OpenCL SDK is not found; you can use OPENCLROOT CMake option to specify the path or disable building tests with ONEDNN_BUILD_EXAMPLES=OFF")
+    endif()
+endif()
 
 if(DNNL_WITH_SYCL)
     if(DNNL_SYCL_GENERIC)
@@ -57,6 +68,11 @@ file(GLOB_RECURSE headers *.hpp *.h)
 
 if(NOT DNNL_EXPERIMENTAL_UKERNEL)
     list(REMOVE_ITEM sources ${CMAKE_CURRENT_SOURCE_DIR}/ukernels/cpu_brgemm.cpp)
+endif()
+
+if(NOT DNNL_EXPERIMENTAL_GROUPED_MEMORY)
+    list(REMOVE_ITEM sources
+        ${CMAKE_CURRENT_SOURCE_DIR}/matmul_grouped.cpp)
 endif()
 
 # Remove tests for CUDA which use unimplemented primitives
@@ -159,6 +175,17 @@ if (DNNL_CPU_RUNTIME STREQUAL "TBB" OR DNNL_CPU_SYCL)
     endforeach()
 endif()
 
+# Do not build RNN examples for threadpool as it doesn't support asynchronous
+# version of it which can't be distinguished.
+if (DNNL_CPU_RUNTIME STREQUAL "THREADPOOL")
+    foreach(f ${sources})
+        get_filename_component(fname ${f} NAME)
+        if(${fname} MATCHES "rnn_")
+            list(REMOVE_ITEM sources "${f}")
+        endif()
+    endforeach()
+endif()
+
 foreach(src ${sources})
     file(RELATIVE_PATH src_rel_path ${CMAKE_CURRENT_SOURCE_DIR} ${src})
     string(REGEX REPLACE "[/_\\.]" "-" example_name ${src_rel_path})
@@ -180,7 +207,7 @@ foreach(src ${sources})
         endif()
     else()
         set(cpu_rt_pattern "(SEQ|OMP|TBB|SYCL|DPCPP)")
-        set(gpu_rt_pattern "(OCL|SYCL|DPCPP)")
+        set(gpu_rt_pattern "(OCL|ZE|SYCL|DPCPP)")
         if(${example_name} MATCHES "sycl.*")
             set(cpu_rt_pattern "(SYCL|DPCPP)")
             set(gpu_rt_pattern "(SYCL|DPCPP)")

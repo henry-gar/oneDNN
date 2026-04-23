@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2017-2025 Intel Corporation
+* Copyright 2017 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -45,13 +45,13 @@ void jit_sse41_1x1_convolution_fwd_t::execute_forward(
             const data_t *, DNNL_ARG_ATTR_POST_OP_DW | DNNL_ARG_BIAS);
     const auto post_ops_binary_rhs_arg_vec
             = binary_injector::prepare_binary_args(pd()->jcp_.post_ops, ctx);
-    const auto post_ops_binary_rhs_arg_vec_dw = pd()->dw_conv_pd_ != nullptr
+    const auto &post_ops_binary_rhs_arg_vec_dw = pd()->dw_conv_pd_ != nullptr
             ? binary_injector::prepare_binary_args(
-                    pd()->dw_conv_pd_->jcp_.post_ops, ctx,
-                    pd()->jcp_.post_ops.entry_.size() + 1)
+                      pd()->dw_conv_pd_->jcp_.post_ops, ctx,
+                      pd()->jcp_.post_ops.entry_.size() + 1)
             : std::vector<const void *> {};
 
-    auto scratchpad = ctx.get_scratchpad_grantor();
+    const auto &scratchpad = ctx.get_scratchpad_grantor();
     parallel(kernel_->jcp.nthr, [&](const int ithr, const int nthr) {
         execute_forward_thr(ithr, nthr, src, weights, bias, weights_dw, bias_dw,
                 dst, scratchpad, post_ops_binary_rhs_arg_vec.data(),
@@ -115,9 +115,9 @@ void jit_sse41_1x1_convolution_fwd_t::execute_forward_thr(const int ithr,
         return remaining < tail_step ? remaining : default_step;
     };
 
-    auto init_bcast = [&](int iwork, int &n, int &g, int &bcast_step,
-                              int bcast_end, int &oh, int &ow, int &ih,
-                              int &iw) {
+    auto init_bcast
+            = [&](int iwork, int &n, int &g, int &bcast_step, int bcast_end,
+                      int &oh, int &ow, int &ih, int &iw) {
         int osb {0};
         nd_iterator_init(iwork, n, jcp.mb, g, jcp.ngroups, osb, nb_bcast);
 
@@ -176,8 +176,8 @@ void jit_sse41_1x1_convolution_fwd_t::execute_forward_thr(const int ithr,
         (*kernel_)(&par_conv);
     };
 
-    auto conv_1x1 = [&](int bcast_start, int bcast_end, int ocb_start,
-                            int ocb_end) {
+    auto conv_1x1
+            = [&](int bcast_start, int bcast_end, int ocb_start, int ocb_end) {
         if (bcast_start >= bcast_end || ocb_start >= ocb_end) return;
 
         int iwork = bcast_start;

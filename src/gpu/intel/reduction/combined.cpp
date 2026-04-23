@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2025 Intel Corporation
+* Copyright 2021 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -195,8 +195,8 @@ status_t split_into_phases(const subproblem_t &subprb,
     //Heuristic:
     // subsplitting has a high cost due to launching multiple sequential threads,
     // so only split when parallelism is low and reductions per thread is large
-    const bool low_parallelism = [&intel_engine, &large_grf_mode,
-                                         &try_phase]() {
+    const bool low_parallelism
+            = [&intel_engine, &large_grf_mode, &try_phase]() {
         compute::gpu_arch_t arch = intel_engine->device_info()->gpu_arch();
         int threads_per_EU = large_grf_mode
                 ? 4
@@ -270,6 +270,7 @@ status_t combined_t::pd_t::init_conf(impl::engine_t *engine) {
 
         conf.is_reduction_dim[i] = false;
     }
+    conf.require_stateless_addressing = has_large_buffers();
 
     using namespace alg_kind;
     std::vector<subproblem_t> subprbs;
@@ -371,6 +372,7 @@ static status_t init_kernel_ctx_common(compute::kernel_ctx_t &kernel_ctx,
     kernel_ctx.define_int("SECONDARY_REDUCTION_ALG", to_int(secondary_alg));
 
     kernel_ctx.set_data_type(phase.src_type);
+    kernel_ctx.require_stateless_addressing(conf.require_stateless_addressing);
 
     kernel_ctx.define_int("SUBGROUP_SIZE", phase.subgroup_size);
     const auto &lws = phase.nd_range.local_range();
@@ -437,6 +439,8 @@ static status_t init_kernel_ctx_common(compute::kernel_ctx_t &kernel_ctx,
 
 status_t combined_t::pd_t::init_kernel_ctx(
         compute::kernel_ctx_t &kernel_ctx, const phase_conf_t &phase) const {
+    kernel_ctx.register_buffer_size(*src_md());
+    kernel_ctx.register_buffer_size(*dst_md());
     status_t status = init_kernel_ctx_common(kernel_ctx, conf, phase);
     if (status != status_t::dnnl_success) return status;
 

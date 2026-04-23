@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -20,7 +20,7 @@
 #include <memory>
 
 #include "gpu/intel/jit/ir/hw.hpp"
-#include "gpu/intel/jit/ir/ir.hpp"
+#include "gpu/intel/jit/ir/legacy.hpp"
 #include "gpu/intel/jit/ir/tensor.hpp"
 
 namespace dnnl {
@@ -60,7 +60,7 @@ public:
 
     std::string str(const std::string &tag = "send_plan") const;
 
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
 private:
     std::unique_ptr<send_plan_impl_t> impl_;
@@ -68,7 +68,7 @@ private:
 
 bool can_use_send_plan(const view_t &view);
 
-send_plan_t create_send_plan(const kernel::options_t &options,
+send_plan_t create_send_plan(const dsl::kernel::options_t &options,
         const view_t &view, const send_params_t &send_params,
         bool zero_out = true);
 

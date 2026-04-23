@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -293,8 +293,10 @@ status_t brgemm_deconvolution_fwd_t<isa>::execute(const exec_ctx_t &ctx) const {
 
     exec_ctx_t conv_ctx(ctx, std::move(conv_args));
 
-    nested_scratchpad_t ns(ctx, memory_tracking::names::key_nested, conv_p_);
-    conv_ctx.set_scratchpad_grantor(ns.grantor());
+    auto *nested_grantor = create_nested_grantor(ctx.get_scratchpad_grantor(),
+            memory_tracking::names::key_nested,
+            conv_p_->pd()->scratchpad_registry());
+    conv_ctx.set_scratchpad_grantor(nested_grantor);
     return conv_p_->execute(conv_ctx);
 }
 
@@ -305,10 +307,10 @@ template struct brgemm_deconvolution_fwd_t<avx512_core>;
 template struct brgemm_deconvolution_fwd_t<avx512_core_vnni>;
 template struct brgemm_deconvolution_fwd_t<avx512_core_bf16>;
 template struct brgemm_deconvolution_fwd_t<avx512_core_fp16>;
-template struct brgemm_deconvolution_fwd_t<avx10_2_512>;
+template struct brgemm_deconvolution_fwd_t<avx10_2>;
 template struct brgemm_deconvolution_fwd_t<avx512_core_amx>;
 template struct brgemm_deconvolution_fwd_t<avx512_core_amx_fp16>;
-template struct brgemm_deconvolution_fwd_t<avx10_2_512_amx_2>;
+template struct brgemm_deconvolution_fwd_t<avx10_2_amx_2>;
 
 } // namespace x64
 } // namespace cpu

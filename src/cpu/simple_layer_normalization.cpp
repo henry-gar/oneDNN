@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@
 #include <math.h>
 
 #include "common/c_types_map.hpp"
+#include "common/compiler_workarounds.hpp"
 #include "common/dnnl_thread.hpp"
 #include "common/reorder.hpp"
 #include "common/type_helpers.hpp"
@@ -87,7 +88,7 @@ status_t simple_layer_normalization_fwd_t::execute_forward(
     const bool use_shift = pd()->use_shift();
     const bool skip_mean = pd()->skip_mean();
 
-    auto scratchpad = ctx.get_scratchpad_grantor();
+    const auto &scratchpad = ctx.get_scratchpad_grantor();
     const auto src = CTX_IN_MEM(const void *, DNNL_ARG_SRC);
     auto dst = CTX_OUT_MEM(void *, DNNL_ARG_DST);
 
@@ -105,7 +106,7 @@ status_t simple_layer_normalization_fwd_t::execute_forward(
                 : CTX_OUT_MEM(float *, DNNL_ARG_MEAN);
         variance = pd()->stats_are_src()
                 ? const_cast<float *>(
-                        CTX_IN_MEM(const float *, DNNL_ARG_VARIANCE))
+                          CTX_IN_MEM(const float *, DNNL_ARG_VARIANCE))
                 : CTX_OUT_MEM(float *, DNNL_ARG_VARIANCE);
     }
 
@@ -133,7 +134,7 @@ status_t simple_layer_normalization_fwd_t::execute_forward(
     const auto eps = pd()->desc()->layer_norm_epsilon;
     const auto save_stats = pd()->is_training();
 
-    parallel(0, [&](const int ithr, const int nthr) {
+    parallel(0, [= COMPAT_THIS_CAPTURE](const int ithr, const int nthr) {
         dim_t N_start = 0, N_end = 0;
         balance211(N, nthr, ithr, N_start, N_end);
         const char *const __restrict src_ptr
@@ -299,7 +300,7 @@ status_t simple_layer_normalization_bwd_t::execute_backward(
 
     const bool use_scale = pd()->use_scale();
 
-    auto scratchpad = ctx.get_scratchpad_grantor();
+    const auto &scratchpad = ctx.get_scratchpad_grantor();
     auto src = CTX_IN_MEM(const void *, DNNL_ARG_SRC);
     auto diff_dst = CTX_IN_MEM(const void *, DNNL_ARG_DIFF_DST);
     auto scale = CTX_IN_MEM(float *, DNNL_ARG_SCALE);
@@ -349,7 +350,7 @@ status_t simple_layer_normalization_bwd_t::execute_backward(
     const auto eps = pd()->desc()->layer_norm_epsilon;
     const auto calculate_diff_stats = !pd()->stats_are_src();
 
-    parallel(max_nthr, [&](int ithr, int nthr) {
+    parallel(max_nthr, [=](int ithr, int nthr) {
         dim_t N_start = 0, N_end = 0;
         balance211(N, nthr, ithr, N_start, N_end);
         const size_t block_size = N_end - N_start;
@@ -388,7 +389,7 @@ status_t simple_layer_normalization_bwd_t::execute_backward(
         }
     });
 
-    parallel_nd(C, [&](dim_t c) {
+    parallel_nd(C, [=](dim_t c) {
         float diff_gamma = 0, diff_beta = 0;
         for (dim_t n = 0; n < max_nthr; n++) {
             diff_gamma += reduce[C * n + c];
@@ -398,7 +399,7 @@ status_t simple_layer_normalization_bwd_t::execute_backward(
         diff_shift[c] = diff_beta;
     });
 
-    parallel(max_nthr, [&](int ithr, int nthr) {
+    parallel(max_nthr, [=](int ithr, int nthr) {
         dim_t N_start = 0, N_end = 0;
         balance211(N, nthr, ithr, N_start, N_end);
         const size_t block_size = N_end - N_start;

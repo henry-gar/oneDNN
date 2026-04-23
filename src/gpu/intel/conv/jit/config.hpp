@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2025 Intel Corporation
+* Copyright 2021 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -25,10 +25,9 @@
 #include "gpu/intel/conv/jit/key.hpp"
 #include "gpu/intel/conv/jit/problem.hpp"
 #include "gpu/intel/jit/ir/config.hpp"
-#include "gpu/intel/jit/ir/fma.hpp"
 #include "gpu/intel/jit/ir/hw.hpp"
+#include "gpu/intel/jit/ir/legacy.hpp"
 #include "gpu/intel/jit/ir/tensor_config.hpp"
-#include "gpu/intel/jit/ir/walk_order.hpp"
 #include "gpu/intel/jit/utils/utils.hpp"
 
 namespace dnnl {
@@ -441,7 +440,7 @@ public:
 
     void set_from_str(const std::string &s) override {
         if (s.empty()) return;
-        value_ = walk_order_t(s);
+        value_ = make_walk_order(s);
     }
 
     std::string str() const override {
@@ -543,7 +542,7 @@ public:
 
     int reserved_regs() const;
 
-    const hw_t &hw() const { return options().hw(); }
+    const dsl::hw_t &hw() const { return options().hw(); }
 
     bool is_ge_xe_hpc() const { return hw() >= ngen::HW::XeHPC; }
 
@@ -595,6 +594,12 @@ public:
         set_options(tmp);
     }
 
+    void set_require_dpas(bool value) {
+        auto tmp = options();
+        tmp.set_require_dpas(value);
+        set_options(tmp);
+    }
+
     void set_vec_size(int vec_size) { vec_size_ = vec_size; }
 
     void set_tiler(const std::shared_ptr<tiler_t> &tiler);
@@ -633,8 +638,8 @@ private:
     name##_param_t name##_; \
     param_init_t name##_init_ \
             = register_param([](const container_config_t *c) { \
-                  return &((const config_t *)c)->name##_; \
-              });
+        return &((const config_t *)c)->name##_; \
+    });
 
     INIT_PARAM(allow_global_reduction)
     INIT_PARAM(bwd_d_optimize_kind)
@@ -685,7 +690,7 @@ int slm_bufs_hint(const problem_t &prb, dim_t m_tg, dim_t n_tg,
         bool do_unroll);
 tensor_config_t get_tensor_config(
         const config_t &cfg, const memory_desc_t *zp_src);
-bool is_small(const type_t &type, dim_t elems);
+bool is_small(const dsl::type_t &type, dim_t elems);
 int estimate_register_count(const config_t &cfg);
 int default_regs(const config_t &cfg);
 void init_kernel_grid(config_t &cfg);

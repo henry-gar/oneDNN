@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2025 Intel Corporation
+* Copyright 2021 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -24,8 +24,8 @@
 #include "common/memory_desc_wrapper.hpp"
 #include "common/serialization.hpp"
 #include "common/utils.hpp"
+#include "gemmstone/dsl/tensor.hpp"
 #include "gpu/intel/compute/kernel_arg_list.hpp"
-#include "gpu/intel/jit/dsl/tensor.hpp"
 #include "gpu/intel/utils.hpp"
 
 namespace dnnl {
@@ -187,6 +187,8 @@ private:
 // supports block_layout_t in favor of std::vector<block_t>
 std::vector<block_t> normalize_blocks(
         const std::vector<block_t> &blocks, bool remove_size_1_blocks = true);
+
+block_layout_t get_inner_layout(const memory_desc_wrapper &md);
 
 } // namespace intel
 } // namespace gpu

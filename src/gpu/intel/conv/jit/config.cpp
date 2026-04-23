@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -22,10 +22,10 @@
 
 #include "common/utils.hpp"
 #include "gpu/intel/conv/jit/config.hpp"
-#include "gpu/intel/conv/jit/message_patterns.hpp"
 #include "gpu/intel/conv/jit/normalization.hpp"
 #include "gpu/intel/conv/jit/plan.hpp"
 #include "gpu/intel/conv/jit/problem.hpp"
+#include "gpu/intel/conv/jit/send_patterns.hpp"
 #include "gpu/intel/conv/jit/tiler.hpp"
 #include "gpu/intel/jit/eltwise_injector.hpp"
 #include "gpu/intel/jit/ir/config.hpp"
@@ -97,7 +97,7 @@ std::string prepend_groups_to_tag(const std::string &tag) {
     return "a" + ret;
 }
 
-int get_default_mad_block(const type_t &type) {
+int get_default_mad_block(const dsl::type_t &type) {
     switch (type.size()) {
         // fp4 gets upconverted to f16 for mad.
         case 1: return (type.is_fp4() ? 16 : 32);
@@ -109,7 +109,7 @@ int get_default_mad_block(const type_t &type) {
     return 1;
 }
 
-bool is_small(const type_t &type, dim_t elems) {
+bool is_small(const dsl::type_t &type, dim_t elems) {
     int block = get_default_mad_block(type);
     return elems <= block / 2;
 }
@@ -195,7 +195,7 @@ status_t problem_t::init(
     isp = id * ih * iw;
     osp = od * oh * ow;
 
-    hw_t hw(make_ir_hw(engine));
+    dsl::hw_t hw(make_ir_hw(engine));
     init_transpose(hw);
     CHECK(init_abc_data_types(hw));
     CHECK(init_acc_data_type());
@@ -317,7 +317,7 @@ int pick_block(dim_t dim, int b0, int b1 = 0, int b2 = 0) {
     return pick_block_impl(false, dim, b0, b1, b2);
 }
 
-int get_default_block(fma_kind_t fma, const type_t &type, dim_t elems) {
+int get_default_block(fma_kind_t fma, const dsl::type_t &type, dim_t elems) {
     if (is_dp_fma(fma)) {
         if (is_small(type, elems)) {
             int packed_dword_elems = 32 / type.bitsize();
@@ -330,7 +330,7 @@ int get_default_block(fma_kind_t fma, const type_t &type, dim_t elems) {
     return get_default_mad_block(type);
 }
 
-fma_kind_t get_default_fma(const hw_t &hw, const type_t &type) {
+fma_kind_t get_default_fma(const dsl::hw_t &hw, const dsl::type_t &type) {
     switch (type.size()) {
         case 1:
             if (hw >= ngen::HW::XeHP) return fma_kind_t::dpas;
@@ -356,8 +356,8 @@ struct nc_block_t {
 
     // Ideally, this should only depend on data type, direction, mb, c, and g to
     // enable the same src/dst formats and avoid reorders between convolutions
-    static nc_block_t get_default_blocking(const hw_t &hw, fma_kind_t fma,
-            type_t type, bool is_dw, dim_t n, dim_t c, dim_t g,
+    static nc_block_t get_default_blocking(const dsl::hw_t &hw, fma_kind_t fma,
+            dsl::type_t type, bool is_dw, dim_t n, dim_t c, dim_t g,
             bool is_output = false) {
         // Select dst layout to align with fma kind of following conv
         // for non-depthwise cases.
@@ -417,7 +417,7 @@ struct goi_block_t {
                 {1, o_block_outer_, i_block_outer_}, wei_letters, wei_idxs);
     }
 
-    static goi_block_t get_default_blocking(type_t type, int vec_size,
+    static goi_block_t get_default_blocking(dsl::type_t type, int vec_size,
             fma_kind_t fma_kind, bool is_fwd, bool is_bwd_d, dim_t g, dim_t o,
             dim_t i, bool ab_transpose) {
         dim_t x = o;
@@ -443,7 +443,7 @@ struct goi_block_t {
                 i_block, o_block_outer, i_block_outer);
     }
 
-    static void get_default_blocking(type_t type, int vec_size,
+    static void get_default_blocking(dsl::type_t type, int vec_size,
             fma_kind_t fma_kind, bool is_fwd, bool is_bwd_d, dim_t g, dim_t x,
             dim_t y, int &g_block, int &x_block, int &y_block,
             int &y_block_outer, bool ab_transpose = false) {
@@ -490,7 +490,6 @@ std::string maybe_fixup_1st_conv_wei_tag(
         const config_t &cfg, const std::string &tag) {
     auto &prb = cfg.prb();
 
-    if (!cfg.is_dp_fma()) return tag;
     if (!is_small_ic(prb) || prb.is_dw) return tag;
     if (prb.ab_swap_transpose) return tag;
     if (!prb.is_fwd) return tag;
@@ -791,10 +790,10 @@ status_t init_tensor_layouts(
     if (prb.is_bwd_w) {
         if (utils::one_of(prb.wei_data_type, data_type::bf16, data_type::f16,
                     data_type::f8_e5m2, data_type::f8_e4m3))
-            wei_layout = wei_layout.with(type_t::f32());
+            wei_layout = wei_layout.with(dsl::type_t::f32());
         if (utils::one_of(prb.bia_data_type, data_type::bf16, data_type::f16,
                     data_type::f8_e5m2, data_type::f8_e4m3))
-            bia_layout = bia_layout.with(type_t::f32());
+            bia_layout = bia_layout.with(dsl::type_t::f32());
     }
 
     src.set_compute_unnormalized(src_layout, src_tag);
@@ -875,13 +874,13 @@ status_t init_tensor_layouts(
     return status::success;
 }
 
-bool hw_ok(const hw_t &hw) {
+bool hw_ok(const dsl::hw_t &hw) {
     if (hw < ngen::HW::XeLP) return false;
     return true;
 }
 
 bool data_types_ok(
-        const problem_t &prb, const hw_t &hw, impl::engine_t *engine) {
+        const problem_t &prb, const dsl::hw_t &hw, impl::engine_t *engine) {
     auto src = prb.src_data_type;
     auto wei = prb.wei_data_type;
     auto dst = prb.dst_data_type;
@@ -936,8 +935,6 @@ bool zero_points_ok(const problem_t &prb) {
             !utils::one_of(input_type, s8, u8), zp.has_default_values());
     if (!ok) return false;
 
-    if (zp.has_host_scalars()) return false;
-
     if (!zp.has_default_values(DNNL_ARG_SRC)) {
         int mask_src = zp.get_mask(DNNL_ARG_SRC);
         ok = utils::one_of(mask_src, 0, (1 << 1));
@@ -962,7 +959,7 @@ bool zero_points_ok(const problem_t &prb) {
     return true;
 }
 
-bool post_ops_ok(const problem_t &prb, const hw_t &hw) {
+bool post_ops_ok(const problem_t &prb, const dsl::hw_t &hw) {
     auto *pd = prb.conv_pd;
     auto *attr = prb.attr;
 
@@ -985,8 +982,6 @@ bool post_ops_ok(const problem_t &prb, const hw_t &hw) {
     if (!attr->post_ops_.check_sum_consistency(
                 prb.c_data_type, utils::one_of(input_type, s8, u8), true))
         return false;
-
-    if (attr->scales_.has_host_scalars()) return false;
 
     if (!attr->scales_.has_default_values())
         if (!prb.is_s32_accumulator() && !prb.is_fp8_conv()) return false;
@@ -1049,13 +1044,15 @@ status_t init_fma_kind(
         config_t &cfg, convolution_pd_t *pd, impl::engine_t *engine) {
     if (cfg.fma_kind_param().is_overridden()) return status::success;
     const auto &prb = cfg.prb();
-    auto fma_kind = get_supported_fma_kind(
-            cfg.hw(), prb.a_data_type, prb.b_data_type, prb.acc_data_type);
+    auto fma_kind = get_supported_fma_kind(cfg.hw(), to_ir(prb.a_data_type),
+            to_ir(prb.b_data_type), to_ir(prb.acc_data_type));
     // Force mad for some cases
     if (should_use_mad(prb)) fma_kind = fma_kind_t::mad;
     VDISPATCH_CHECK(pd, engine, fma_kind != fma_kind_t::undef,
             VERBOSE_UNSUPPORTED_DT_CFG);
     cfg.set_fma_kind(fma_kind);
+    cfg.set_require_dpas(
+            utils::one_of(fma_kind, fma_kind_t::dpas, fma_kind_t::dpasw));
     return status::success;
 }
 
@@ -1096,6 +1093,9 @@ status_t init_vec_size(config_t &cfg) {
 
 int default_regs(const config_t &cfg) {
     if (!cfg.hw().large_grf_support()) return 128;
+    if (cfg.hw().family() == ngen::ProductFamily::CRI
+            && cfg.is_dpas_or_dpasw_fma())
+        return 512;
     if (cfg.is_dpas_or_dpasw_fma()) return 256;
     return 128;
 }
@@ -1137,7 +1137,7 @@ void init_bwd_d_optimize(config_t &cfg) {
 
 status_t init_pd_time_cfg(const problem_t &prb, config_t &cfg,
         impl::engine_t *engine, convolution_pd_t *pd, primitive_attr_t *attr) {
-    hw_t hw(make_ir_hw(engine));
+    dsl::hw_t hw(make_ir_hw(engine));
 
     VDISPATCH_CHECK(pd, engine, hw_ok(hw), VERBOSE_UNSUPPORTED_ISA);
     VDISPATCH_CHECK(
@@ -1150,7 +1150,7 @@ status_t init_pd_time_cfg(const problem_t &prb, config_t &cfg,
     zero_points_config_t zp_cfg(pd);
     cfg.set_zp_cfg(zp_cfg);
     cfg.set_prb(prb);
-    cfg.set_options(kernel::options_t(hw));
+    cfg.set_options(dsl::kernel::options_t(hw));
     cfg.maybe_override_from_env();
 
     CHECK(init_fma_kind(cfg, pd, engine));
@@ -1167,7 +1167,7 @@ status_t init_pd_time_cfg(const problem_t &prb, config_t &cfg,
 }
 
 bool pipeline_unroll_hint(const problem_t &prb, fma_kind_t fma_kind,
-        const kernel::options_t &options,
+        const dsl::kernel::options_t &options,
         bwd_d_optimize_kind_t bwd_d_optimize_kind,
         bool allow_global_reduction) {
     bool do_unroll = true;
@@ -1485,6 +1485,42 @@ walk_order_t maybe_fixup_group_with_small_channels(
     return fixed;
 }
 
+// Adjusts walk order when weights do not fit L3 cache for non-1x1 forward
+// convolution. For such cases move `oh` to the innermost grid position to
+// increase kh-related data reuse in activations.
+walk_order_t maybe_fixup_large_weights(
+        const config_t &cfg, const walk_order_t &walk_order) {
+    // Apply the heuristic only for smaller L3 cache sizes.
+    const size_t l3_size = cfg.hw().l3_cache_size();
+    if (l3_size > (1 << 22)) return walk_order;
+
+    auto &prb = cfg.prb();
+    // No reuse for when kh is one.
+    if (prb.kh == 1 || !prb.is_fwd) return walk_order;
+    // Blocked walk order implies that it's already cache-aware.
+    for (int id = 0; id < 3; id++) {
+        if (walk_order.is_blocked(id)) return walk_order;
+    }
+
+    auto full_tile = cfg.shape(/*pad=*/false);
+    size_t wei_bytes = get_memory_footprint(
+            prb.ab_swap_transpose ? tensor_kind_t::a : tensor_kind_t::b, cfg,
+            full_tile);
+    if (wei_bytes < l3_size) return walk_order;
+
+    auto grid_tile = get_grid_tile(cfg);
+    // Apply the heuristic - move `oh` to be fast-changing in the grid.
+    walk_order_t fixed;
+    if (grid_tile.has(pvars::oh))
+        fixed.add(pvars::oh, grid_tile.get(pvars::oh), 0);
+    for (auto &b : walk_order.blocks()) {
+        if (b.dim == pvars::oh) continue;
+        fixed.add(b.dim, b.size, b.grid_id);
+    }
+    fixed.finalize(grid_tile);
+    return fixed;
+}
+
 walk_order_t get_default_walk_order(
         const config_t &cfg, const tile_t &grid_tile) {
     using vec_t = std::vector<pvar_t>;
@@ -1514,6 +1550,7 @@ walk_order_t get_default_walk_order(
     }
     walk_order.finalize(grid_tile);
     walk_order = maybe_fixup_group_with_small_channels(cfg, walk_order);
+    walk_order = maybe_fixup_large_weights(cfg, walk_order);
     return walk_order;
 }
 
@@ -1545,12 +1582,11 @@ public:
         // (WHD, width is first).
         std::sort(entries_.begin(), entries_.end(),
                 [&](const entry_t &a, const entry_t &b) {
-                    int a_sp_idx = spatial_index(a.dim);
-                    int b_sp_idx = spatial_index(b.dim);
-                    if (a_sp_idx >= 0 && b_sp_idx >= 0)
-                        return a_sp_idx > b_sp_idx;
-                    return (a_sp_idx >= 0) && (b_sp_idx < 0);
-                });
+            int a_sp_idx = spatial_index(a.dim);
+            int b_sp_idx = spatial_index(b.dim);
+            if (a_sp_idx >= 0 && b_sp_idx >= 0) return a_sp_idx > b_sp_idx;
+            return (a_sp_idx >= 0) && (b_sp_idx < 0);
+        });
     }
 
     bool has_next() const {
@@ -1644,6 +1680,25 @@ walk_order_t compute_walk_order(const config_t &cfg) {
         size_t ab_bytes = get_memory_footprint(cfg, inner, outer);
         if (ab_bytes <= l3_size) grid_inner = std::move(outer);
     }
+
+    // Prefer square spatial dimensions to increase cache reuse due to iteration
+    // over kernel spatial dimensions.
+    if (cfg.prb().is_fwd && cfg.loop_dim(pvars::kh) > 1 && cfg.prb().sh == 1) {
+        auto &w_inner = grid_inner[pvars::ow];
+        auto &h_inner = grid_inner[pvars::oh];
+        auto rebalance_spatial = [&]() {
+            if (grid_tile[pvars::oh] % (h_inner * 2)) return false;
+            if (w_inner % 2) return false;
+            if (w_inner < h_inner * 4) return false;
+            return true;
+        };
+
+        while (rebalance_spatial()) {
+            w_inner /= 2;
+            h_inner *= 2;
+        }
+    }
+
     // Add the blocks in this order:
     // - Step 1. Add grid_inner blocks (fitting L3 cache)
     // - Step 2. Add the remaining M/N blocks
@@ -1796,11 +1851,11 @@ void fixup_config(config_t &cfg) {
 void validate_config_and_plan(config_t &cfg) {
     auto check_if_in_grid_dims
             = [](const std::array<tile_t, 3> &grid, const pvar_t &dim) {
-                  for (auto &tile : grid)
-                      for (auto &d : tile)
-                          if (d == dim) return;
-                  gpu_error_not_expected() << dim.str();
-              };
+        for (auto &tile : grid)
+            for (auto &d : tile)
+                if (d == dim) return;
+        gpu_error_not_expected() << dim.str();
+    };
     const auto &tg_dims = get_thread_group_grid_dims(cfg);
     const auto &grid_dims = get_kernel_grid_dims(cfg);
     for (auto &d : cfg.dims()) {
@@ -1836,8 +1891,10 @@ void validate_config_and_plan(config_t &cfg) {
         b_load_pattern = validate_blocking(
                 cfg, stride_layout_t::input_tensor_t::dst, b_2d);
     }
-    auto dummy_mem(var_t::make(type_t::byte(type::attr_t::ptr), "mem"));
-    auto dummy_reg(var_t::make(type_t::byte(type::attr_t::ptr), "reg"));
+    auto dummy_mem(
+            var_t::make(dsl::type_t::byte(dsl::type::attr_t::ptr), "mem"));
+    auto dummy_reg(
+            var_t::make(dsl::type_t::byte(dsl::type::attr_t::ptr), "reg"));
     if (!a_load_pattern.matches(
                 plan.x2r.a_load.create_stmt(dummy_mem, dummy_reg))) {
         gpu_warning() << "Generated load for tensor A does not match "

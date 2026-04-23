@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 * Copyright 2020 Codeplay Software Limited
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
@@ -226,7 +226,7 @@ protected:
 public:
     explicit rocblas_error(const std::string &message, rocblas_status result)
         : std::runtime_error(
-                (message + std::string(rocblas_error_map(result)))) {
+                  (message + std::string(rocblas_error_map(result)))) {
         error_number_ = static_cast<int>(result);
     }
 
@@ -415,7 +415,7 @@ protected:
 public:
     explicit miopen_error(const std::string &message, miopenStatus_t result)
         : std::runtime_error(
-                (message + std::string(miopen_get_error_string(result)))) {
+                  (message + std::string(miopen_get_error_string(result)))) {
         error_number_ = static_cast<int>(result);
     }
 

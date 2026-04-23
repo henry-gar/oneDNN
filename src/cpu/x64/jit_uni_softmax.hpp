@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -169,7 +169,7 @@ struct jit_uni_softmax_fwd_t : public primitive_t {
             init_scratchpad();
 
             return status::success;
-        };
+        }
 
         int nthr_; // To not exceed the limit in execute used for set up.
         size_t scratch_size_per_thr_ = 0;

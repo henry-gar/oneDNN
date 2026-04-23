@@ -1,7 +1,7 @@
 /*******************************************************************************
-* Copyright 2021-2023 Intel Corporation
+* Copyright 2021 Intel Corporation
 * Copyright 2021-2024 FUJITSU LIMITED
-* Copyright 2025 Arm Ltd. and affiliates
+* Copyright 2025-2026 Arm Ltd. and affiliates
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -35,9 +35,9 @@ namespace cpu {
 namespace aarch64 {
 
 /* Get vector offsets, ofs / VL(eg VL: 512bits = 64Bytes ) */
-#define VL64_OFS(ofs) ((ofs) >> cpu_isa_traits<isa_>::vlen_shift)
+#define VL64_OFS(ofs) ((ofs) >> cpu_isa_traits<isa>::vlen_shift)
 
-template <cpu_isa_t isa_ = isa_undef>
+template <cpu_isa_t isa = isa_undef>
 struct jit_sve_1x1_conv_kernel_t : public jit_generator_t {
     jit_sve_1x1_conv_kernel_t(const jit_1x1_conv_conf_t &ajcp,
             const primitive_attr_t &attr, const memory_desc_t &dst_md);
@@ -88,14 +88,16 @@ private:
     /* Temporay registers */
     reg64_t reg_tmp_imm = x27; // tmp for add_imm
     reg64_t reg_tmp_ofs = x19; // tmp reg to calc bwd wei offset in out_load
+    reg64_t reg_tmp_addr
+            = X_TMP_4; // tmp reg to store addresses for loads and stores
 
     reg64_t reg_load_dim_tail_mask = aux_reg_load_data;
 
-    std::unique_ptr<injector::jit_uni_postops_injector_t<isa_>>
+    std::unique_ptr<injector::jit_uni_postops_injector_t<to_vla_sve(isa)>>
             postops_injector_;
 
     constexpr static int isa_simd_width_
-            = cpu_isa_traits<isa_>::vlen / sizeof(float);
+            = cpu_isa_traits<isa>::vlen / sizeof(float);
 
     ZReg vreg_bcast = ZReg(31);
     PReg k_load_dim_mask = p2;
@@ -108,21 +110,6 @@ private:
     constexpr static int reg_binary_post_op_acc_off = 1 * reg64_size_;
     constexpr static int reg_abi_param1_backup = 2 * reg64_size_;
     constexpr static int stack_space_needed = 3 * reg64_size_;
-
-    template <typename T>
-    Xbyak_aarch64::XReg EVEX_compress_addr(const Xbyak_aarch64::XReg &addr,
-            const Xbyak_aarch64::XReg &x_tmp, Xbyak_aarch64::XReg base,
-            T raw_offt, bool bcast = false) {
-
-        assert(raw_offt <= INT_MAX);
-        auto offt = static_cast<int>(raw_offt);
-
-        add_imm(addr, base, offt, x_tmp);
-        if (bcast) {
-            // addr is the same as addr when bcast is false.
-        }
-        return addr;
-    }
 
     void prefetch(const std::string &prfop, int level, reg64_t in,
             long long int ofs) {

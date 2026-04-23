@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -965,7 +965,7 @@ class eltwise_binary_t
     : public ::testing::TestWithParam<eltwise_binary_params_t> {
 public:
     void TestEltwiseBinary() {
-        const auto params
+        const auto &params
                 = ::testing::TestWithParam<eltwise_binary_params_t>::GetParam();
         graph::engine_t *eng = get_engine();
 

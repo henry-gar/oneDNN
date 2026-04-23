@@ -83,6 +83,12 @@ status_t acl_matmul_t::pd_t::init(engine_t *engine) {
                       weights_md()->data_type)
             && utils::everyone_is(data_type::f32, dst_md()->data_type)
             && platform::has_data_type_support(data_type::bf16);
+    const bool is_gemv = utils::everyone_is(2, src_md()->ndims, dst_md()->ndims)
+            && (src_md()->dims[0] == 1 || weights_md()->dims[1] == 1);
+
+    // in case of gemv and we have SVE, we leave BRGeMM to handle it
+    VDISPATCH_MATMUL(!(is_gemv && arm_compute::CPUInfo::get().has_sve()),
+            "falling back to brgemm for GEMV, based on heuristics");
 
     // we need to save this state as it can change inside set_default_formats()
     weights_format_kind_ = weights_md_.format_kind;
@@ -216,7 +222,7 @@ status_t acl_matmul_t::execute_forward(const exec_ctx_t &ctx) const {
     bool do_act = amp.do_act;
     bool use_dst_acc_for_sum = amp.use_dst_acc_for_sum;
 
-    const auto scratchpad = ctx.get_scratchpad_grantor();
+    const auto &scratchpad = ctx.get_scratchpad_grantor();
 
     arm_compute::Tensor src_tensor;
     arm_compute::Tensor wei_tensor;
@@ -229,9 +235,10 @@ status_t acl_matmul_t::execute_forward(const exec_ctx_t &ctx) const {
 
     // If we have an unfused sum post op, put the result in a scratchpad tensor.
     // Result will be summed to the dst during acl_post_ops.execute
-    auto dst_base = use_dst_acc_for_sum ? scratchpad.get<void>(
-                            memory_tracking::names::key_matmul_dst_in_acc_dt)
-                                        : CTX_OUT_MEM(data_t *, DNNL_ARG_DST);
+    auto dst_base = use_dst_acc_for_sum
+            ? scratchpad.get<void>(
+                      memory_tracking::names::key_matmul_dst_in_acc_dt)
+            : CTX_OUT_MEM(data_t *, DNNL_ARG_DST);
     dst_tensor.allocator()->import_memory(dst_base);
 
     // Run transpose kernel

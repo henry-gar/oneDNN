@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -17,10 +17,13 @@
 /// @example sycl_interop_usm.cpp
 /// > Annotated version: @ref sycl_interop_usm_cpp
 
-/// @page sycl_interop_usm_cpp SYCL USM example
-///
-/// This C++ API example demonstrates programming for Intel(R) Processor
+/// @page sycl_interop_usm_cpp_brief
+/// @brief This C++ API example demonstrates programming for Intel(R) Processor
 /// Graphics with SYCL extensions API in oneDNN.
+
+/// @page sycl_interop_usm_cpp SYCL USM Example
+/// \copybrief sycl_interop_usm_cpp_brief
+///
 /// The workflow includes following steps:
 ///   - Create a GPU or CPU engine. It uses DPC++ as the runtime in this sample.
 ///   - Create a memory descriptor/object.

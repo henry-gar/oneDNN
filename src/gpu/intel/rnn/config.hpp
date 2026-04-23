@@ -19,6 +19,7 @@
 
 #include "common/serialization.hpp"
 #include "gpu/gpu_rnn_pd.hpp"
+#include "gpu/intel/block_structure.hpp"
 #include "gpu/intel/compute/kernel.hpp"
 #include "gpu/intel/engine.hpp"
 #include "gpu/intel/primitive_conf.hpp"
@@ -180,6 +181,9 @@ struct ocl_conf_t {
     bool copy_diff_dst_layer = false;
     bool copy_diff_src_layer;
     bool deterministic = false;
+    bool use_int32_offset = true;
+    bool require_stateless_addressing = true;
+    uint8_t pad2[6] = {};
     struct comp_conf_t {
         bool is_enabled = false;
         bool compute_gemm_layer = false;

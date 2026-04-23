@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2025 Intel Corporation
+* Copyright 2021 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -29,10 +29,10 @@
 #include <unordered_map>
 
 #include "common/memory_desc_wrapper.hpp"
+#include "gemmstone/../../dsl/ir/pass/simplify.hpp"
 #include "gpu/intel/block_structure.hpp"
-#include "gpu/intel/jit/ir/ir.hpp"
+#include "gpu/intel/jit/ir/legacy.hpp"
 #include "gpu/intel/jit/ir/problem.hpp"
-#include "gpu/intel/jit/pass/simplify.hpp"
 #include "gpu/intel/jit/utils/utils.hpp"
 
 namespace dnnl {
@@ -47,7 +47,8 @@ public:
     grid_info_t(dim_idx_t ndims) : dims_(ndims), offs_(ndims), idxs_(ndims) {}
     grid_info_t(const std::vector<dim_t> &dims, const std::vector<expr_t> &idxs)
         : grid_info_t(dims, {}, idxs) {}
-    grid_info_t(const std::vector<dim_t> &dims, std::string (*genname)(int))
+    grid_info_t(
+            const std::vector<dim_t> &dims, const std::string &(*genname)(int))
         : grid_info_t(dims, make_idxs(genname, into<dim_idx_t>(dims.size()))) {}
     grid_info_t(const std::vector<dim_t> &dims, const std::vector<dim_t> &offs,
             const std::vector<expr_t> &idxs)
@@ -161,14 +162,15 @@ public:
         return oss.str();
     }
 
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
 private:
-    static std::vector<expr_t> make_idxs(std::string (*genname)(int), int n) {
+    static std::vector<expr_t> make_idxs(
+            const std::string &(*genname)(int), int n) {
         std::vector<expr_t> ret;
         ret.reserve(n);
         for (int i = 0; i < n; i++)
-            ret.push_back(var_t::make(type_t::s32(), genname(i)));
+            ret.push_back(var_t::make(dsl::type_t::s32(), genname(i)));
         return ret;
     }
 
@@ -280,7 +282,7 @@ inline layout_t make_strided(
     return layout.with(new_blocks);
 }
 
-layout_t reinterpret(const layout_t &layout, const type_t &new_type,
+layout_t reinterpret(const layout_t &layout, const dsl::type_t &new_type,
         bool do_normalize = true);
 
 // Reinterprets layouts to wider data type (up to 4 bytes).
@@ -391,7 +393,7 @@ public:
         gpu_assert(int(masks.size()) == elems()) << "Incompatible size.";
     }
 
-    const type_t &type() const { return layout_.type(); }
+    const dsl::type_t &type() const { return layout_.type(); }
 
     const layout_t &layout() const { return layout_; }
 
@@ -415,12 +417,12 @@ public:
 
     void simplify(const constraint_set_t &cset) {
         for (auto &mask : id2masks_) {
-            auto new_mask = jit::simplify(mask, cset);
+            auto new_mask = ir::simplify(mask, cset);
             // Some complex expressions need more than one simplify() call.
             int max_tries = 5;
             for (int i = 0; i < max_tries; i++) {
                 mask = new_mask;
-                new_mask = jit::simplify(new_mask, cset);
+                new_mask = ir::simplify(new_mask, cset);
                 if (new_mask.is_equal(mask)) break;
             }
         }
@@ -447,7 +449,7 @@ public:
         return sub_mask;
     }
 
-    mask_tensor_t reinterpret(const type_t &new_type) const {
+    mask_tensor_t reinterpret(const dsl::type_t &new_type) const {
         gpu_assert(!is_empty()) << "Can't reinterpret.";
         dim_t bytes = elems() * type().size();
         if (bytes % new_type.size() != 0 && bytes > new_type.size())
@@ -487,8 +489,8 @@ public:
             if (!channel_mask.is_equal(cur_mask)) return expr_t();
         }
         auto e = shuffle_t::make(vec);
-        e = jit::simplify(e);
-        e = jit::simplify_propagate_shuffle(e);
+        e = ir::simplify(e);
+        e = ir::simplify_propagate_shuffle(e);
         return e;
     }
 
@@ -508,7 +510,7 @@ public:
         return oss.str();
     }
 
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
 private:
     layout_t layout_;
@@ -570,7 +572,8 @@ public:
     }
 
     static const expr_t &placeholder_var() {
-        static thread_local expr_t ph_var = var_t::make(type_t::s32(), "_ph");
+        static thread_local expr_t ph_var
+                = var_t::make(dsl::type_t::s32(), "_ph");
         return ph_var;
     }
 
@@ -581,7 +584,7 @@ public:
         return oss.str();
     }
 
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
 private:
     static const dim_idx_t max_nvargs = 2;
@@ -686,7 +689,7 @@ public:
     void set_vdim(const expr_t &varg, dim_t vdim,
             const expr_t &vstart = expr_t(0), bool overwrite = false) {
         dim_idx_t vidx = vvar_index(varg);
-        if (!overwrite) gpu_assert(is_zero(vstart_[vidx]));
+        if (!overwrite) gpu_assert(vstart_[vidx].is(0));
         vstart_[vidx] = vstart;
         vdims_[vidx] = vdim;
     }
@@ -735,13 +738,13 @@ public:
         return oss.str();
     }
 
-    IR_DEFINE_DUMP()
+    XE_DEFINE_DUMP()
 
     bool is_empty() const { return vdims_.is_empty(); }
 
     bool has_zero_vstart() const {
         for (dim_idx_t i = 0; i < nvdims(); i++)
-            if (!is_zero(vstart_[i])) return false;
+            if (!vstart_[i].is(0)) return false;
         return true;
     }
 
@@ -750,7 +753,7 @@ public:
         return bool(tdims_[tidx].mask());
     }
 
-    const type_t &type() const { return tlayout_.type(); }
+    const dsl::type_t &type() const { return tlayout_.type(); }
 
     expr_t offset(const coord_t &vargs = {}, bool ignore_offset = false) const {
         auto targs = cvt_vargs_to_targs(vargs);
@@ -783,7 +786,7 @@ public:
         return create_sub_view(tile_coord.tile, tile_coord.coord);
     }
 
-    view_t retype(const type_t &new_type) const {
+    view_t retype(const dsl::type_t &new_type) const {
         auto ret = *this;
         ret.tlayout_ = tlayout_.with(new_type);
         return ret;
@@ -868,7 +871,7 @@ public:
 
     layout_t normalized_tlayout() const {
         auto blocks = move_size_1_blocks_outer();
-        blocks = dsl::layout::normalize_blocks(blocks, false);
+        blocks = dsl::layout::merge_blocks(blocks);
         auto layout = tlayout_.with(blocks, false);
         return layout;
     }
@@ -956,7 +959,7 @@ public:
                 dim_t vdim = vdims()[vidx];
                 if (vdim == 1) continue;
                 const auto &A = tdim.expr();
-                auto B = jit::substitute(A, vvar, vvar + 1);
+                auto B = ir::substitute(A, vvar, vvar + 1);
                 auto C = simplify(B - A);
                 if (!is_const(C)) {
                     ok = false;
@@ -976,10 +979,10 @@ public:
             auto inv_vstart = tdim.expr();
             for (dim_idx_t j = 0; j < tdim.nvargs(); j++) {
                 dim_idx_t vidx = tdim.vidx(j);
-                buf_vstart = jit::substitute(
+                buf_vstart = ir::substitute(
                         buf_vstart, vvars()[vidx], vstart()[vidx]);
                 inv_vstart
-                        = jit::substitute(inv_vstart, vvars()[vidx], expr_t(0));
+                        = ir::substitute(inv_vstart, vvars()[vidx], expr_t(0));
             }
             buf_vstart = simplify(buf_vstart);
             inv_vstart = simplify(inv_vstart);
@@ -1019,7 +1022,7 @@ public:
 
         if (!ignore_vstart) {
             for (dim_idx_t i = 0; i < nvdims(); i++) {
-                if (!is_zero(vstart_[i])) vcoord[i] += vstart_[i];
+                if (!vstart_[i].is(0)) vcoord[i] += vstart_[i];
             }
         }
 
@@ -1027,7 +1030,7 @@ public:
         for (dim_idx_t i = 0; i < ntdims(); i++) {
             tcoord[i] = tdims_[i].expr();
             for (dim_idx_t j = 0; j < nvdims(); j++) {
-                tcoord[i] = jit::substitute(tcoord[i], vvars_[j], vcoord[j]);
+                tcoord[i] = ir::substitute(tcoord[i], vvars_[j], vcoord[j]);
             }
         }
         for (dim_idx_t i = 0; i < ntdims(); i++) {
@@ -1072,11 +1075,19 @@ private:
         }
     }
 
+    bool all_vdims_are_1(const pvar_t &tidx) const {
+        auto &tinfo = tdims_[tidx];
+        for (dim_idx_t i = 0; i < tinfo.nvargs(); i++) {
+            if (vdims_[tinfo.vidx(i)] != 1) return false;
+        }
+        return true;
+    }
+
     std::vector<layout_block_t> move_size_1_blocks_outer() const {
         std::vector<layout_block_t> new_blocks;
         std::vector<layout_block_t> size_1_blocks;
         for (auto &b : tlayout_.blocks()) {
-            if (b.size == 1 && vdims_.get(b.idx) == 1) {
+            if (b.size == 1 && all_vdims_are_1(b.idx)) {
                 size_1_blocks.emplace_back(b);
             } else {
                 new_blocks.emplace_back(b);

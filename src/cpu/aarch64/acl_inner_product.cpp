@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2022,2024-2025 Arm Ltd. and affiliates
+* Copyright 2021-2022,2024-2026 Arm Ltd. and affiliates
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -50,7 +50,7 @@ status_t acl_inner_product_fwd_t::execute_forward(const exec_ctx_t &ctx) const {
     auto src_base = CTX_IN_MEM(const void *, DNNL_ARG_SRC);
     auto wei_base = CTX_IN_MEM(const void *, DNNL_ARG_WEIGHTS);
 
-    const auto scratchpad = ctx.get_scratchpad_grantor();
+    const auto &scratchpad = ctx.get_scratchpad_grantor();
 
     // If we have an unfused sum post op, put the result in a scratchpad tensor.
     // Result will be summed to the dst during acl_post_ops.execute
@@ -100,11 +100,13 @@ status_t acl_inner_product_fwd_t::pd_t::init(engine_t *engine) {
     const bool is_fp32_ok = expect_data_types(f32, f32, f32, f32, undef)
             && attr()->has_default_values(
                     smask_t::post_ops | smask_t::fpmath_mode, f32);
+    const bool is_bf16_ok = expect_data_types(bf16, bf16, bf16, bf16, undef)
+            && attr()->has_default_values(smask_t::post_ops, bf16);
     const bool is_weights_md_format_ok
             = utils::one_of(weights_format_kind_received, format_kind::any,
                     format_kind::blocked);
     const bool ok = is_fwd() && !has_zero_dim_memory()
-            && utils::one_of(true, is_fp16_ok, is_fp32_ok)
+            && utils::one_of(true, is_fp16_ok, is_fp32_ok, is_bf16_ok)
             && is_weights_md_format_ok
             && set_default_params(true) == status::success;
 
@@ -264,8 +266,8 @@ status_t acl_inner_product_fwd_t::pd_t::init_conf_ip(
     }
 
     const memory_desc_t weights_md_received = weights_md_;
-    acl_utils::reorder_to_weight_format(aip_.wei_tensor_info, weights_md_,
-            expected_weight_format, inner_dim, o_dim, remaining_dims, {});
+    CHECK(acl_utils::reorder_to_weight_format(aip_.wei_tensor_info, weights_md_,
+            expected_weight_format, inner_dim, o_dim, remaining_dims, {}));
 
     ACL_CHECK_SUPPORT((weights_format_kind_received == format_kind::blocked)
                     && !(dnnl_memory_desc_equal(

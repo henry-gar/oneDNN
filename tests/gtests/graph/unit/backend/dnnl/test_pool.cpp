@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -332,8 +332,8 @@ TEST(test_pool_execute_subgraph_fp32, Pool3Postops) {
         std::vector<const graph::logical_tensor_t *> lt_ins(input_lts.size());
         std::transform(input_lts.begin(), input_lts.end(), lt_ins.begin(),
                 [&](size_t idx) -> graph::logical_tensor_t * {
-                    return &lt_vec[idx];
-                });
+            return &lt_vec[idx];
+        });
         std::vector<const graph::logical_tensor_t *> lt_outs {&lt_vec[lt_idx]};
 
         p.compile(&cp, lt_ins, lt_outs, engine);

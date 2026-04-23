@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -133,8 +133,8 @@ status_t gen_t::pd_t::init(impl::engine_t *engine, impl::engine_t *src_engine,
 
     auto *gpu_attr
             = utils::downcast<gpu_primitive_attr_t *>(attr()->gpu_attr_.get());
-    hw_t hw(make_ir_hw(engine));
-    kernel::options_t options(hw);
+    dsl::hw_t hw(make_ir_hw(engine));
+    dsl::kernel::options_t options(hw);
     options.set_regs(prefer_large_grf(hw, gpu_attr) ? 256 : 128);
     options.set_simd(16);
     cfg = std::make_shared<config_t>(options, src_layout, dst_layout);
@@ -216,8 +216,8 @@ status_t gen_t::init(impl::engine_t *engine) {
     auto &cfg = *pd()->cfg;
     auto &info = *pd()->kernel_info;
 
-    kernel_ = make_kernel<kernel_t>(this, engine, cfg, "gen_reorder", info,
-            /*require_dpas=*/false, pd());
+    kernel_ = make_kernel<kernel_t>(
+            this, engine, cfg, "gen_reorder", info, pd());
     if (!kernel_) return status::runtime_error;
     return status::success;
 }

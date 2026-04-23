@@ -14,19 +14,17 @@
 * limitations under the License.
 *******************************************************************************/
 
-#ifndef GEMMSTONE_GUARD_BUILDER_HPP
-#define GEMMSTONE_GUARD_BUILDER_HPP
+#ifndef GEMMSTONE_GENERATOR_DSL_BUILDER_HPP
+#define GEMMSTONE_GENERATOR_DSL_BUILDER_HPP
 
 #include "gemmstone/config.hpp"
-#include "gpu/intel/jit/dsl/dsl.hpp"
-#include "gpu/intel/jit/ir/ir.hpp"
+#include "gemmstone/dsl/dsl.hpp"
 
 GEMMSTONE_NAMESPACE_START
 
 struct generator_dsl_desc_t;
 
-dsl::kernel_t make_kernel(
-        const generator_dsl_desc_t &desc, ir::constraint_set_t cset = {});
+dsl::kernel_t make_kernel(const generator_dsl_desc_t &desc);
 
 GEMMSTONE_NAMESPACE_END
 

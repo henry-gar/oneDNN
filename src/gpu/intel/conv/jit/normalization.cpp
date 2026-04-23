@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -110,7 +110,7 @@ layout_t normalize_layout(const layout_t &_layout, bool with_groups,
 tile_t normalize_tile(std::vector<dim_t> &dims, bool with_groups, dim_t groups,
         bool is_dw, const std::array<int, 3> &dhw_map, bool add_groups,
         bool is_wei) {
-    layout_t dummy_layout(type_t::u8(), dims);
+    layout_t dummy_layout(dsl::type_t::u8(), dims);
     return normalize_layout(dummy_layout, with_groups, groups, is_dw, dhw_map,
             add_groups, is_wei)
             .tile();
@@ -156,7 +156,7 @@ uint32_t post_op_view_mapper_t::normalize_mask(uint32_t orig_mask) const {
             if (b > 0) new_tile.set(b + 1, cvt_dims[b]);
         }
         new_tile[1] = cvt_dims[1];
-        cvt_dims = new_tile;
+        cvt_dims = std::move(new_tile);
     }
 
     uint32_t mask = 0;

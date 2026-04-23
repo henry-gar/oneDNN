@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2025 Intel Corporation
+* Copyright 2021 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -85,9 +85,9 @@ rnn_cell_execution_sig((ref_rnn_fwd_t<src_type, weights_type,
     typename brgemm_dst_layer_iter_t::postgemm_fused_t fused_postgemm;
 
     if (!rnn.unfused_post_gemm) {
-        fused_postgemm = [&](dim_t m, dim_t n, dim_t nb_i,
-                                 const src_iter_t *Ai_m, scratch_t *C_n,
-                                 scratch_t *C_cell_n, int block_step) {
+        fused_postgemm
+                = [&](dim_t m, dim_t n, dim_t nb_i, const src_iter_t *Ai_m,
+                          scratch_t *C_n, scratch_t *C_cell_n, int block_step) {
             const auto Dpg_n = (dst_postgemm != nullptr)
                     ? dst_postgemm + m * LDDl + n
                     : nullptr;
@@ -122,11 +122,10 @@ rnn_cell_execution_sig((ref_rnn_fwd_t<src_type, weights_type,
         typename brgemm_gru_t::postgemm_fused_t fused_postgemm_gru_part1,
                 fused_postgemm_gru_part2;
         if (!rnn.unfused_post_gemm) {
-            fused_postgemm_gru_part1 = [&](dim_t m, dim_t n, dim_t nb_i,
-                                               const src_iter_t *Ai_m,
-                                               scratch_t *C_gates_n,
-                                               scratch_t *C_cell_n,
-                                               int block_step) {
+            fused_postgemm_gru_part1
+                    = [&](dim_t m, dim_t n, dim_t nb_i, const src_iter_t *Ai_m,
+                              scratch_t *C_gates_n, scratch_t *C_cell_n,
+                              int block_step) {
                 const auto Dpg_n = (dst_postgemm != nullptr)
                         ? dst_postgemm + m * LDDl + n
                         : nullptr;
@@ -150,11 +149,10 @@ rnn_cell_execution_sig((ref_rnn_fwd_t<src_type, weights_type,
                         nullptr, nullptr, bias_n, ws_grid_, C_cell_n, Di_n,
                         weights_scales_n, block_step);
             };
-            fused_postgemm_gru_part2 = [&](dim_t m, dim_t n, dim_t nb_i,
-                                               const src_iter_t *Ai_m,
-                                               scratch_t *C_gates_n,
-                                               scratch_t *C_cell_n,
-                                               int block_step) {
+            fused_postgemm_gru_part2
+                    = [&](dim_t m, dim_t n, dim_t nb_i, const src_iter_t *Ai_m,
+                              scratch_t *C_gates_n, scratch_t *C_cell_n,
+                              int block_step) {
                 const auto Dpg_n = (dst_postgemm != nullptr)
                         ? dst_postgemm + m * LDDl + n
                         : nullptr;
@@ -225,8 +223,8 @@ rnn_cell_execution_sig((ref_rnn_fwd_t<src_type, weights_type,
         typename brgemm_dst_proj_t::postgemm_fused_t fused_postgemm_proj;
 
         if (!rnn.unfused_post_gemm) {
-            fused_postgemm_proj = [&](dim_t m, dim_t n, gemm_acc_t *Cp_n,
-                                          int block_step) {
+            fused_postgemm_proj
+                    = [&](dim_t m, dim_t n, gemm_acc_t *Cp_n, int block_step) {
                 const auto weights_scales_n
                         = wscales_proj_postgemm + (pmask ? n : 0);
                 const auto Di_n = (dst_iter_ != nullptr)

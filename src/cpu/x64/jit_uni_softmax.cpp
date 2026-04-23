@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -1296,8 +1296,8 @@ struct jit_softmax_strided_kernel_t : jit_softmax_kernel_base_t,
     // * A loop to store output after division.
     // Why loops are needed, see `axis_size_loop_unroll` description.
     void axis_full_cycle(int unroll_inner, bool tail) {
-        const auto vmax_body = [&](int unroll_axis, int unroll_inner,
-                                       bool tail) {
+        const auto vmax_body
+                = [&](int unroll_axis, int unroll_inner, bool tail) {
             for_(dim_t a = 0; a < unroll_axis; a++)
             for (int i = 0; i < unroll_inner; i++) {
                 Vmm vreg_tmp_src = Vmm(i + 1);
@@ -1317,8 +1317,8 @@ struct jit_softmax_strided_kernel_t : jit_softmax_kernel_base_t,
             }
         };
 
-        const auto vsum_body = [&](int unroll_axis, int unroll_inner,
-                                       bool tail) {
+        const auto vsum_body
+                = [&](int unroll_axis, int unroll_inner, bool tail) {
             for_(dim_t a = 0; a < unroll_axis; a++)
             for (int i = 0; i < unroll_inner; i++) {
                 Vmm vreg_tmp_src = Vmm(i + 1);
@@ -1355,8 +1355,8 @@ struct jit_softmax_strided_kernel_t : jit_softmax_kernel_base_t,
             }
         };
 
-        const auto store_body = [&](int unroll_axis, int unroll_inner,
-                                        bool tail) {
+        const auto store_body
+                = [&](int unroll_axis, int unroll_inner, bool tail) {
             for_(dim_t a = 0; a < unroll_axis; a++)
             for (int i = 0; i < unroll_inner; i++) {
                 Vmm vreg_tmp_src = Vmm(i + 1);
@@ -1759,46 +1759,44 @@ status_t jit_uni_softmax_fwd_t::execute(const exec_ctx_t &ctx) const {
             inner_stride, axis_stride);
 
     parallel_nd_ext(nthr, outer_size, inner_size,
-            [&](int ithr, int, dim_t ou, dim_t in) {
-                dim_t offset = (ou * outer_stride + in * inner_stride);
-                const char *src_ptr = src + offset * src_data_type_size;
-                char *dst_ptr = dst + offset * dst_data_type_size;
-                char *interim_ptr = scratchpad_ptr
-                        ? scratchpad_ptr + ithr * pd()->scratch_size_per_thr_
-                        : nullptr;
-                float *dst_scales_inv_ptr = nullptr;
-                if (!pd()->attr()->scales_.has_default_values(DNNL_ARG_DST)) {
-                    const float *dst_scales_ptr
-                            = static_cast<const float *>(dst_scales);
-                    dst_scales_inv_ptr
-                            = scratchpad.template get<float>(memory_tracking::
-                                              names::key_softmax_dst_scales)
-                            + ithr;
-                    dst_scales_inv_ptr[0] = 1.f / dst_scales_ptr[0];
-                }
+            [= COMPAT_THIS_CAPTURE](int ithr, int, dim_t ou, dim_t in) {
+        dim_t offset = (ou * outer_stride + in * inner_stride);
+        const char *src_ptr = src + offset * src_data_type_size;
+        char *dst_ptr = dst + offset * dst_data_type_size;
+        char *interim_ptr = scratchpad_ptr
+                ? scratchpad_ptr + ithr * pd()->scratch_size_per_thr_
+                : nullptr;
+        float *dst_scales_inv_ptr = nullptr;
+        if (!pd()->attr()->scales_.has_default_values(DNNL_ARG_DST)) {
+            const float *dst_scales_ptr
+                    = static_cast<const float *>(dst_scales);
+            dst_scales_inv_ptr
+                    = scratchpad.template get<float>(
+                              memory_tracking::names::key_softmax_dst_scales)
+                    + ithr;
+            dst_scales_inv_ptr[0] = 1.f / dst_scales_ptr[0];
+        }
 
-                softmax_impl::jit_softmax_kernel_base_t::call_params_t p;
-                if (pd()->axis_is_plain_and_strided_ && outer_size == 1) {
-                    // Special case when inner size is split between threads.
-                    assert(n_unrolled_blocks > 0);
-                    p.process_n_elems
-                            = in == inner_size - 1 && unroll_block_size_tail
-                            ? unroll_block_size_tail
-                            : unroll_block_size;
-                } else {
-                    p.process_n_elems = process_n_elems;
-                }
-                p.src = src_ptr;
-                p.dst = dst_ptr;
-                p.interim = interim_ptr;
-                p.src_scales = src_scales;
-                p.dst_scales = dst_scales_inv_ptr;
-                // post-ops
-                p.dst_orig = dst_orig_ptr;
-                p.post_ops_binary_rhs_arg_vec
-                        = post_ops_binary_rhs_arg_vec.data();
-                (*ker_)(&p);
-            });
+        softmax_impl::jit_softmax_kernel_base_t::call_params_t p;
+        if (pd()->axis_is_plain_and_strided_ && outer_size == 1) {
+            // Special case when inner size is split between threads.
+            assert(n_unrolled_blocks > 0);
+            p.process_n_elems = in == inner_size - 1 && unroll_block_size_tail
+                    ? unroll_block_size_tail
+                    : unroll_block_size;
+        } else {
+            p.process_n_elems = process_n_elems;
+        }
+        p.src = src_ptr;
+        p.dst = dst_ptr;
+        p.interim = interim_ptr;
+        p.src_scales = src_scales;
+        p.dst_scales = dst_scales_inv_ptr;
+        // post-ops
+        p.dst_orig = dst_orig_ptr;
+        p.post_ops_binary_rhs_arg_vec = post_ops_binary_rhs_arg_vec.data();
+        (*ker_)(&p);
+    });
 
     return status::success;
 }
@@ -1835,7 +1833,8 @@ status_t jit_uni_softmax_bwd_t::execute(const exec_ctx_t &ctx) const {
     const auto outer_stride = pd()->axis_size(true) * inner_size;
     const auto outer_size = dst_d.nelems(true) / outer_stride;
 
-    parallel_nd(outer_size, inner_size, [&](dim_t ou, dim_t in) {
+    parallel_nd(outer_size, inner_size,
+            [= COMPAT_THIS_CAPTURE](dim_t ou, dim_t in) {
         dim_t offset = (ou * outer_stride + in * inner_stride);
         char *diff_src_ptr = diff_src + offset * diff_src_data_type_size;
         const char *dst_ptr = dst + offset * dst_data_type_size;

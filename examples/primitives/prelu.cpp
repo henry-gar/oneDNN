@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -17,10 +17,12 @@
 /// @example prelu.cpp
 /// > Annotated version: @ref prelu_example_cpp
 
+/// @page prelu_example_cpp_brief
+/// @brief This C++ API example demonstrates how to create and execute an
+/// [PReLU](@ref dev_guide_prelu) primitive in forward training propagation mode.
+
 /// @page prelu_example_cpp Primitive Example
-/// This C++ API example demonstrates how to create and execute an
-/// [PReLU](@ref dev_guide_prelu) primitive in forward training
-/// propagation mode.
+/// \copybrief prelu_example_cpp_brief
 ///
 /// @include prelu.cpp
 

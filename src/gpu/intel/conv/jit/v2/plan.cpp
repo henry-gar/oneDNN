@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -62,8 +62,8 @@ class multiply_info_t {
 public:
     multiply_info_t() = default;
     multiply_info_t(fma_kind_t fma, int simd, const tile_t &iter_tile,
-            const pvar_map_t<char> &bmnk_map, const type_t &a_type,
-            const layout_desc_t &a_desc, const type_t &b_type,
+            const pvar_map_t<char> &bmnk_map, const dsl::type_t &a_type,
+            const layout_desc_t &a_desc, const dsl::type_t &b_type,
             const layout_desc_t &b_desc, const layout_desc_t &c_desc)
         : fma_(fma)
         , simd_(simd)
@@ -94,9 +94,9 @@ public:
 
     fma_kind_t fma() const { return fma_; }
     int simd() const { return simd_; }
-    const type_t &a_type() const { return a_type_; }
-    const type_t &b_type() const { return b_type_; }
-    const type_t &acc_type() const { return acc_type_; }
+    const dsl::type_t &a_type() const { return a_type_; }
+    const dsl::type_t &b_type() const { return b_type_; }
+    const dsl::type_t &acc_type() const { return acc_type_; }
 
     bool has(tensor_kind_t abc, const pvar_t &dim) const {
         switch (abc) {
@@ -223,14 +223,15 @@ private:
         }
     };
 
-    bool fma_type_supported(const type_t &type) const {
+    bool fma_type_supported(const dsl::type_t &type) const {
         switch (fma_) {
             case fma_kind_t::mad:
-                return utils::one_of(type, type_t::f32(), type_t::s16());
+                return utils::one_of(
+                        type, dsl::type_t::f32(), dsl::type_t::s16());
                 break;
             case fma_kind_t::dpas:
-                return utils::one_of(type, type_t::u8(), type_t::s8(),
-                        type_t::f16(), type_t::bf16());
+                return utils::one_of(type, dsl::type_t::u8(), dsl::type_t::s8(),
+                        dsl::type_t::f16(), dsl::type_t::bf16());
                 break;
             default: gpu_error_not_expected();
         }
@@ -240,18 +241,19 @@ private:
     v2::layout_t get_fma_type_layout(const v2::layout_t &layout) const {
         if (fma_ == fma_kind_t::mad) {
             auto blocks = layout.blocks();
-            if (utils::one_of(layout.type(), type_t::s8(), type_t::u8())) {
+            if (utils::one_of(
+                        layout.type(), dsl::type_t::s8(), dsl::type_t::u8())) {
 
                 for (auto &b : blocks) {
                     b.stride *= 2;
                 }
-                return v2::layout_t(
-                        layout.desc(), type_t::s16(), layout.base(), blocks);
+                return v2::layout_t(layout.desc(), dsl::type_t::s16(),
+                        layout.base(), blocks);
             }
-            if (utils::one_of(layout.type(), type_t::f16(), type_t::bf16(),
-                        type_t::f32()))
-                return v2::layout_t(
-                        layout.desc(), type_t::f32(), layout.base(), blocks);
+            if (utils::one_of(layout.type(), dsl::type_t::f16(),
+                        dsl::type_t::bf16(), dsl::type_t::f32()))
+                return v2::layout_t(layout.desc(), dsl::type_t::f32(),
+                        layout.base(), blocks);
         }
         return layout;
     }
@@ -348,9 +350,9 @@ private:
     int simd_ = 0;
     tile_t iter_tile_;
     pvar_map_t<char> bmnk_map_;
-    type_t a_type_;
-    type_t b_type_;
-    type_t acc_type_;
+    dsl::type_t a_type_;
+    dsl::type_t b_type_;
+    dsl::type_t acc_type_;
     v2::layout_t a_inner_;
     v2::layout_t b_inner_;
     v2::layout_t c_inner_;
@@ -359,7 +361,7 @@ private:
 class plan_builder_t {
 public:
     plan_builder_t() = default;
-    plan_builder_t(const kernel_desc_t &desc, const hw_t &hw)
+    plan_builder_t(const kernel_desc_t &desc, const dsl::hw_t &hw)
         : desc_(desc), hw_(hw) {
         reqs_ = desc_.reqs();
     }
@@ -514,13 +516,13 @@ private:
         bool try_2d = can_use_2d(desc_, abc);
         if (try_2d) {
             auto params = get_send_params(
-                    abc, send_op_t::prefetch, view, send_kind_t::_2d);
+                    abc, v2::send_op_t::prefetch, view, v2::send_kind_t::_2d);
             prefetch = create_send_plan(params, view, /*allow_fail=*/true);
         }
         if (!try_2d || !prefetch || !reqs_.implies(prefetch.reqs())) {
             // If 2D failed, try compressed prefetch.
-            auto params = get_send_params(abc, send_op_t::prefetch, view,
-                    send_kind_t::compressed_prefetch);
+            auto params = get_send_params(abc, v2::send_op_t::prefetch, view,
+                    v2::send_kind_t::compressed_prefetch);
             prefetch = try_create_send_plan(__func__, params, view);
             if (!prefetch) return false;
             if (!reqs_.implies(prefetch.reqs())) return false;
@@ -545,7 +547,7 @@ private:
 
     bool init_x2r_plan(
             tensor_kind_t abc, const v2::view_t &view, x2r_plan_t &plan) const {
-        auto params = get_send_params(abc, send_op_t::load, view);
+        auto params = get_send_params(abc, v2::send_op_t::load, view);
         auto load = try_create_send_plan(__func__, params, view);
         if (!load) return false;
         reorder_plan_t reorder;
@@ -669,7 +671,7 @@ private:
             const v2::view_t &bias_mem_view, epilogue_store_plan_t &plan,
             prb_reqs_t &reqs) const {
         auto params = get_send_params(tensor_kind_t::undef,
-                is_atomic ? send_op_t::atomic_add : send_op_t::store,
+                is_atomic ? v2::send_op_t::atomic_add : v2::send_op_t::store,
                 bias_mem_view);
         auto store = try_create_send_plan(__func__, params, bias_mem_view);
         if (!store) return false;
@@ -742,8 +744,9 @@ private:
         // Store partial reductions.
         auto store_view
                 = v2::view_t(mapper, slm_layout, store_coord, store_tile);
-        auto store_params = get_send_params(tensor_kind_t::c, send_op_t::store,
-                store_view, send_kind_t::block, send_address_t::slm);
+        auto store_params = get_send_params(tensor_kind_t::c,
+                v2::send_op_t::store, store_view, v2::send_kind_t::block,
+                v2::send_address_t::slm);
         store_params.skip_mask.push_back(k_dim);
         auto store = try_create_send_plan(__func__, store_params, store_view);
         if (!store) return false;
@@ -764,8 +767,9 @@ private:
         // Load partial sums and do the final reduction.
         auto load_view = v2::view_t(mapper, slm_layout, load_coord, tile_with_k,
                 grid_splitter.var_range_info());
-        auto load_params = get_send_params(tensor_kind_t::c, send_op_t::load,
-                load_view, send_kind_t::block, send_address_t::slm);
+        auto load_params = get_send_params(tensor_kind_t::c,
+                v2::send_op_t::load, load_view, v2::send_kind_t::block,
+                v2::send_address_t::slm);
         load_params.skip_mask.push_back(k_dim);
         auto load = try_create_send_plan(__func__, load_params, load_view);
         if (!load) return false;
@@ -790,7 +794,7 @@ private:
             const v2::layout_t &c_reg_layout, const v2::view_t &c_mem_view,
             epilogue_store_plan_t &plan, prb_reqs_t &reqs) const {
         auto params = get_send_params(tensor_kind_t::c,
-                is_atomic ? send_op_t::atomic_add : send_op_t::store,
+                is_atomic ? v2::send_op_t::atomic_add : v2::send_op_t::store,
                 c_mem_view);
         // TODO: Implement fallback from 2D to block/scattered messages to
         // allow partial use of 2D messages when possible.
@@ -836,8 +840,8 @@ private:
                 << "Plan:\n"
                 << plan.str() << "\ncheck_plan: out of registers";
         int slm_bound = compute::device_info_t::max_slm_size_per_tg(
-                convert_ngen_arch_to_dnnl(hw_),
-                into<int>(desc_.thread_group_tile.elems()), desc_.regs > 128);
+                into<int>(desc_.thread_group_tile.elems()), desc_.regs > 128,
+                to_gpu_product(hw_.product()));
         int slm_bytes = plan.slm_usage_bytes();
         gpu_check(slm_bytes <= slm_bound)
                 << "Plan:\n"
@@ -845,22 +849,23 @@ private:
         return true;
     }
 
-    send_params_t get_send_params(tensor_kind_t abc, send_op_t op,
-            const v2::view_t &view, send_kind_t send_kind = send_kind_t::undef,
-            send_address_t send_address = send_address_t::a64) const {
-        if (op == send_op_t::atomic_add) {
+    send_params_t get_send_params(tensor_kind_t abc, v2::send_op_t op,
+            const v2::view_t &view,
+            v2::send_kind_t send_kind = v2::send_kind_t::undef,
+            v2::send_address_t send_address = v2::send_address_t::a64) const {
+        if (op == v2::send_op_t::atomic_add) {
             auto &type = view.type();
             gpu_assert(type.is_f32() || type.is_s32());
-            if (type.is_f32()) op = send_op_t::atomic_fadd;
+            if (type.is_f32()) op = v2::send_op_t::atomic_fadd;
         }
         send_params_t params;
         params.hw = hw_;
-        params.kind = (send_kind != send_kind_t::undef
+        params.kind = (send_kind != v2::send_kind_t::undef
                         ? send_kind
                         : desc_.access_kind(op, abc));
         params.address = send_address;
         params.op = op;
-        if (params.kind == send_kind_t::_2d)
+        if (params.kind == v2::send_kind_t::_2d)
             params.hint_2d = send_2d_hint_t(view, op, mul_info_.hint(abc));
         params.skip_mask = skip_mask(view);
         params.init_max_entry_reg_size();
@@ -873,7 +878,7 @@ private:
     }
 
     kernel_desc_t desc_;
-    hw_t hw_;
+    dsl::hw_t hw_;
 
     dim_mapper_manager_t dim_mapper_manager_;
     multiply_info_t mul_info_;
@@ -888,7 +893,7 @@ private:
     prb_reqs_t reqs_;
 };
 
-plan_t create_plan_impl(const kernel_desc_t &desc, const hw_t &hw,
+plan_t create_plan_impl(const kernel_desc_t &desc, const dsl::hw_t &hw,
         const problem_t *prb = nullptr) {
     if (!desc.is_supported(hw, prb)) return plan_t();
     plan_builder_t builder(desc, hw);
@@ -908,7 +913,7 @@ plan_t create_plan_impl(const kernel_desc_t &desc, const hw_t &hw,
     return plan;
 }
 
-plan_t create_plan(const kernel_desc_t &desc, const hw_t &hw) {
+plan_t create_plan(const kernel_desc_t &desc, const dsl::hw_t &hw) {
     return create_plan_impl(desc, hw);
 }
 

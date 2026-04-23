@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2022 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -58,7 +58,6 @@ void *thr_ctx_t::get_interop_obj() const {
 #endif
 
 #include "oneapi/dnnl/dnnl_threadpool_iface.hpp"
-#include "src/common/counting_barrier.hpp"
 
 #if !defined(DNNL_TEST_THREADPOOL_USE_TBB)
 
@@ -97,54 +96,185 @@ inline int read_num_threads_from_env() {
 
 #if defined(DNNL_TEST_THREADPOOL_USE_EIGEN)
 
-#include <memory>
-#include "Eigen/Core"
+#define EIGEN_USE_THREADS
+#include "unsupported/Eigen/CXX11/Tensor"
 #include "unsupported/Eigen/CXX11/ThreadPool"
 
-#if EIGEN_WORLD_VERSION + 10 * EIGEN_MAJOR_VERSION < 33
-#define STR_(x) #x
-#define STR(x) STR_(x)
-#pragma message("EIGEN_WORLD_VERSION " STR(EIGEN_WORLD_VERSION))
-#pragma message("EIGEN_MAJOR_VERSION " STR(EIGEN_MAJOR_VERSION))
-#error Unsupported Eigen version (need 3.3.x or higher)
-#endif
+#include "absl/synchronization/blocking_counter.h"
 
-#if EIGEN_MINOR_VERSION >= 90
-using EigenThreadPool = Eigen::ThreadPool;
-#else
-using EigenThreadPool = Eigen::NonBlockingThreadPool;
-#endif
+#include "common/compiler_workarounds.hpp"
+
+#include <memory>
 
 namespace dnnl {
 namespace testing {
 
 class threadpool_t : public dnnl::threadpool_interop::threadpool_iface {
 private:
-    std::unique_ptr<EigenThreadPool> tp_;
+    std::unique_ptr<Eigen::ThreadPool> tp_;
+
+    static void balance211(int n, int team, int tid, int *n_start, int *n_end) {
+        if (team <= 1 || n == 0) {
+            *n_start = 0;
+            *n_end = n;
+            return;
+        }
+        int min_per_team = n / team;
+        int remainder = n - min_per_team * team; // i.e., n % teams.
+        *n_start = tid * min_per_team + std::min(tid, remainder);
+        *n_end = *n_start + min_per_team + (tid < remainder);
+    }
+
+    static void run_jobs(bool balance, int i, int n, int njobs,
+            const std::function<void(int, int)> &fn) {
+        if (balance) {
+            int start, end;
+            balance211(n, njobs, i, &start, &end);
+            for (int j = start; j < end; j++)
+                fn(j, n);
+        } else {
+            fn(i, n);
+        }
+    }
 
 public:
     explicit threadpool_t(int num_threads = 0) {
         if (num_threads <= 0) num_threads = read_num_threads_from_env();
-        tp_.reset(new EigenThreadPool(num_threads));
+        tp_.reset(new Eigen::ThreadPool(num_threads));
     }
     int get_num_threads() const override { return tp_->NumThreads(); }
     bool get_in_parallel() const override {
         return tp_->CurrentThreadId() != -1;
     }
-    uint64_t get_flags() const override { return ASYNCHRONOUS; }
+    uint64_t get_flags() const override { return 0; }
     void parallel_for(int n, const std::function<void(int, int)> &fn) override {
+        // Should never happen.
+        if (n == 0) { return; }
+
+        // Should never happen.
+        if (n == 1) {
+            fn(0, 1);
+            return;
+        }
+
         int nthr = get_num_threads();
         int njobs = std::min(n, nthr);
+        bool balance = (nthr < n);
 
-        for (int i = 0; i < njobs; i++) {
-            tp_->Schedule([i, n, njobs, fn]() {
-                int start, end;
-                impl::balance211(n, njobs, i, start, end);
-                for (int j = start; j < end; j++)
-                    fn(j, n);
-            });
-        }
-    };
+        absl::BlockingCounter counter(njobs);
+        std::function<void(int, int)> handle_range
+                = [= COMPAT_THIS_CAPTURE, &handle_range, &counter](
+                          int first, int last) {
+            while (last - first > 1) {
+                const auto mid = first + (last - first) / 2;
+                // Find something near the midpoint which is a
+                // multiple of block size.
+                tp_->ScheduleWithHint(
+                        [=]() { handle_range(mid, last); }, mid, mid + 1);
+                last = mid;
+            }
+            run_jobs(balance, first, n, njobs, fn);
+            counter.DecrementCount();
+        };
+
+        // Eigen avoids a thread hop by running the root of the tree on the main
+        // thread. We have disabled this because it actually slows things down
+        // relative to base because base cheats and uses n threads while letting
+        // main continue doing other work
+        tp_->ScheduleWithHint([=]() { handle_range(0, njobs); }, 0, 1);
+
+        counter.Wait();
+    }
+
+    void wait() override {
+        // Nothing to do, runtime is synchronous
+    }
+};
+
+} // namespace testing
+} // namespace dnnl
+
+#elif defined(DNNL_TEST_THREADPOOL_USE_EIGEN_ASYNC)
+
+// absl sources define its own version of `CHECK` macro. oneDNN's version is not
+// needed further the file, thus, disable it for compilation reason.
+#undef CHECK
+
+#define EIGEN_USE_THREADS
+#include "Eigen/ThreadPool"
+
+#include "xla/backends/cpu/runtime/work_queue.h"
+#include "xla/tsl/concurrency/async_value_ref.h"
+#include "xla/tsl/concurrency/chain.h"
+
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+
+namespace dnnl {
+namespace testing {
+
+static tsl::AsyncValueRef<tsl::Chain> OkDoneEventSingleton() {
+    static std::unique_ptr<tsl::AsyncValueOwningRef<tsl::Chain>> singleton
+            = [] {
+        static auto storage = std::make_unique<
+                tsl::internal::AsyncValueStorage<tsl::Chain>>();
+        return std::make_unique<tsl::AsyncValueOwningRef<tsl::Chain>>(
+                tsl::MakeAvailableAsyncValueRef<tsl::Chain>(*storage));
+    }();
+    return singleton->AsRef();
+}
+
+class threadpool_t : public dnnl::threadpool_interop::threadpool_iface {
+private:
+    // Original `OneDnnThreadPool` at
+    // `xla/backends/cpu/runtime/onednn/onednn_threadpool.h` takes
+    // `Eigen::ThreadPoolInterface` instead. Since `Eigen::ThreadPool` is
+    // a parent class, which is an alias to `NonBlockingThreadPool`, it fits
+    // the need.
+    std::unique_ptr<Eigen::ThreadPool> thread_pool_;
+
+    // Async value that signals completion of the last scheduled parallel loop.
+    //
+    // Note: for an unknown reason if the `threadpool_t` is constructed but the
+    // `parallel_for(...)` isn't called, ASan would bark on
+    // `OkDoneEventSingleton()` internals during the program destruction.
+    // It seems `done_event_` must be updated with its `FlatMap(...)` method,
+    // but it's just a theory.
+    // Some tests exposing this scenario have dummy parallel calls to avoid this
+    // issue.
+    // ANCHOR: DUMMY_PARALLEL.
+    tsl::AsyncValueRef<tsl::Chain> done_event_;
+
+public:
+    explicit threadpool_t(int num_threads = 0) {
+        if (num_threads <= 0) num_threads = read_num_threads_from_env();
+        thread_pool_.reset(new Eigen::ThreadPool(num_threads));
+        done_event_ = OkDoneEventSingleton();
+    }
+    int get_num_threads() const override { return thread_pool_->NumThreads(); }
+    bool get_in_parallel() const override { return false; }
+    uint64_t get_flags() const override { return ASYNCHRONOUS; }
+    void parallel_for(int n, const std::function<void(int, int)> &fn) override {
+        // If we are using oneDNN with async support, we need to schedule the
+        // parallel loop using the done_event_. This allows us to return
+        // immediately and not block the caller thread.
+        auto parallelize = [this, n, fn](tsl::Chain) {
+            return xla::cpu::Worker::Parallelize(thread_pool_.get(),
+                    thread_pool_->NumThreads(), n,
+                    [fn, n](size_t i) { fn(static_cast<int>(i), n); });
+        };
+
+        done_event_ = done_event_.FlatMap(parallelize);
+    }
+    void wait() override {
+        // While performing asynchronous execution, wait() method is needed to
+        // notify the user that the output is ready. oneDNN will not call wait()
+        // inside the library to avoid deadlock.
+        tsl::BlockUntilReady(done_event_);
+    }
+
+    tsl::AsyncValueRef<tsl::Chain> done_event() const { return done_event_; }
 };
 
 } // namespace testing
@@ -169,12 +299,15 @@ public:
         tbb::parallel_for(
                 0, n, [&](int i) { fn(i, n); }, tbb::static_partitioner());
     }
+    void wait() override {}
 };
 
 } // namespace testing
 } // namespace dnnl
 
 #else
+
+#include "src/common/counting_barrier.hpp"
 
 #include <atomic>
 #include <thread>
@@ -238,6 +371,8 @@ public:
             barrier_wait();
         }
     }
+
+    void wait() override {}
 
 private:
     int num_threads_;

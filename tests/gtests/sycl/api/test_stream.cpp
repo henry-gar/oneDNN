@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -127,9 +127,9 @@ TEST_P(sycl_stream_test_t, InteropIncompatibleQueue) {
                                                   : engine::kind::gpu;
     queue interop_queue(get_context(other_kind), get_device(other_kind));
 
-    catch_expected_failures(
-            [&] { sycl_interop::make_stream(get_engine(kind), interop_queue); },
-            true, dnnl_invalid_arguments);
+    catch_expected_failures([&] {
+        sycl_interop::make_stream(get_engine(kind), interop_queue);
+    }, true, dnnl_invalid_arguments);
 }
 
 #ifndef DNNL_EXPERIMENTAL_PROFILING

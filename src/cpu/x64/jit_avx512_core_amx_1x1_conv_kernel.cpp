@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -23,6 +23,7 @@
 
 #include "cpu/platform.hpp"
 #include "cpu/scale_utils.hpp"
+#include "cpu/x64/amx_tile_configure.hpp"
 #include "cpu/x64/injectors/jit_uni_postops_injector.hpp"
 #include "cpu/x64/jit_avx512_core_amx_1x1_conv_kernel.hpp"
 
@@ -208,8 +209,8 @@ void jit_avx512_core_amx_1x1_fwd_kernel_t::apply_sum(const Zmm zmm_out,
     if (p_sum_scale) {
         const auto p_sum_scale_val = *p_sum_scale;
         const auto p_sum_zp_val = *p_sum_zp;
-        const auto sum_injector = [&, zmm_out, p_sum_scale_val, p_sum_zp_val,
-                                          mask_flag]() {
+        const auto sum_injector
+                = [&, zmm_out, p_sum_scale_val, p_sum_zp_val, mask_flag]() {
             cvt2ps(jcp.sum_dt, zmm_prev_dst, addr, mask_flag);
             if (p_sum_zp_val != 0) {
                 vcvtdq2ps(zmm_sum_zp, ptr_b[reg_ptr_sum_zp]);
@@ -1065,7 +1066,7 @@ status_t jit_avx512_core_amx_1x1_fwd_kernel_t::init_conf(jit_conv_conf_t &jcp,
     VDISPATCH_CONV_IC(!is_3d_small_ic, VERBOSE_BAD_PARAM,
             "bad output dimensions for 3d cases");
 
-    const auto zp = attr.zero_points_;
+    const auto &zp = attr.zero_points_;
     jcp.dst_zero_point = !zp.has_default_values(DNNL_ARG_DST);
     jcp.src_zero_point = !zp.has_default_values(DNNL_ARG_SRC);
     // If it's not per-tensor, then it's per-channel (not supported)
@@ -1113,11 +1114,11 @@ status_t jit_avx512_core_amx_1x1_fwd_kernel_t::init_conf(jit_conv_conf_t &jcp,
         format_tag_t wei_tag;
         wei_tag = (is_bf16_convolution)
                 ? pick(with_groups + 2 * (ndims - 3), OIw16i16o2i, gOIw16i16o2i,
-                        OIhw16i16o2i, gOIhw16i16o2i, OIdhw16i16o2i,
-                        gOIdhw16i16o2i)
+                          OIhw16i16o2i, gOIhw16i16o2i, OIdhw16i16o2i,
+                          gOIdhw16i16o2i)
                 : pick(with_groups + 2 * (ndims - 3), OIw16i16o4i, gOIw16i16o4i,
-                        OIhw16i16o4i, gOIhw16i16o4i, OIdhw16i16o4i,
-                        gOIdhw16i16o4i);
+                          OIhw16i16o4i, gOIhw16i16o4i, OIdhw16i16o4i,
+                          gOIdhw16i16o4i);
         memory_desc_t want_wei_md = weights_md;
         CHECK_BOOL(memory_desc_init_by_tag(want_wei_md, wei_tag));
 
@@ -1290,7 +1291,10 @@ void jit_avx512_core_amx_1x1_fwd_kernel_t::init_scratchpad(
         assert(jcp.ngroups == 1);
         scratchpad.book(key_conv_padded_bias, jcp.oc, jcp.typesize_bia);
     }
-    scratchpad.book(key_conv_amx_tilecfg, 2, 64); // 2 whole cachelines
+    // Two cache-lines for each thread for a palette - one for main body,
+    // another for the tail.
+    scratchpad.book(key_conv_amx_tilecfg, 2 * jcp.nthr * AMX_PALETTE_SIZE,
+            sizeof(char), 0, PAGE_4K);
     if (jcp.with_dst_scales) {
         // See brgemm_types.hpp comment for `with_dst_scales`.
         scratchpad.book(key_conv_dst_scales,

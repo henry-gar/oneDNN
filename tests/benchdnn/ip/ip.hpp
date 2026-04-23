@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2017-2025 Intel Corporation
+* Copyright 2017 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -71,8 +71,8 @@ struct prb_t : public desc_t {
     // A ctor with common interface across all drivers.
     prb_t(const settings_t &s)
         : prb_t(s.desc, s.dir[0], s.dt[0], s.bia_dt[0], s.stag[0], s.wtag[0],
-                s.dtag[0], s.mb[0], s.attributes.front(), s.ctx_init[0],
-                s.ctx_exe[0], s.impl_filter) {
+                  s.dtag[0], s.mb[0], s.attributes.front(), s.ctx_init[0],
+                  s.ctx_exe[0], s.impl_filter) {
         SAFE_V(s.has_single_setup() ? OK : FAIL);
     }
 
@@ -121,7 +121,7 @@ struct prb_t : public desc_t {
     void count_ops() {
         if (ops > 0) return;
         ops = 2. * mb * ic * oc * id * ih * iw;
-    };
+    }
     int64_t count_n_acc() const {
         return (dir & FLAG_WEI) ? mb : id * ih * iw * ic;
     }

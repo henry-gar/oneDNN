@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2025 Intel Corporation
+* Copyright 2021 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -85,9 +85,8 @@ x64::cpu_isa_t brgemm_calc_isa(
             if (rnn.is_cell_dt_f16()) {
                 return x64::avx512_core_amx_fp16;
             } else if (rnn.is_cell_dt_int8()) {
-                return (mayiuse(x64::avx10_2_512_amx_2))
-                        ? x64::avx10_2_512_amx_2
-                        : x64::avx512_core_amx;
+                return (mayiuse(x64::avx10_2_amx_2)) ? x64::avx10_2_amx_2
+                                                     : x64::avx512_core_amx;
             } else {
                 return x64::avx512_core_amx;
             }
@@ -95,8 +94,8 @@ x64::cpu_isa_t brgemm_calc_isa(
     }
 
     if (rnn.is_cell_dt_int8()) {
-        return utils::map(true, x64::isa_undef, mayiuse(avx10_2_512),
-                avx10_2_512, mayiuse(avx512_core_vnni), avx512_core_vnni,
+        return utils::map(true, x64::isa_undef, mayiuse(avx10_2), avx10_2,
+                mayiuse(avx512_core_vnni), avx512_core_vnni,
                 mayiuse(avx512_core), avx512_core, mayiuse(avx2), avx2);
     } else if (rnn.is_cell_dt_bf16()) {
         return x64::avx512_core_bf16;
@@ -250,7 +249,7 @@ dim_t brgemm_calc_m_block_lstm(dim_t nthr, dim_t M, dim_t N_blocks, bool is_f32,
     const bool adj_by_l2 = is_f32
             ? true
             : (static_cast<float>(As + Cs)
-                    < 0.6 * static_cast<float>(l2_cache_size));
+                      < 0.6 * static_cast<float>(l2_cache_size));
 
     if (work_by_N > 2.0 || (work_by_N > 1.0 && adj_by_l2))
         return M;
@@ -288,7 +287,7 @@ x64::cpu_isa_t adjust_isa_by_m_block(
      * throughput.
      */
     if (is_int8_amx && m_block < 4) {
-        if (x64::mayiuse(x64::avx10_2_512_amx_2)) return x64::avx10_2_512_amx_2;
+        if (x64::mayiuse(x64::avx10_2_amx_2)) return x64::avx10_2_amx_2;
         if (x64::mayiuse(x64::avx512_core_amx)) return x64::avx512_core_amx;
     }
 
@@ -602,7 +601,7 @@ status_t init_brgemm_kernel(x64::brgemm_desc_t *desc, x64::cpu_isa_t isa,
     CHECK(safe_ptr_assign<x64::brgemm_kernel_t>(ker, _t_ptr));
 
     return status::success;
-};
+}
 
 status_t rnn_brgemm_t<prop_kind::forward>::brgemm_rnn_init_tiles(
         brgemm_desc_t *desc_array, dim_t size, brgemm_pallete_t pallete) {
@@ -635,9 +634,9 @@ status_t rnn_brgemm_t<prop_kind::forward>::init_kernels(
                       std::unique_ptr<x64::brgemm_kernel_t> &ker, dim_t M,
                       dim_t N, dim_t K, dim_t LDA, dim_t LDB, dim_t LDC,
                       float beta, dim_t max_bs) {
-                  return init_brgemm_kernel(desc, isa, src_type, weights_type,
-                          ker, M, N, K, LDA, LDB, LDC, beta, max_bs);
-              };
+        return init_brgemm_kernel(desc, isa, src_type, weights_type, ker, M, N,
+                K, LDA, LDB, LDC, beta, max_bs);
+    };
 
     const int brgemm_n = nstl::min(rnn.N, rnn.n_block);
     const int brgemm_n_tail = nstl::min(rnn.N, rnn.n_tail);
@@ -1132,16 +1131,14 @@ static status_t init_kernels_diff_src(rnn_diff_src_brgemm_t &diff_src,
                       std::unique_ptr<x64::brgemm_kernel_t> &ker, dim_t M,
                       dim_t N, dim_t K, dim_t LDA, dim_t LDB, dim_t LDC,
                       float beta, dim_t max_bs) {
-                  const dim_t A_size
-                          = rnn.diff_src_brgemm.M * rnn.diff_src_brgemm.Kpadded;
-                  const dim_t B_size
-                          = rnn.diff_src_brgemm.Kpadded * rnn.diff_src_brgemm.N;
-                  const dim_t C_size
-                          = rnn.diff_src_brgemm.M * rnn.diff_src_brgemm.N;
-                  return init_brgemm_kernel(desc, isa, src_type, weights_type,
-                          ker, M, N, K, LDA, LDB, LDC, beta, max_bs, A_size,
-                          B_size, C_size);
-              };
+        const dim_t A_size
+                = rnn.diff_src_brgemm.M * rnn.diff_src_brgemm.Kpadded;
+        const dim_t B_size
+                = rnn.diff_src_brgemm.Kpadded * rnn.diff_src_brgemm.N;
+        const dim_t C_size = rnn.diff_src_brgemm.M * rnn.diff_src_brgemm.N;
+        return init_brgemm_kernel(desc, isa, src_type, weights_type, ker, M, N,
+                K, LDA, LDB, LDC, beta, max_bs, A_size, B_size, C_size);
+    };
 
     const auto &diff_src_conf = rnn.diff_src_brgemm;
     const int n_diff_src = nstl::min(diff_src_conf.N, diff_src_conf.n_block);
@@ -1257,16 +1254,14 @@ static status_t init_kernels_diff_wei(rnn_diff_wei_brgemm_t &diff_wei,
                       std::unique_ptr<x64::brgemm_kernel_t> &ker, dim_t M,
                       dim_t N, dim_t K, dim_t LDA, dim_t LDB, dim_t LDC,
                       float beta, dim_t max_bs) {
-                  const dim_t A_size
-                          = rnn.diff_wei_brgemm.M * rnn.diff_wei_brgemm.Kpadded;
-                  const dim_t B_size
-                          = rnn.diff_wei_brgemm.Kpadded * rnn.diff_wei_brgemm.N;
-                  const dim_t C_size
-                          = rnn.diff_wei_brgemm.M * rnn.diff_wei_brgemm.N;
-                  return init_brgemm_kernel(desc, isa, src_type, weights_type,
-                          ker, M, N, K, LDA, LDB, LDC, beta, max_bs, A_size,
-                          B_size, C_size);
-              };
+        const dim_t A_size
+                = rnn.diff_wei_brgemm.M * rnn.diff_wei_brgemm.Kpadded;
+        const dim_t B_size
+                = rnn.diff_wei_brgemm.Kpadded * rnn.diff_wei_brgemm.N;
+        const dim_t C_size = rnn.diff_wei_brgemm.M * rnn.diff_wei_brgemm.N;
+        return init_brgemm_kernel(desc, isa, src_type, weights_type, ker, M, N,
+                K, LDA, LDB, LDC, beta, max_bs, A_size, B_size, C_size);
+    };
 
     const auto &diff_wei_conf = rnn.diff_wei_brgemm;
     const bool is_m_block_equal = rnn.slc == rnn.sic;

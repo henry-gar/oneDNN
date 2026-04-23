@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2024 Intel Corporation
+* Copyright 2020 Intel Corporation
 * Copyright 2020 Codeplay Software Limited
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
@@ -43,7 +43,7 @@ status_t engine_create(impl::engine_t **engine, engine_kind_t engine_kind,
 engine_t::engine_t(
         const ::sycl::device &dev, const ::sycl::context &ctx, size_t index)
     : impl::gpu::engine_t(
-            new xpu::sycl::engine_impl_t(engine_kind::gpu, dev, ctx, index)) {
+              new xpu::sycl::engine_impl_t(engine_kind::gpu, dev, ctx, index)) {
     assert(xpu::sycl::is_nvidia_gpu(dev));
     set_cudnn_handle();
     set_cublas_handle();
@@ -58,10 +58,9 @@ status_t engine_t::set_cublas_handle() {
     cublas_handle_.set(
             std::unique_ptr<cublasHandle_t, void (*)(cublasHandle_t *)>(
                     new cublasHandle_t(handle), [](cublasHandle_t *h) {
-                        if (h != nullptr)
-                            CUBLAS_EXECUTE_FUNC_V(cublasDestroy, *h);
-                        delete h;
-                    }));
+        if (h != nullptr) CUBLAS_EXECUTE_FUNC_V(cublasDestroy, *h);
+        delete h;
+    }));
     handle = nullptr;
     return status::success;
 }
@@ -74,9 +73,9 @@ status_t engine_t::set_cudnn_handle() {
     CHECK(CUDNN_EXECUTE_FUNC_S(cudnnCreate, &handle));
     cudnn_handle_.set(std::unique_ptr<cudnnHandle_t, void (*)(cudnnHandle_t *)>(
             new cudnnHandle_t(handle), [](cudnnHandle_t *h) {
-                if (h != nullptr) CUDNN_EXECUTE_FUNC_V(cudnnDestroy, *h);
-                delete h;
-            }));
+        if (h != nullptr) CUDNN_EXECUTE_FUNC_V(cudnnDestroy, *h);
+        delete h;
+    }));
     handle = nullptr;
     return status::success;
 }

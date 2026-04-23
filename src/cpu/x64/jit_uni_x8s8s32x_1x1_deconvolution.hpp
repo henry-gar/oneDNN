@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -71,7 +71,7 @@ struct jit_uni_x8s8s32x_1x1_deconvolution_fwd_t : public primitive_t {
             }
 
             return status::unimplemented;
-        };
+        }
 
         status_t init(engine_t *engine) {
             using namespace data_type;
@@ -153,11 +153,13 @@ struct jit_uni_x8s8s32x_1x1_deconvolution_fwd_t : public primitive_t {
     }
 
     status_t execute(const exec_ctx_t &ctx) const override {
-        nested_scratchpad_t ns(
-                ctx, memory_tracking::names::key_nested, conv_p_);
+        auto *nested_grantor
+                = create_nested_grantor(ctx.get_scratchpad_grantor(),
+                        memory_tracking::names::key_nested,
+                        conv_p_->pd()->scratchpad_registry());
         // XXX: create a new ctx for convolution?
         auto &tmp_ctx = const_cast<exec_ctx_t &>(ctx);
-        tmp_ctx.set_scratchpad_grantor(ns.grantor());
+        tmp_ctx.set_scratchpad_grantor(nested_grantor);
         return conv_p_->execute(tmp_ctx);
     }
 

@@ -1,5 +1,5 @@
 #===============================================================================
-# Copyright 2016-2025 Intel Corporation
+# Copyright 2016 Intel Corporation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -135,7 +135,7 @@ if(NOT DNNL_GPU_RUNTIME STREQUAL "NONE")
     add_subdirectory(gpu)
 endif()
 
-if(DNNL_WITH_SYCL OR DNNL_GPU_RUNTIME STREQUAL "OCL")
+if(DNNL_WITH_SYCL OR DNNL_GPU_RUNTIME MATCHES "^(OCL|ZE)$")
     add_subdirectory(xpu)
 endif()
 
@@ -154,6 +154,12 @@ endif()
 if(ONEDNN_BUILD_GRAPH)
     message(STATUS "Graph component is enabled")
 
+    if (DNNL_GPU_RUNTIME STREQUAL "ZE")
+        message(FATAL_ERROR "Graph API does not support ZE GPU runtime. "
+            "Either disable Graph API with ONEDNN_BUILD_GRAPH=OFF or change "
+            "GPU runtime to OCL/SYCL.")
+    endif()
+
     if (NOT DNNL_GPU_RUNTIME STREQUAL "NONE" AND NOT DNNL_GPU_VENDOR STREQUAL "INTEL" AND NOT DNNL_GPU_VENDOR STREQUAL "NVIDIA")
         message(FATAL_ERROR "Graph API does not support ${DNNL_GPU_VENDOR} GPU. "
             "Either disable Graph API with ONEDNN_BUILD_GRAPH=OFF or change GPU "
@@ -166,9 +172,9 @@ if(ONEDNN_BUILD_GRAPH)
             "primitive selection with ONEDNN_ENABLE_PRIMITIVE=ALL.")
     endif()
 
-    if(ONEDNN_ENABLE_GRAPH_DUMP)
-        message(STATUS "Graph artifacts dump is enabled")
-        add_definitions_with_host_compiler(-DDNNL_ENABLE_GRAPH_DUMP)
+    if(NOT ONEDNN_ENABLE_GRAPH_DUMP)
+        message(STATUS "Graph artifacts dump is disabled")
+        add_definitions_with_host_compiler(-DDNNL_DISABLE_GRAPH_DUMP)
     endif()
 
     add_subdirectory(graph)
@@ -282,12 +288,6 @@ if(DNNL_CPU_THREADING_RUNTIME STREQUAL "TBB")
         install(FILES "../cmake/lnx/TBBConfig.cmake" RENAME "FindTBB.cmake"
             DESTINATION ${LIB_CONFIG_INSTALL_DIR})
     endif()
-endif()
-
-if(DNNL_GPU_RUNTIME STREQUAL "OCL" OR (DNNL_GPU_SYCL AND DNNL_GPU_VENDOR STREQUAL "INTEL"))
-    install(FILES
-        "../cmake/FindOpenCL.cmake"
-        DESTINATION ${LIB_CONFIG_INSTALL_DIR})
 endif()
 
 if(DNNL_BLAS_VENDOR STREQUAL "ACCELERATE")

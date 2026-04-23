@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -112,7 +112,7 @@ status_t brgemm_kernel_container_t::insert(int idx, const brgemm_desc_t *brg) {
         CHECK(brgemm_kernel_create(&brg_kernel, *brg));
         std::shared_ptr<brgemm_kernel_t> sptr(brg_kernel);
         lock_write();
-        const auto kernel_ret = get_set().insert(sptr);
+        const auto kernel_ret = get_set().insert(std::move(sptr));
         refs_[idx] = kernel_ret.first->get();
         unlock_write();
         const auto brgemm_ret = brgemm_map_.insert({brg, refs_[idx]});

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2024-2025 Intel Corporation
+* Copyright 2024 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -45,8 +45,8 @@ public:
 
     status_t init() override {
         cl_int err = CL_SUCCESS;
-        err = clGetDeviceInfo(device(), CL_DEVICE_PLATFORM, sizeof(platform_),
-                &platform_, nullptr);
+        err = xpu::ocl::clGetDeviceInfo(device(), CL_DEVICE_PLATFORM,
+                sizeof(platform_), &platform_, nullptr);
         if (err != CL_SUCCESS) {
             device_ = nullptr;
             context_ = nullptr;
@@ -54,7 +54,7 @@ public:
 
         OCL_CHECK(err);
 
-        err = clRetainDevice(device());
+        err = xpu::ocl::clRetainDevice(device());
         if (err != CL_SUCCESS) {
             device_ = nullptr;
             context_ = nullptr;
@@ -63,10 +63,10 @@ public:
         OCL_CHECK(err);
 
         if (is_user_context_) {
-            err = clRetainContext(context());
+            err = xpu::ocl::clRetainContext(context());
             if (err != CL_SUCCESS) context_ = nullptr;
         } else {
-            context_ = clCreateContext(
+            context_ = xpu::ocl::clCreateContext(
                     nullptr, 1, &device_.unwrap(), nullptr, nullptr, &err);
         }
 
@@ -76,20 +76,21 @@ public:
 
         // TODO: Remove it as soon as device info is generalized.
         size_t param_size = 0;
-        err = clGetDeviceInfo(device_, CL_DEVICE_NAME, 0, nullptr, &param_size);
+        err = xpu::ocl::clGetDeviceInfo(
+                device_, CL_DEVICE_NAME, 0, nullptr, &param_size);
         OCL_CHECK(err);
 
         name_ = std::string(param_size, '\0');
-        err = clGetDeviceInfo(
+        err = xpu::ocl::clGetDeviceInfo(
                 device_, CL_DEVICE_NAME, param_size, &name_[0], &param_size);
         OCL_CHECK(err);
 
-        err = clGetDeviceInfo(
+        err = xpu::ocl::clGetDeviceInfo(
                 device_, CL_DRIVER_VERSION, 0, nullptr, &param_size);
         OCL_CHECK(err);
 
         std::string driver_version(param_size, '\0');
-        err = clGetDeviceInfo(device_, CL_DRIVER_VERSION, param_size,
+        err = xpu::ocl::clGetDeviceInfo(device_, CL_DRIVER_VERSION, param_size,
                 &driver_version[0], nullptr);
         OCL_CHECK(err);
 
@@ -144,9 +145,15 @@ private:
 };
 
 #define DECLARE_COMMON_OCL_ENGINE_FUNCTIONS() \
-    cl_device_id device() const { return impl()->device(); } \
-    cl_context context() const { return impl()->context(); } \
-    cl_platform_id platform() const { return impl()->platform(); }
+    cl_device_id device() const { \
+        return impl()->device(); \
+    } \
+    cl_context context() const { \
+        return impl()->context(); \
+    } \
+    cl_platform_id platform() const { \
+        return impl()->platform(); \
+    }
 
 } // namespace ocl
 } // namespace xpu

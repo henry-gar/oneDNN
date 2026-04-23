@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -115,7 +115,7 @@ void lookup_table_t::parse(std::istream &in) {
     while (std::getline(in, line)) {
         if (line.empty() || line[0] == '#') continue;
         entry_t e;
-        jit::parse(line, e);
+        intel::jit::parse(line, e);
         data_[e.key.desc()].push_back(e);
     }
 }

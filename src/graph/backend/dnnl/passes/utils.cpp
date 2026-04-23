@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright 2021-2025 Intel Corporation
+ * Copyright 2021 Intel Corporation
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,7 +32,6 @@
 
 #include "graph/backend/dnnl/common.hpp"
 #include "graph/backend/dnnl/dnnl_backend.hpp"
-#include "graph/backend/dnnl/internal_attrs.hpp"
 #include "graph/backend/dnnl/passes/utils.hpp"
 #include "graph/backend/dnnl/utils.hpp"
 
@@ -118,8 +117,8 @@ status_t set_given_inputs_outputs(std::vector<op_ptr> &subgraph,
 // just a workaround at this moment.
 void set_weight_bias_constant(std::shared_ptr<subgraph_t> &sg) {
     for (auto &op : sg->get_ops()) {
-        if (!(op->get_kind() == op_kind::dnnl_matmul
-                    || op->get_kind() == op_kind::dnnl_convolution))
+        if (!(op->get_kind() == op_kind::_matmul
+                    || op->get_kind() == op_kind::_convolution))
             continue;
 
         // set weight to be constant
@@ -282,11 +281,11 @@ static bool post_binary_fusible_impl(const op_t *base_op,
 
     int32_t output_ndims = static_cast<int32_t>(fused_shape.size());
     // 5d tensor MatMul with broadcasted post was not optimized on CPU
-    if (ekind == dnnl_cpu && base_op->get_kind() == op_kind::dnnl_matmul
+    if (ekind == dnnl_cpu && base_op->get_kind() == op_kind::_matmul
             && output_ndims == 5)
         return false;
     // any broadcasted for 4d or 5d tensor MatMul
-    if (base_op->get_kind() == op_kind::dnnl_matmul
+    if (base_op->get_kind() == op_kind::_matmul
             && (output_ndims == 4 || output_ndims == 5)) {
         for (int32_t i = output_ndims - 1; i >= 0; i--) {
             if (other_shape[i] == 1) continue;
@@ -296,7 +295,7 @@ static bool post_binary_fusible_impl(const op_t *base_op,
     }
 
     // allow fusion for conv + [N,C,1,1] shape post-binary src
-    if (base_op->get_kind() == op_kind::dnnl_convolution && output_ndims == 4) {
+    if (base_op->get_kind() == op_kind::_convolution && output_ndims == 4) {
         if (base_op->get_attr<std::string>(op_attr::data_format) == "NCX"
                 && other_shape[2] == 1 && other_shape[3] == 1) {
             return true;
@@ -332,10 +331,8 @@ std::pair<bool, std::pair<size_t, int64_t>> shuffle_fusible(
     using result_t = std::pair<bool, std::pair<size_t, int64_t>>;
     const result_t dflt_res {false, {0, 0}};
 
-    const logical_tensor_t src_port
-            = reshape0->get_input_value(0)->get_logical_tensor();
-    const logical_tensor_t dst_port
-            = reshape1->get_output_value(0)->get_logical_tensor();
+    const logical_tensor_t src_port = reshape0->get_input_logical_tensor(0);
+    const logical_tensor_t dst_port = reshape1->get_output_logical_tensor(0);
     const auto src_lt_shape = ltw(src_port).vdims();
     const auto dst_lt_shape = ltw(dst_port).vdims();
     const auto attr_shape = reshape0->get_attr<dims>(op_attr::shape);
@@ -380,8 +377,7 @@ bool post_binary_fusible(
 // conv + binary post-op fusion is unsupported on NVIDIA GPU
 #if DNNL_GPU_RUNTIME != DNNL_RUNTIME_NONE \
         && DNNL_GPU_VENDOR == DNNL_VENDOR_NVIDIA
-    if ((base_op->get_kind() == op_kind::dnnl_convolution)
-            && ekind == dnnl_gpu) {
+    if ((base_op->get_kind() == op_kind::_convolution) && ekind == dnnl_gpu) {
         return false;
     }
 #endif
@@ -392,13 +388,12 @@ bool post_binary_fusible(
     if (consumers[0].get_op().num_inputs() != 2) return false;
 
     size_t fused_in_off = consumers[0].get_offset();
-    auto fused_in = bin_op->get_input_value(fused_in_off)->get_logical_tensor();
-    auto other_in
-            = bin_op->get_input_value(1 - fused_in_off)->get_logical_tensor();
+    auto fused_in = bin_op->get_input_logical_tensor(fused_in_off);
+    auto other_in = bin_op->get_input_logical_tensor(1 - fused_in_off);
 
     // Special check: dnnl_reorder only support fuse non-broadcast binary_add as
     // post-sum
-    if (base_op->get_kind() == op_kind::dnnl_reorder) {
+    if (base_op->get_kind() == op_kind::_reorder) {
         if (ltw(fused_in).vdims() != ltw(other_in).vdims()
                 || static_cast<dnnl::algorithm>(
                            bin_op->get_attr<int64_t>(op_attr::alg_kind))
@@ -407,7 +402,7 @@ bool post_binary_fusible(
     }
 
     // Special check: dnnl_eltwise only support src and dst datatype are same
-    if (base_op->get_kind() == op_kind::dnnl_eltwise) {
+    if (base_op->get_kind() == op_kind::_eltwise) {
         auto bin_out = bin_op->get_output_values()[0]->get_logical_tensor();
         if (ltw(fused_in).data_type() != ltw(bin_out).data_type()) return false;
     }
@@ -423,16 +418,30 @@ bool post_binary_fusible(
         if (fused_in_off != 0) return false;
     }
 
+    // Disable matmul + binary_sub fusion
+    if (base_op->get_kind() == op_kind::_matmul
+            && static_cast<dnnl::algorithm>(
+                       bin_op->get_attr<int64_t>(op_attr::alg_kind))
+                    == dnnl::algorithm::binary_sub) {
+        return false;
+    }
+
     return post_binary_fusible_impl(
             base_op, ltw(fused_in).vdims(), ltw(other_in).vdims(), ekind);
 }
 
 bool post_eltwise_fusible(
         const op_t *base_op, const op_t *elt_op, graph::engine_kind_t ekind) {
+    if (elt_op->has_attr(op_attr::fusion_info)) {
+        fusion_info_t fusion_info
+                = elt_op->get_attr<fusion_info_t>(op_attr::fusion_info);
+        return !fusion_info.with_dropout();
+    }
+
 // binary + sqrt post-op fusion is unsupported on NVIDIA GPU
 #if DNNL_GPU_RUNTIME != DNNL_RUNTIME_NONE \
         && DNNL_GPU_VENDOR == DNNL_VENDOR_NVIDIA
-    if (base_op->get_kind() == op_kind::dnnl_binary
+    if (base_op->get_kind() == op_kind::_binary
             && static_cast<dnnl::algorithm>(
                        elt_op->get_attr<int64_t>(op_attr::alg_kind))
                     == dnnl::algorithm::eltwise_sqrt
@@ -442,7 +451,6 @@ bool post_eltwise_fusible(
     return true;
 #else
     UNUSED(base_op);
-    UNUSED(elt_op);
     UNUSED(ekind);
     return true;
 #endif
@@ -455,8 +463,7 @@ bool post_depthwise_conv_fusible(
     const auto extract_dims_as_oix = [](const op_t *op) -> oix_dims_t {
         const size_t wei_offset = 1;
         const auto wei_dims
-                = ltw(op->get_input_value(wei_offset)->get_logical_tensor())
-                          .vdims();
+                = ltw(op->get_input_logical_tensor(wei_offset)).vdims();
         const auto wei_format = (op->has_attr(op_attr::weights_format))
                 ? op->get_attr<std::string>(op_attr::weights_format)
                 : "XIO";
@@ -521,26 +528,24 @@ bool post_depthwise_conv_fusible(
 const std::unordered_map<op_kind_t, std::unordered_set<op_kind_t>> &
 get_post_ops_fusible_map() {
     using namespace graph::op_kind;
-    using namespace dnnl_impl::op_kind;
     static const std::unordered_map<op_kind_t, std::unordered_set<op_kind_t>>
             fusible_map = {
-                    {dnnl_convolution,
-                            {dnnl_eltwise, dnnl_binary, dnnl_convolution}},
-                    {dnnl_convtranspose, {dnnl_eltwise, dnnl_binary}},
-                    {dnnl_matmul, {dnnl_eltwise, dnnl_binary}},
-                    {dnnl_pool, {dnnl_binary}},
-                    {dnnl_eltwise, {dnnl_binary}},
-                    {dnnl_binary, {dnnl_eltwise, dnnl_binary}},
+                    {_convolution, {_eltwise, _binary, _convolution}},
+                    {_convtranspose, {_eltwise, _binary}},
+                    {_matmul, {_eltwise, _binary}},
+                    {_pool, {_binary}},
+                    {_eltwise, {_binary}},
+                    {_binary, {_eltwise, _binary}},
                     // bn
-                    {dnnl_batchnorm, {dnnl_eltwise}},
+                    {_batchnorm, {_eltwise}},
                     // reduction
-                    {dnnl_reduction, {dnnl_eltwise, dnnl_binary}},
+                    {_reduction, {_eltwise, _binary}},
                     // resample
-                    {dnnl_resampling, {dnnl_eltwise, dnnl_binary}},
-                    {dnnl_reorder, {dnnl_binary}},
-                    {dnnl_softmax, {dnnl_eltwise, dnnl_binary}},
-                    {dnnl_layernorm, {dnnl_eltwise, dnnl_binary}},
-                    {dnnl_groupnorm, {dnnl_eltwise, dnnl_binary}},
+                    {_resampling, {_eltwise, _binary}},
+                    {_reorder, {_binary}},
+                    {_softmax, {_eltwise, _binary}},
+                    {_layernorm, {_eltwise, _binary}},
+                    {_groupnorm, {_eltwise, _binary}},
             };
     return fusible_map;
 }
@@ -597,7 +602,7 @@ bool prelu_doable(const std::vector<dim_t> &src_dims,
 }
 
 bool is_typecast(const op_t *op) {
-    bool is_typecast = op->get_kind() == op_kind::dnnl_reorder
+    bool is_typecast = op->get_kind() == op_kind::_reorder
             && !op->get_attr<bool>(op_attr::change_layout)
             && (!op->has_attr(op_attr::qtype)
                     || op->get_attr<std::string>(op_attr::qtype)
@@ -612,8 +617,8 @@ bool is_typecast(const op_t *op) {
                     || !op->get_attr<bool>(op_attr::with_runtime_src_zps))
             && (!op->has_attr(op_attr::with_runtime_dst_zps)
                     || !op->get_attr<bool>(op_attr::with_runtime_dst_zps))
-            && op->get_input_value(0)->get_logical_tensor().data_type
-                    != op->get_output_value(0)->get_logical_tensor().data_type;
+            && op->get_input_logical_tensor(0).data_type
+                    != op->get_output_logical_tensor(0).data_type;
     return is_typecast;
 }
 
@@ -638,7 +643,7 @@ bool with_runtime_scales(const op_ptr &op, bool is_input, size_t index) {
 }
 
 bool is_layout_reorder(const op_t *op) {
-    bool is_layout_reorder = op->get_kind() == dnnl_impl::op_kind::dnnl_reorder
+    bool is_layout_reorder = op->get_kind() == op_kind::_reorder
             && op->get_attr<bool>(op_attr::change_layout)
             && (!op->has_attr(op_attr::qtype)
                     || op->get_attr<std::string>(op_attr::qtype)
@@ -653,8 +658,8 @@ bool is_layout_reorder(const op_t *op) {
                     || !op->get_attr<bool>(op_attr::with_runtime_src_zps))
             && (!op->has_attr(op_attr::with_runtime_dst_zps)
                     || !op->get_attr<bool>(op_attr::with_runtime_dst_zps))
-            && op->get_input_value(0)->get_logical_tensor().data_type
-                    == op->get_output_value(0)->get_logical_tensor().data_type;
+            && op->get_input_logical_tensor(0).data_type
+                    == op->get_output_logical_tensor(0).data_type;
     return is_layout_reorder;
 }
 
@@ -663,7 +668,7 @@ std::shared_ptr<op_t> clone_mul_scales(const std::shared_ptr<op_t> &scale_op) {
                     && !scale_op->has_attr(op_attr::with_runtime_scales),
             nullptr,
             "scale_op should be static and have only one input value.");
-    auto new_op = std::make_shared<op_t>(op_kind::dnnl_mul_scales);
+    auto new_op = std::make_shared<op_t>(op_kind::_mul_scales);
     new_op->set_attr<std::vector<float>>(op_attr::scales,
             scale_op->get_attr<std::vector<float>>(op_attr::scales));
     new_op->set_attr<int64_t>(
@@ -686,18 +691,10 @@ bool inverse_mul_scales(std::shared_ptr<op_t> &scale_op) {
 
 bool need_broadcast_for_inputs(
         const std::shared_ptr<op_t> &op, size_t index1, size_t index2) {
-    auto in_vals = op->get_input_values();
+    const dims input1_dims = ltw(op->get_input_logical_tensor(index1)).vdims();
+    const dims input2_dims = ltw(op->get_input_logical_tensor(index2)).vdims();
 
-    const dims input1_dims
-            = logical_tensor_wrapper_t(in_vals[index1]->get_logical_tensor())
-                      .vdims();
-    const dims input2_dims
-            = logical_tensor_wrapper_t(in_vals[index2]->get_logical_tensor())
-                      .vdims();
-
-    if (input1_dims != input2_dims) { return true; }
-
-    return false;
+    return input1_dims != input2_dims;
 }
 } // namespace dnnl_impl
 } // namespace graph

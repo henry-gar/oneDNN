@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -20,11 +20,11 @@
 #include <assert.h>
 
 #include "common/c_types_map.hpp"
-#include "common/gemm_utils.hpp"
 #include "common/memory_desc.hpp"
 #include "common/primitive.hpp"
 #include "common/primitive_desc_iterator.hpp"
 #include "common/reduction_pd.hpp"
+#include "gpu/intel/gemm/utils.hpp"
 #include "gpu/intel/ip/config.hpp"
 #include "gpu/intel/primitive.hpp"
 #include "gpu/intel/primitive_attr.hpp"

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -205,6 +205,9 @@ status_t vectorized_bwd_t::pd_t::init_kernel_ctx(
         compute::kernel_ctx_t &kernel_ctx) const {
     kernel_ctx.set_data_type(diff_dst_md()->data_type);
     kernel_ctx.define_int("IS_BWD", 1);
+    kernel_ctx.require_stateless_addressing(has_large_buffers());
+    kernel_ctx.register_buffer_size(*diff_dst_md());
+    kernel_ctx.register_buffer_size(*diff_src_md());
 
     status_t status = init_kernel_ctx_common(kernel_ctx, conf, desc());
 

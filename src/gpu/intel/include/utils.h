@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2024-2025 Intel Corporation
+* Copyright 2024 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -60,17 +60,25 @@
 // Defines (for example) float_zero, float_one, float_min, and float_max
 // Can be used in a data-type agnostic way with the SPECIAL macro below
 #define DEF_special_vals(dt, zero_val, one_val, min_val, max_val) \
-    __constant dt CONCAT2(dt, _zero) = zero_val; \
-    __constant dt CONCAT2(dt, _one) = one_val; \
-    __constant dt CONCAT2(dt, _min) = min_val; \
-    __constant dt CONCAT2(dt, _max) = max_val;
+    dt CONCAT2(dt, _zero)() { \
+        return zero_val; \
+    } \
+    dt CONCAT2(dt, _one)() { \
+        return one_val; \
+    } \
+    dt CONCAT2(dt, _min)() { \
+        return min_val; \
+    } \
+    dt CONCAT2(dt, _max)() { \
+        return max_val; \
+    }
 
 DEF_special_vals(float, 0.0f, 1.0f, -FLT_MAX, FLT_MAX);
 DEF_special_vals(int, 0, 1, INT_MIN, INT_MAX);
 IF_DOUBLE_SUPPORTED(DEF_special_vals(double, 0.0, 1.0, -DBL_MAX, DBL_MAX));
 IF_HALF_SUPPORTED(DEF_special_vals(half, 0.0h, 1.0h, -HALF_MAX, HALF_MAX));
 
-#define SPECIAL(dt, val) CONCAT3(dt, _, val)
+#define SPECIAL(dt, val) CONCAT3(dt, _, val)()
 
 #ifdef ENABLE_CHECK_ASSUMPTIONS
 // Don't actually inform the compiler about the assumption
@@ -86,5 +94,24 @@ IF_HALF_SUPPORTED(DEF_special_vals(half, 0.0h, 1.0h, -HALF_MAX, HALF_MAX));
 #else
 #define ASSUME(x)
 #endif
+
+/* Conditionally insert text if enabled is true */
+#define OPTIONAL(condition, text) CONCAT2(OPTIONAL_, condition)(text)
+#define OPTIONAL_0(text)
+#define OPTIONAL_1(text) , text
+
+// Boolean OR preprocessor
+#define OR(a, b) CONCAT2(OR_RESULT, CONCAT2(a, b))
+#define OR_RESULT00 0
+#define OR_RESULT01 1
+#define OR_RESULT10 1
+#define OR_RESULT11 1
+
+// Boolean AND preprocessor
+#define AND(a, b) CONCAT2(AND_RESULT, CONCAT2(a, b))
+#define AND_RESULT00 0
+#define AND_RESULT01 0
+#define AND_RESULT10 0
+#define AND_RESULT11 1
 
 #endif // GPU_INTEL_INCLUDE_UTILS_H

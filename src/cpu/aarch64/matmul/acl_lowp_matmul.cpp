@@ -297,7 +297,7 @@ status_t acl_lowp_matmul_t::init(engine_t *engine) {
 
 status_t acl_lowp_matmul_t::execute(const exec_ctx_t &ctx) const {
     std::lock_guard<std::mutex> _lock {this->mtx_};
-    const auto scratchpad = ctx.get_scratchpad_grantor();
+    const auto &scratchpad = ctx.get_scratchpad_grantor();
 
     auto alcm = pd()->almc_;
     bool with_bias = pd()->almc_.with_bias;
@@ -333,15 +333,17 @@ status_t acl_lowp_matmul_t::execute(const exec_ctx_t &ctx) const {
         bia_tensor.allocator()->import_memory(const_cast<float *>(bias));
     }
 
-    auto dst = pd()->almc_.use_dst_acc ? scratchpad.get<void>(
-                       memory_tracking::names::key_matmul_dst_in_acc_dt)
-                                       : CTX_OUT_MEM(float *, DNNL_ARG_DST);
+    auto dst = pd()->almc_.use_dst_acc
+            ? scratchpad.get<void>(
+                      memory_tracking::names::key_matmul_dst_in_acc_dt)
+            : CTX_OUT_MEM(float *, DNNL_ARG_DST);
     dst_tensor.allocator()->init(alcm.dst_tensor_info);
     dst_tensor.allocator()->import_memory(dst);
 
-    auto dst_cast = pd()->almc_.use_cast_acc ? scratchpad.get<void>(
-                            memory_tracking::names::key_matmul_dst_cast_acc)
-                                             : nullptr;
+    auto dst_cast = pd()->almc_.use_cast_acc
+            ? scratchpad.get<void>(
+                      memory_tracking::names::key_matmul_dst_cast_acc)
+            : nullptr;
     if (dst_cast) {
         dst_cast_tensor.allocator()->init(alcm.dst_cast_tensor_info);
         dst_cast_tensor.allocator()->import_memory(dst_cast);
@@ -433,7 +435,7 @@ status_t acl_lowp_matmul_t::execute(const exec_ctx_t &ctx) const {
     dst_tensor.allocator()->free();
 
     return status::success;
-};
+}
 
 } // namespace matmul
 } // namespace aarch64

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -36,7 +36,6 @@ dnnl_data_type_t prb_t::get_dt(data_kind_t data_kind) const {
         case WEI: return wei_dt();
         case BIA: return bia_dt;
         case DST: return dst_dt();
-        case ACC: return acc_dt();
         default: assert(!"unexpected"); return dnnl_data_type_undef;
     }
 }

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2017-2025 Intel Corporation
+* Copyright 2017 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -29,6 +29,15 @@ cfg_t::cfg_t(const prb_t *prb, const std::vector<data_kind_t> &kinds) {
                 cfg_entry_t {
                         kind, orig_data_type, data_type, get_cfg_map(kind)});
     }
+
+    acc_mode_ = prb->attr.acc_mode;
+    bool inputs_f16 = true;
+    for (auto dk : {SRC, WEI, DST}) {
+        if (dk == output_data_kind_) continue;
+        inputs_f16 = inputs_f16 && get_dt(dk) == dnnl_f16;
+    }
+    // XXX: GPU convolution can use f16 accumulator when both inputs are f16.
+    if (is_gpu() && inputs_f16) acc_mode_ = dnnl_accumulation_mode_f16;
 
     // Keep legacy filling for Wino.
     if (prb->alg == WINO) {
@@ -107,6 +116,7 @@ cfg_t::cfg_entry_t::cfg_map_t cfg_t::get_cfg_map(data_kind_t kind) const {
             {{dnnl_f8_e5m2}, {-2, 2}},
             {{dnnl_f8_e4m3}, {-2, 2}},
             {{dnnl_s8}, {-4, 4}},
+            {{dnnl_u8}, {0, 8}},
     };
 
     static const cfg_t::cfg_entry_t::cfg_map_t bia_cfg_map = {

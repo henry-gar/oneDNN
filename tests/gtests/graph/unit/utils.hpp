@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -707,7 +707,7 @@ static inline void verify_two_ins_identity_shape_infer(
 inline dnnl_dim_t product(const std::vector<int64_t> &dims) {
     return dims.empty() ? 0
                         : std::accumulate(dims.begin(), dims.end(),
-                                (dnnl_dim_t)1, std::multiplies<dnnl_dim_t>());
+                                  (dnnl_dim_t)1, std::multiplies<dnnl_dim_t>());
 }
 
 inline void construct_f32_MHA(dnnl::impl::graph::graph_t *agraph,

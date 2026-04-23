@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 * Copyright 2023 Arm Ltd. and affiliates
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
@@ -76,6 +76,7 @@
 #define VERBOSE_BAD_DIM "bad dimension %s:%d"
 #define VERBOSE_OUT_OF_RANGE_DIMS "out-of-range dimensions for %s"
 
+#define VERBOSE_UNSUPPORTED_THREADPOOL_RUNTIME "unsupported threadpool runtime"
 #define VERBOSE_UNSUPPORTED_ISA "unsupported isa"
 #define VERBOSE_UNSUPPORTED_DT "unsupported datatype"
 #define VERBOSE_UNSUPPORTED_MD_FLAG "unsupported %s md flags"
@@ -86,6 +87,7 @@
 #define VERBOSE_UNSUPPORTED_ZP_CFG "unsupported zero-point configuration"
 #define VERBOSE_UNSUPPORTED_PR_CFG \
     "unsupported precomputed reductions configuration"
+#define VERBOSE_UNSUPPORTED_DROPOUT "unsupported dropout configuration"
 #define VERBOSE_UNSUPPORTED_BIAS_CFG "unsupported bias configuration"
 #define VERBOSE_UNSUPPORTED_DT_CFG "unsupported datatype combination"
 #define VERBOSE_UNSUPPORTED_SPARSE_CFG "unsupported sparse md configuration"

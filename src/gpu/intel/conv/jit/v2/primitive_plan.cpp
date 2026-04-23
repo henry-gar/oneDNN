@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2024-2025 Intel Corporation
+* Copyright 2024 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -76,7 +76,7 @@ primitive_init_plan_t::buffer_entry_t primitive_init_plan_t::find_buf(
 kernel_info_t primitive_init_plan_t::create_kernel_info(
         const kernel_desc_base_t &desc,
         const std::unordered_map<std::string, std::string> &buf_map) const {
-    kernel::iface_t iface(desc.kernel_name());
+    dsl::kernel::iface_t iface(desc.kernel_name());
     desc.init_kernel_iface(iface);
     kernel_info_t info;
     for (size_t i = 0; i < iface.nargs(); i++) {
@@ -84,7 +84,7 @@ kernel_info_t primitive_init_plan_t::create_kernel_info(
         auto &name = var.as<var_t>().name;
         auto buf = find_buf(buf_map.count(name) == 0 ? name : buf_map.at(name));
         if (!buf) {
-            info.register_internal_arg(var);
+            info.register_immediate_arg(var);
         } else if (buf.is_user()) {
             info.register_user_arg(var, buf.arg_key, buf.is_user_input);
         } else {
@@ -125,7 +125,8 @@ status_t primitive_init_plan_t::add_reorder_kernel(
         impl::engine_t *engine) const {
     kernel_info_t kernel_info;
     for (auto *e : {&src, &dst}) {
-        auto buf_var = var_t::make(type_t::byte(type::attr_t::ptr), e->name);
+        auto buf_var = var_t::make(
+                dsl::type_t::byte(dsl::type::attr_t::ptr), e->name);
         if (e->is_user()) {
             kernel_info.register_user_arg(
                     buf_var, e->arg_key, /*is_input=*/e == &src);
@@ -134,12 +135,12 @@ status_t primitive_init_plan_t::add_reorder_kernel(
                     /*is_input=*/e == &src, size_bytes(e->layout));
         }
     }
-    kernel::options_t options(make_ir_hw(engine), regs_, simd_);
+    dsl::kernel::options_t options(make_ir_hw(engine), regs_, simd_);
+    options.set_require_dpas(dpas_);
     reorder::jit::config_t cfg(options, src.layout, dst.layout);
     kernel_info.set_nd_range(cfg.nd_range());
     auto kernel = make_kernel<reorder::jit::kernel_t>(primitive,
-            /*register_kernel=*/true, engine, cfg, "reorder", kernel_info,
-            dpas_);
+            /*register_kernel=*/true, engine, cfg, "reorder", kernel_info);
     exec_plan.add_kernel(kernel, kernel_info);
     return status::success;
 }

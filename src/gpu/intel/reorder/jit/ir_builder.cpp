@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -22,15 +22,15 @@
 #include <vector>
 
 #include "common/c_types_map.hpp"
+#include "gemmstone/../../dsl/ir/ir.hpp"
+#include "gemmstone/../../dsl/ir/pass/trace.hpp"
 #include "gpu/intel/jit/ir/epilogue.hpp"
 #include "gpu/intel/jit/ir/gemm_schedule.hpp"
-#include "gpu/intel/jit/ir/ir.hpp"
-#include "gpu/intel/jit/ir/message.hpp"
+#include "gpu/intel/jit/ir/legacy.hpp"
 #include "gpu/intel/jit/ir/post_ops.hpp"
-#include "gpu/intel/jit/ir/reorder.hpp"
+#include "gpu/intel/jit/ir/send_builder.hpp"
 #include "gpu/intel/jit/ir/tensor.hpp"
 #include "gpu/intel/jit/pass/pass.hpp"
-#include "gpu/intel/jit/utils/trace.hpp"
 
 namespace dnnl {
 namespace impl {
@@ -80,7 +80,7 @@ bool ir_builder_t::try_build(const tile_t &iter_tile, const tile_t &loop_tile) {
     std::vector<expr_t> vars;
     vars.reserve(ndims);
     for (auto &d : padded_dims) {
-        auto var = var_t::make(type_t::s32(), d.str());
+        auto var = var_t::make(dsl::type_t::s32(), d.str());
         vars.emplace_back(var);
     }
 
@@ -174,8 +174,8 @@ bool ir_builder_t::try_build(const tile_t &iter_tile, const tile_t &loop_tile) {
     auto dst_buf = kernel_info_.arg_var(1);
 
     ir_context_t ir_ctx(cfg_.options(), init_cset);
-    auto reg_buf
-            = ir_ctx.create_tmp_var(type_t::byte(type::attr_t::ptr), "reg");
+    auto reg_buf = ir_ctx.create_tmp_var(
+            dsl::type_t::byte(dsl::type::attr_t::ptr), "reg");
 
     std::vector<stmt_t> allocs;
     for (int i = 0; i < kernel_info_.nargs(); i++) {
@@ -217,8 +217,8 @@ bool ir_builder_t::try_build(const tile_t &iter_tile, const tile_t &loop_tile) {
                 /*force_c_reorder=*/true, post_op_ctx, thr_tile_coord,
                 read_layout, dst_buf, reg_buf, write_buf_size);
     } else if (!read_layout.is_equal_normalized(write_layout)) {
-        auto tmp_buf
-                = ir_ctx.create_tmp_var(type_t::byte(type::attr_t::ptr), "tmp");
+        auto tmp_buf = ir_ctx.create_tmp_var(
+                dsl::type_t::byte(dsl::type::attr_t::ptr), "tmp");
         allocs.push_back(
                 alloc_t::make(tmp_buf, write_buf_size, alloc_kind_t::grf));
         auto reorder_stmt = create_reorder_stmt(

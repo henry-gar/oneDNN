@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2017-2025 Intel Corporation
+* Copyright 2017 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -77,7 +77,7 @@ struct ref_sum_t : public primitive_t {
                 scratchpad.book(key_nested_multiple + (int)i,
                         reorder_pds_[i]->scratchpad_registry());
             }
-        };
+        }
     };
 
     ref_sum_t(const pd_t *apd) : primitive_t(apd) {}
@@ -114,17 +114,18 @@ struct ref_sum_t : public primitive_t {
 
         auto sum_reduce = pd()->need_output_reorder()
                 ? ctx.get_scratchpad_grantor().get_memory_storage(
-                        key_sum_reduction)
+                          key_sum_reduction)
                 : nullptr;
-        auto dst = ctx.args().at(DNNL_ARG_DST);
+        const auto &dst = ctx.args().at(DNNL_ARG_DST);
 
         std::unique_ptr<memory_t, memory_deleter_t> acc;
         CHECK(safe_ptr_assign(acc,
-                new memory_t(dst.mem->engine(), pd()->dst_acc_md(),
+                new memory_t(dst.mem()->engine(), pd()->dst_acc_md(),
                         std::move(sum_reduce))));
         memory_arg_t dst_acc = {acc.get(), false};
 
         /* fix: clang MemorySanitizer: use-of-uninitialized-value */
+        // TODO: should rely on unpoison_msan instead.
         if (pd()->need_output_reorder()) {
             const memory_desc_wrapper acc_d(acc->md());
             std::memset(acc->memory_storage()->data_handle(), 0, acc_d.size());
@@ -138,19 +139,23 @@ struct ref_sum_t : public primitive_t {
 
             exec_ctx_t r_ctx(ctx, std::move(r_args));
 
-            nested_scratchpad_t ns(ctx, key_nested_multiple + i, reorders_[i]);
-            r_ctx.set_scratchpad_grantor(ns.grantor());
+            auto *nested_grantor = create_nested_grantor(
+                    ctx.get_scratchpad_grantor(), key_nested_multiple + i,
+                    reorders_[i]->pd()->scratchpad_registry());
+            r_ctx.set_scratchpad_grantor(nested_grantor);
             reorders_[i]->execute(r_ctx);
         }
 
         if (pd()->need_output_reorder()) {
-            dst_acc.is_const = true;
+            dst_acc = {acc.get(), true};
             r_args[DNNL_ARG_SRC] = dst_acc;
             r_args[DNNL_ARG_DST] = dst;
             exec_ctx_t r_ctx(ctx, std::move(r_args));
 
-            nested_scratchpad_t ns(ctx, key_nested_multiple + n, reorders_[n]);
-            r_ctx.set_scratchpad_grantor(ns.grantor());
+            auto *nested_grantor = create_nested_grantor(
+                    ctx.get_scratchpad_grantor(), key_nested_multiple + n,
+                    reorders_[n]->pd()->scratchpad_registry());
+            r_ctx.set_scratchpad_grantor(nested_grantor);
             reorders_[n]->execute(r_ctx);
         }
         return status::success;

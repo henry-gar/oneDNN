@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -29,7 +29,7 @@ CommonDriverInfo Generator<hw>::driverInfo(GEMMProblem problem, const GEMMStrate
 {
     CommonDriverInfo info;
 
-    problem.autoTypeConversions(hw, strategy.systolic);
+    problem.autoTypeConversions(strategy.systolic);
 
     info.subgroupSize = strategy.subgroupSize;
     info.fusedLoop = strategy.fused ? strategy.fusedLoop : LoopNone;
@@ -83,6 +83,7 @@ CommonDriverInfo Generator<hw>::driverInfo(GEMMProblem problem, const GEMMStrate
     if (problem.needsAGroupSums())                                info.flags |= FlagAGroupSums;
     if (problem.needsBGroupSums())                                info.flags |= FlagBGroupSums;
     info.flags |= (strategy.fillGoal << FlagShiftFillGoal) & FlagMaskFillGoal;
+    info.flags |= (static_cast<uint64_t>(strategy.cInterleaveChunk) << FlagShiftCInterleave) & FlagMaskCInterleave;
     info.slm = int(gemmSLMSize(hw, problem, strategy));
     info.perKSLM = int(gemmPerKSLMSize(hw, problem, strategy));
     info.alignment[0] = problem.A.alignment;

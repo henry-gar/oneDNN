@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -37,6 +37,7 @@ static status_t init_conf_common(
     conf.src_md_info = memory_desc_info_t::create(src_mdw);
     conf.wei_md_info = memory_desc_info_t::create(wei_mdw);
     conf.dst_md_info = memory_desc_info_t::create(dst_mdw);
+    conf.require_stateless_addressing = pd->has_large_buffers();
     if (!conf.is_forward) {
         const memory_desc_wrapper diff_src_mdw(pd->diff_src_md(0));
         const memory_desc_wrapper diff_weights_mdw(pd->diff_weights_md(0));
@@ -66,7 +67,7 @@ static status_t init_conf_common(
             const dnnl_dim_t diff_wei_dim = conf.is_forward
                     ? 1
                     : static_cast<dnnl_dim_t>(
-                            conf.diff_wei_md_info.padded_dims[i]);
+                              conf.diff_wei_md_info.padded_dims[i]);
             dnnl_dim_t dim2dispatch
                     = nstl::max(dst_mdw.padded_dims()[i], diff_wei_dim);
             conf.dispatch.define_dim(utils::format("D%d", i), i, dim2dispatch);
@@ -76,13 +77,13 @@ static status_t init_conf_common(
     conf.dispatch.generate(false);
 
     return status::success;
-};
+}
 
 static status_t init_kernel_ctx_common(
         compute::kernel_ctx_t &kernel_ctx, const conf_t &conf) {
 
     kernel_ctx.set_data_type(conf.dst_md_info.data_type);
-    def_eltwise_alg_kinds(kernel_ctx);
+    kernel_ctx.require_stateless_addressing(conf.require_stateless_addressing);
 
     kernel_ctx.define_int("IS_FWD", conf.is_forward);
 
@@ -189,9 +190,11 @@ status_t ref_bwd_t::execute_backward(const exec_ctx_t &ctx) const {
         reduction_args[DNNL_ARG_DST] = ctx.args().at(DNNL_ARG_DIFF_WEIGHTS);
         exec_ctx_t reduction_ctx(ctx, std::move(reduction_args));
 
-        nested_scratchpad_t ns(
-                ctx, memory_tracking::names::key_nested, reduction_p_);
-        reduction_ctx.set_scratchpad_grantor(ns.grantor());
+        auto *nested_grantor
+                = create_nested_grantor(ctx.get_scratchpad_grantor(),
+                        memory_tracking::names::key_nested,
+                        reduction_p_->pd()->scratchpad_registry());
+        reduction_ctx.set_scratchpad_grantor(nested_grantor);
         // Executing the reduction kernel
         return reduction_p_->execute(reduction_ctx);
     }

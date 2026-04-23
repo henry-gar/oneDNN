@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2024 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -22,6 +22,11 @@
 #include "cpu/x64/jit_uni_group_normalization.hpp"
 #include "cpu/x64/jit_uni_instance_normalization.hpp"
 using namespace dnnl::impl::cpu::x64;
+#elif DNNL_RV64
+#if defined(DNNL_RISCV_USE_RVV_INTRINSICS)
+#include "cpu/rv64/rvv_group_normalization.hpp"
+using namespace dnnl::impl::cpu::rv64;
+#endif // DNNL_RISCV_USE_RVV_INTRINSICS
 #endif
 
 namespace dnnl {
@@ -38,6 +43,7 @@ const std::map<pk_impl_key_t, std::vector<impl_list_item_t>> &impl_list_map() {
         {{forward}, {
             CPU_INSTANCE_X64(jit_uni_group_normalization_fwd_t)
             CPU_INSTANCE_X64(jit_uni_instance_normalization_fwd_t)
+            CPU_INSTANCE_RV64GCV(rvv_group_normalization_fwd_t)
             CPU_INSTANCE(ncsp_group_normalization_fwd_t)
             CPU_INSTANCE(ref_group_normalization_fwd_t)
             nullptr,

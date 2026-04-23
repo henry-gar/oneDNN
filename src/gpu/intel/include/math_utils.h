@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -28,26 +28,28 @@
 #pragma clang diagnostic ignored "-Wtautological-compare"
 
 int __attribute__((overloadable)) div_up(int a, unsigned int b) {
-    return (a / b) + (a % b != 0);
+    return a >= 1 ? 1 + (a - 1) / b : 0;
 }
 
-int __attribute__((overloadable)) div_up(unsigned int a, unsigned int b) {
-    return (a / b) + (a % b != 0);
+unsigned int __attribute__((overloadable)) div_up(
+        unsigned int a, unsigned int b) {
+    return a >= 1 ? 1 + (a - 1) / b : 0;
 }
 
 long __attribute__((overloadable)) div_up(long a, unsigned int b) {
-    return (a / b) + (a % b != 0);
+    return a >= 1 ? 1 + (a - 1) / b : 0;
 }
 
 int __attribute__((overloadable)) rnd_up(int a, unsigned int b) {
     return div_up(a, b) * b;
 }
 
-int __attribute__((overloadable)) rnd_up(unsigned int a, unsigned int b) {
+unsigned int __attribute__((overloadable)) rnd_up(
+        unsigned int a, unsigned int b) {
     return div_up(a, b) * b;
 }
 
-int __attribute__((overloadable)) rnd_up(long a, unsigned int b) {
+long __attribute__((overloadable)) rnd_up(long a, unsigned int b) {
     return div_up(a, b) * b;
 }
 
@@ -55,11 +57,12 @@ int __attribute__((overloadable)) rnd_down(int a, unsigned int b) {
     return (a / b) * b;
 }
 
-int __attribute__((overloadable)) rnd_down(unsigned int a, unsigned int b) {
+unsigned int __attribute__((overloadable)) rnd_down(
+        unsigned int a, unsigned int b) {
     return (a / b) * b;
 }
 
-int __attribute__((overloadable)) rnd_down(long a, unsigned int b) {
+long __attribute__((overloadable)) rnd_down(long a, unsigned int b) {
     return (a / b) * b;
 }
 
@@ -67,26 +70,29 @@ int __attribute__((overloadable)) rnd_down(long a, unsigned int b) {
 
 #if DT_BF8 || SRC_DT_BF8 || WEI_DT_BF8 || DST_DT_BF8 || BIA_DT_BF8 || A_DT_BF8 \
         || B_DT_BF8 || C_DT_BF8 || DATA_DT_BF8 || POST_OP_USING_BF8 \
-        || SRC_SCALES_DT_BF8 || WEI_SCALES_DT_BF8 || DST_SCALES_DT_BF8
+        || SRC_SCALES_DT_BF8 || WEI_SCALES_DT_BF8 || DST_SCALES_DT_BF8 \
+        || BIAS_DT_BF8
 #define MATH_UTILS_DECLARE_BF8 1
 #endif
 
 #if DT_HF8 || SRC_DT_HF8 || WEI_DT_HF8 || DST_DT_HF8 || BIA_DT_HF8 || A_DT_HF8 \
         || A_DT_HF8 || B_DT_HF8 || C_DT_HF8 || DATA_DT_HF8 \
         || POST_OP_USING_HF8 || SRC_SCALES_DT_HF8 || WEI_SCALES_DT_HF8 \
-        || DST_SCALES_DT_HF8
+        || DST_SCALES_DT_HF8 || BIAS_DT_HF8
 #define MATH_UTILS_DECLARE_HF8 1
 #endif
 
 #if DT_F4_E2M1 || SRC_DT_F4_E2M1 || WEI_DT_F4_E2M1 || DST_DT_F4_E2M1 \
         || BIA_DT_F4_E2M1 || A_DT_F4_E2M1 || A_DT_F4_E2M1 || B_DT_F4_E2M1 \
-        || C_DT_F4_E2M1 || DATA_DT_F4_E2M1 || POST_OP_USING_F4_E2M1
+        || C_DT_F4_E2M1 || DATA_DT_F4_E2M1 || POST_OP_USING_F4_E2M1 \
+        || BIAS_DT_F4_E2M1
 #define MATH_UTILS_DECLARE_F4_E2M1 1
 #endif
 
 #if DT_F4_E3M0 || SRC_DT_F4_E3M0 || WEI_DT_F4_E3M0 || DST_DT_F4_E3M0 \
         || BIA_DT_F4_E3M0 || A_DT_F4_E3M0 || A_DT_F4_E3M0 || B_DT_F4_E3M0 \
-        || C_DT_F4_E3M0 || DATA_DT_F4_E3M0 || POST_OP_USING_F4_E3M0
+        || C_DT_F4_E3M0 || DATA_DT_F4_E3M0 || POST_OP_USING_F4_E3M0 \
+        || BIAS_DT_F4_E3M0
 #define MATH_UTILS_DECLARE_F4_E3M0 1
 #endif
 
@@ -108,7 +114,7 @@ int __attribute__((overloadable)) rnd_down(long a, unsigned int b) {
 #define MATH_UTILS_DECLARE_BF16 1
 #endif
 
-#if DST_SCALES_DT_E8M0
+#if DST_SCALES_DT_E8M0 || SRC_SCALES_DT_E8M0 || WEI_SCALES_DT_E8M0
 #define MATH_UTILS_DECLARE_E8M0 1
 #endif
 
@@ -117,11 +123,20 @@ ushort16 __builtin_IB_simd_block_read_16_global_h(const __global ushort *);
 
 void __builtin_IB_simd_block_write_8_global_l(__global ulong *, ulong8);
 void __builtin_IB_simd_block_write_16_global_h(__global ushort *, ushort16);
+
+#if MATH_UTILS_DECLARE_E8M0
 float __attribute__((overloadable)) cvt_e8m0_to_f32(uchar f) {
     if (f == (uchar)0xff) return as_float(0xffc00000);
+    if (f == (uchar)0x00) return as_float(0x00400000);
     uint bits = f << 23;
     return as_float(bits);
 }
+
+uchar __attribute__((overloadable)) cvt_f32_to_e8m0(float f) {
+    uint bits = as_uint(f);
+    return ((uchar4)((bits >> 23) & 0xff)).s0;
+}
+#endif
 
 #if MATH_UTILS_DECLARE_HF8
 // Emulation functions for f8_e4m3 <-> f16 conversion.
@@ -136,7 +151,7 @@ uchar __attribute__((overloadable)) cvt_hf_to_f8_e4m3(half f) {
     fraw = fraw & 0x7fff;
 
     // we filter out overlow, nan
-    if (fraw >= 0x5f40) {
+    if (fraw > 0x5f40) {
         raw_bits = s8 | 0x7f;
         return raw_bits;
     }
@@ -153,7 +168,7 @@ uchar __attribute__((overloadable)) cvt_hf_to_f8_e4m3(half f) {
     // e8 = e16 - e16_bias + e8_bias = e16 - 15 + 7
     // e8 will be denorm if e8 <= 0 or e16 + 7 < 16
     const int exp_threshold = 0x4000; // raw bits of exponent = 16
-    ushort is_denorm = shifter < exp_threshold;
+    bool is_denorm = shifter < exp_threshold;
     if (is_denorm) shifter = exp_threshold;
 
     ushort rounded
@@ -526,14 +541,14 @@ double16 __attribute__((overloadable)) cvt_bf16_to_f64(ushort16 b) {
 #endif
 
 #define DECLARE_BLOCK_READ(suffix, func, data_type, addr_space, p_type) \
-    data_type __attribute__((overloadable)) \
-            block_read##suffix(const addr_space p_type *p) { \
+    data_type __attribute__((overloadable)) block_read##suffix( \
+            const addr_space p_type *p) { \
         return func(p); \
     }
 
 #define DECLARE_BLOCK_READ_EMU(suffix, data_type, addr_space, p_type) \
-    data_type __attribute__((overloadable)) \
-            block_read##suffix##_emu(const addr_space p_type *p) { \
+    data_type __attribute__((overloadable)) block_read##suffix##_emu( \
+            const addr_space p_type *p) { \
         data_type ret; \
         uint idx = get_sub_group_local_id(); \
         for (int i = 0; i < sizeof(data_type) / sizeof(p_type); i++) { \
@@ -544,14 +559,14 @@ double16 __attribute__((overloadable)) cvt_bf16_to_f64(ushort16 b) {
     }
 
 #define DECLARE_BLOCK_WRITE(suffix, func, data_type, addr_space, p_type) \
-    void __attribute__((overloadable)) \
-            block_write##suffix(addr_space p_type *p, data_type data) { \
+    void __attribute__((overloadable)) block_write##suffix( \
+            addr_space p_type *p, data_type data) { \
         func(p, data); \
     }
 
 #define DECLARE_BLOCK_WRITE_EMU(suffix, data_type, addr_space, p_type) \
-    void __attribute__((overloadable)) \
-            block_write##suffix##_emu(addr_space p_type *p, data_type data) { \
+    void __attribute__((overloadable)) block_write##suffix##_emu( \
+            addr_space p_type *p, data_type data) { \
         uint idx = get_sub_group_local_id(); \
         for (int i = 0; i < sizeof(data_type) / sizeof(p_type); i++) { \
             p[idx] = ((p_type *)&data)[i]; \
@@ -570,11 +585,11 @@ DECLARE_BLOCK_WRITE(4, intel_sub_group_block_write4, uint4, __global, uint)
 DECLARE_BLOCK_WRITE(8, intel_sub_group_block_write8, uint8, __global, uint)
 
 #ifdef cl_intel_subgroups_char
-void __attribute__((overloadable))
-intel_sub_group_block_write_uc16(__global uchar *p, uchar16 data);
+void __attribute__((overloadable)) intel_sub_group_block_write_uc16(
+        __global uchar *p, uchar16 data);
 
-uchar16 __attribute__((overloadable))
-intel_sub_group_block_read_uc16(const __global uchar *p);
+uchar16 __attribute__((overloadable)) intel_sub_group_block_read_uc16(
+        const __global uchar *p);
 #endif
 
 // Emulation for cl_intel_subgroup_local_block_io. These functions are not
@@ -793,8 +808,8 @@ float __attribute__((overloadable)) cvt_f4_e3m0_to_f32(uchar a) {
         || MATH_UTILS_DECLARE_F4_E2M1 || MATH_UTILS_DECLARE_F4_E3M0
 #define GET_HALF_BYTE(x, y) get_half_byte(x, y)
 
-uchar __attribute__((overloadable))
-get_half_byte(const __global uchar *x, off_t y) {
+uchar __attribute__((overloadable)) get_half_byte(
+        const __global uchar *x, off_t y) {
     uchar ret = 0;
     if (y % 2) {
         ret = (uchar)((uchar)(x[y / 2] & 0xf0) >> 4);
@@ -804,8 +819,8 @@ get_half_byte(const __global uchar *x, off_t y) {
     return ret;
 }
 
-char __attribute__((overloadable))
-get_half_byte(const __global char *x, off_t y) {
+char __attribute__((overloadable)) get_half_byte(
+        const __global char *x, off_t y) {
     if (y % 2) {
         return (x[y / 2] & 0xf0) >> 4;
     } else {
@@ -813,13 +828,13 @@ get_half_byte(const __global char *x, off_t y) {
     }
 }
 
-void __attribute__((overloadable))
-set_double_half_byte(__global uchar *x, off_t y, uchar z) {
+void __attribute__((overloadable)) set_double_half_byte(
+        __global uchar *x, off_t y, uchar z) {
     x[y / 2] = z;
 }
 
-void __attribute__((overloadable))
-set_double_half_byte(__global char *x, off_t y, uchar z) {
+void __attribute__((overloadable)) set_double_half_byte(
+        __global char *x, off_t y, uchar z) {
     x[y / 2] = z;
 }
 

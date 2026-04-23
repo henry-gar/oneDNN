@@ -25,15 +25,16 @@ Usage:
 """
 
 import argparse
-from collections import defaultdict
-import git
 import json
+import math
 import os
 import pathlib
-from scipy.stats import ttest_ind
 import statistics
 import warnings
+from collections import defaultdict
 
+import git
+from scipy.stats import ttest_ind
 
 F_PATH = pathlib.Path(__file__).parent.resolve()
 CI_JSON_PATH = F_PATH / "../aarch64/ci.json"
@@ -49,15 +50,18 @@ def compare_two_benchdnn(file1, file2, out_file=None):
     """
     Compare two benchdnn output files
     """
+
+    def split_perf_data(fd):
+        for line in fd.readlines():
+            if line[0:8] != "--mode=P":
+                continue
+            yield line.split(",")
+
     with open(file1) as f:
-        r1 = f.readlines()
+        r1 = list(split_perf_data(f))
 
     with open(file2) as f:
-        r2 = f.readlines()
-
-    # Trim non-formatted lines and split the problem from time
-    r1 = [x.split(",") for x in r1 if x[0:8] == "--mode=P"]
-    r2 = [x.split(",") for x in r2 if x[0:8] == "--mode=P"]
+        r2 = list(split_perf_data(f))
 
     if (len(r1) == 0) or (len(r2) == 0):
         raise Exception("One or both of the test results have zero lines")
@@ -89,7 +93,11 @@ def compare_two_benchdnn(file1, file2, out_file=None):
 
         repo = git.Repo(F_PATH / "../../..", search_parent_directories=True)
         head_sha = repo.git.rev_parse(repo.head.object.hexsha, short=6)
-        headers = f"| problem | oneDNN ({ci_json['dependencies']['onednn-base']}) time(ms) | oneDNN ({head_sha}) time(ms) | speedup (>1 is faster) |\n"
+        headers = (
+            f"| problem | oneDNN ({ci_json['dependencies']['onednn-base']})"
+            f" time(ms) | oneDNN ({head_sha}) time(ms) | speedup (>1 is"
+            " faster) |\n"
+        )
         with open(out_file, "w") as f:
             f.write(headers + "| :---: | :---: | :---: | :---:|\n")
 
@@ -106,10 +114,26 @@ def compare_two_benchdnn(file1, file2, out_file=None):
         ctime_ttest = ttest_ind(ctime2, ctime1, alternative="greater")
         r1_med_exec = statistics.median(exec1)
         r2_med_exec = statistics.median(exec2)
+        r1_mean_exec = statistics.mean(exec1)
+        r2_mean_exec = statistics.mean(exec2)
         r1_med_ctime = statistics.median(ctime1)
         r2_med_ctime = statistics.median(ctime2)
+        r1_mean_ctime = statistics.mean(ctime1)
+        r2_mean_ctime = statistics.mean(ctime2)
 
-        if 0 in [r1_med_exec, min(exec1), r1_med_ctime, min(ctime1)]:
+        use_ttest = len(exec1) >= 3 and len(exec2) >= 3
+
+        if 0 in [
+            r1_med_exec,
+            min(exec1),
+            min(exec2),
+            r1_med_ctime,
+            min(ctime1),
+            r1_mean_exec,
+            r2_mean_exec,
+            r1_mean_ctime,
+            r2_mean_ctime,
+        ]:
             warnings.warn(
                 f"Avoiding division by 0 for {prb}. "
                 f"Exec median: {r1_med_exec}, min: {min(exec1)}; "
@@ -117,16 +141,24 @@ def compare_two_benchdnn(file1, file2, out_file=None):
             )
             continue
 
+        r1_sem_exec = statistics.stdev(exec1) / math.sqrt(r1_mean_exec)
+        r2_sem_exec = statistics.stdev(exec2) / math.sqrt(r2_mean_exec)
+        r1_sem_ctime = statistics.stdev(ctime1) / math.sqrt(r1_mean_ctime)
+        r2_sem_ctime = statistics.stdev(ctime2) / math.sqrt(r2_mean_ctime)
+
         # A test fails if execution time:
         # - shows a statistically significant regression and
         # - shows ≥ 10% slowdown in either median or min times
-        exec_regressed = exec_regressed_ttest.pvalue <= 0.05 and (
+        exec_regressed = (
+            not use_ttest or exec_regressed_ttest.pvalue <= 0.05
+        ) and (
             (r2_med_exec - r1_med_exec) / r1_med_exec >= 0.1
             or (min(exec2) - min(exec1)) / min(exec1) >= 0.1
         )
-        exec_improved = exec_improved_ttest.pvalue <= 0.05 and (
-            r1_med_exec / r2_med_exec >= 1.1
-            or min(exec1) / min(exec2) >= 1.1
+        exec_improved = (
+            not use_ttest or exec_improved_ttest.pvalue <= 0.05
+        ) and (
+            r1_med_exec / r2_med_exec >= 1.1 or min(exec1) / min(exec2) >= 1.1
         )
         ctime_regressed = ctime_ttest.pvalue <= 0.05 and (
             (r2_med_ctime - r1_med_ctime) / r1_med_ctime >= 0.1
@@ -135,22 +167,25 @@ def compare_two_benchdnn(file1, file2, out_file=None):
 
         if exec_regressed:
             exec_failures.append(
-                f"{prb} exec: {r1_med_exec:.3g} → {r2_med_exec:.3g} "
+                f"{prb} exec: "
+                f"{r1_mean_exec:.3g}\u00b1{r1_sem_exec:.3g} "
+                "\u2192 "
+                f"{r2_mean_exec:.3g}\u00b1{r2_sem_exec:.3g} "
                 f"(p={exec_regressed_ttest.pvalue:.3g})"
             )
 
         if ctime_regressed:
             ctime_failures.append(
-                f"{prb} ctime: {r1_med_ctime:.3g} → {r2_med_ctime:.3g}"
+                f"{prb} ctime: "
+                f"{r1_mean_ctime:.3g}\u00b1{r1_sem_ctime} "
+                "\u2192 "
+                f"{r2_mean_ctime:.3g}\u00b1{r2_sem_ctime} "
                 f"(p={ctime_ttest.pvalue:.3g})"
             )
 
-        if (
-            out_file is not None
-            and (exec_regressed or exec_improved)
-        ):
+        if out_file is not None and (exec_regressed or exec_improved):
             prb_params = [x.replace("--", "") for x in prb.split(" ")]
-            prb_params = [prb_params[1]] + [
+            prb_params = [prb_params[2]] + [
                 x for x in prb_params if ("dt=" in x) or ("alg=" in x)
             ]  # filter out the problem and data types
             prb_str = (
@@ -169,7 +204,8 @@ def compare_two_benchdnn(file1, file2, out_file=None):
             )
             with open(out_file, "a") as f:
                 f.write(
-                    f"|{prb_str}|{r1_med_exec:.3g}|{r2_med_exec:.3g}|{speedup_str}|\n"
+                    f"|{prb_str}|{r1_med_exec:.3g}|{r2_med_exec:.3g}"
+                    f"|{speedup_str}|\n"
                 )
 
     print_to_github_out(f"pass={not exec_failures}")

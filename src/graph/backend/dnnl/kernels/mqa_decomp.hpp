@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2024-2025 Intel Corporation
+* Copyright 2024 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -48,6 +48,7 @@ private:
     allocator_t *g_alloc_ = nullptr;
     // used for mqa internal memory planning
     registry_t mqa_registry_;
+    std::shared_ptr<subgraph_t> subgraph_;
     memory_planner_t memory_planner_;
     subgraph_visualizer_t vis_;
 
@@ -84,10 +85,11 @@ public:
         mqa_args_set_t(mqa_decomp_kernel_t<quantized, dt> *mqa_kernel) {
             int nthr = mqa_kernel->mqa_cfg_.nthr;
             //construct new args
-            auto args_ctor = [this, nthr](const std::unordered_map<int, memory>
-                                                  &ori_args,
-                                     std::vector<std::unordered_map<int,
-                                             memory>> &args) {
+            auto args_ctor
+                    = [this, nthr](
+                              const std::unordered_map<int, memory> &ori_args,
+                              std::vector<std::unordered_map<int, memory>>
+                                      &args) {
                 args.resize(nthr);
                 for (const auto &iter : ori_args) {
                     memory ori_mem = iter.second;
@@ -164,10 +166,6 @@ public:
 
     DEF_KERNEL_METHOD_STR(mqa_decomp_kernel_t)
     DNNL_DISALLOW_COPY_AND_ASSIGN(mqa_decomp_kernel_t)
-    status_t reset_engine(const engine_t *g_engine) override {
-        dnnl::engine p_engine = make_dnnl_engine(*g_engine);
-        return mqa_cfg_.reset_engine(p_engine);
-    }
 };
 
 } // namespace dnnl_impl

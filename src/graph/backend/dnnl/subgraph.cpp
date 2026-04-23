@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright 2022-2025 Intel Corporation
+ * Copyright 2022 Intel Corporation
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,8 +32,6 @@
 
 #include "graph/backend/dnnl/common.hpp"
 #include "graph/backend/dnnl/dnnl_backend.hpp"
-#include "graph/backend/dnnl/internal_attrs.hpp"
-#include "graph/backend/dnnl/op_executable.hpp"
 #include "graph/backend/dnnl/subgraph.hpp"
 #include "graph/backend/dnnl/utils.hpp"
 
@@ -62,33 +60,11 @@ subgraph_t::subgraph_t(const std::vector<op_ptr> &ops, const dnnl::engine &eng,
 }
 
 subgraph_t::subgraph_t(const std::vector<op_ptr> &ops, bool reset_layout)
-    : graph_t(ops), p_engine_(nullptr) {
+    : graph_t(ops), p_engine_(nullptr), can_use_blocked_layout_(false) {
     if (reset_layout) { set_all_layout_to_any(get_mutable_ops()); }
 }
 
-status_t subgraph_t::reset_engine(const dnnl::engine &eng) {
-    status_t ret = status::success;
-    for (auto const &exec : execs_) {
-        ret = exec->reset_engine(eng);
-        if (ret != status::success) return ret;
-    }
-    return ret;
-}
-
-std::string kind2str(op_kind_t kind) {
-    // 0: Abs, ..., N: LastSymbol, 0x1234: any, ...
-    const size_t k = static_cast<size_t>(kind);
-    const size_t l = static_cast<size_t>(graph::op_kind::LastSymbol);
-
-    if (k <= l) {
-        return op_t::kind2str(kind);
-    } else {
-        return dnnl_impl::op_kind::internal_op_strings.at(k
-                - static_cast<size_t>(op_kind::kDNNL_INTERNAL_OP_STARTER) - 1);
-    }
-}
-
-#ifdef DNNL_ENABLE_GRAPH_DUMP
+#ifndef DNNL_DISABLE_GRAPH_DUMP
 namespace {
 std::string layout2str(const dnnl::memory::desc &md) {
     std::string str;
@@ -165,7 +141,13 @@ std::string property2str(property_type_t ptype) {
 status_t subgraph_visualizer_t::run(const std::shared_ptr<subgraph_t> &sg,
         const std::string &name_suffix, bool is_layout_sensitive,
         bool is_memory_sensitive) {
-#ifdef DNNL_ENABLE_GRAPH_DUMP
+#ifdef DNNL_DISABLE_GRAPH_DUMP
+    UNUSED(sg);
+    UNUSED(name_suffix);
+    UNUSED(is_layout_sensitive);
+    UNUSED(is_memory_sensitive);
+    return status::success;
+#else
     if (!enabled_) return status::success;
 
     std::ofstream out;
@@ -190,14 +172,15 @@ status_t subgraph_visualizer_t::run(const std::shared_ptr<subgraph_t> &sg,
     out.open(file_name);
     out << "digraph G {\n";
     status_t ret = topo_order_visit(sg->get_output_ops(), [&](op_t *op) {
-        const auto &cur_op_name = kind2str(op->get_kind());
+        const auto &cur_op_name = op_t::kind2str(op->get_kind());
         const size_t cur_op_id = get_op_identifier(op);
         if (op->num_inputs() > 0) {
             for (size_t i = 0; i < op->num_inputs(); ++i) {
                 auto input_value = op->get_input_value(i);
                 if (input_value->has_producer()) {
                     op_t *input_op = &(input_value->get_producer());
-                    const auto &input_op_name = kind2str(input_op->get_kind());
+                    const auto &input_op_name
+                            = op_t::kind2str(input_op->get_kind());
                     const size_t input_op_id = get_op_identifier(input_op);
                     out << "\"" << input_op_name << "_" << input_op_id
                         << "\" -> \"" << cur_op_name << "_" << cur_op_id
@@ -250,7 +233,7 @@ status_t subgraph_visualizer_t::run(const std::shared_ptr<subgraph_t> &sg,
     // dump inputs/outputs info
     // in(no)_(lt str) or out(no)_(lt str)
     ret = topo_order_visit(sg->get_output_ops(), [&](op_t *op) {
-        const auto &op_name = kind2str(op->get_kind());
+        const auto &op_name = op_t::kind2str(op->get_kind());
         const size_t op_id = get_op_identifier(op);
         out << "\"" << op_name << "_" << op_id << "\"[label=\"" << op_name
             << "_" << op_id;
@@ -275,14 +258,8 @@ status_t subgraph_visualizer_t::run(const std::shared_ptr<subgraph_t> &sg,
 
     out << "}\n";
     out.close();
-#else
-    UNUSED(sg);
-    UNUSED(name_suffix);
-    UNUSED(is_layout_sensitive);
-    UNUSED(is_memory_sensitive);
-#endif
-
     return status::success;
+#endif
 }
 
 status_t subgraph_validator_t::run(const std::shared_ptr<subgraph_t> &sg) {
@@ -303,27 +280,17 @@ status_t subgraph_validator_t::run(const std::shared_ptr<subgraph_t> &sg) {
             // The matched_pattern attr is added by pattern matcher, we skip
             // it. The with_sum attr will be removed later, we skip it. The
             // op_depth attr is internal for pattern matcher, we skip it.
-            bool skip = elem.first == op_attr::matched
+            const bool skip = elem.first == op_attr::matched
                     || elem.first == op_attr::with_sum
                     || elem.first == op_attr::op_depth;
-            if (!skip && expected_attrs.count(elem.first) == 0) {
-#ifndef NDEBUG
-                if (op_t::attr2str(elem.first).compare("undefined_attr")) {
-                    DEBUG_PRINT_ERROR("common attribute "
-                            + op_t::attr2str(elem.first) + " in op "
-                            + op->get_name() + " is not defined");
-                } else {
-                    DEBUG_PRINT_ERROR("internal attribute "
-                            + op_attr::internal_attr2str(elem.first) + " in op "
-                            + op->get_name() + " is not defined");
-                }
-#endif
-                return status::invalid_graph_op;
-            }
+            const bool ok = skip || expected_attrs.count(elem.first) != 0;
+            VCHECK_SUBGRAPH(ok, status::invalid_graph_op,
+                    "attribute %s in op %s is not defined",
+                    op_t::attr2str(elem.first).c_str(), op->get_name().c_str());
         }
 
         // Additional verifications
-        if (op->get_kind() == op_kind::dnnl_convolution) {
+        if (op->get_kind() == op_kind::_convolution) {
             bool canonicalized = op->has_attr(op_attr::canonicalized)
                     && op->get_attr<bool>(op_attr::canonicalized);
             if (canonicalized) {
@@ -348,8 +315,7 @@ status_t subgraph_validator_t::run(const std::shared_ptr<subgraph_t> &sg) {
         const auto &in_vals = op->get_input_values();
         for (size_t i = 0; i < in_vals.size(); i++) {
             // dnnl_pool_bwd's index 1 and index 2 input are optional
-            if (op->get_kind() == dnnl_impl::op_kind::dnnl_pool_bwd
-                    && (i == 1 || i == 2))
+            if (op->get_kind() == op_kind::_pool_bwd && (i == 1 || i == 2))
                 continue;
 
             auto lt = in_vals[i]->get_logical_tensor();
@@ -453,9 +419,9 @@ void subgraph_rewriter_t::insert_op_before(const op_ptr &inserted_op,
     auto in_dtype = in_val->get_logical_tensor().data_type;
     new_val->set_data_type(in_dtype);
 
-    if (inserted_op->get_kind() == op_kind::dnnl_permute
-            && (base_op->get_kind() == op_kind::dnnl_mul_scales
-                    || base_op->get_kind() == op_kind::dnnl_sub_zps)) {
+    if (inserted_op->get_kind() == op_kind::_permute
+            && (base_op->get_kind() == op_kind::_mul_scales
+                    || base_op->get_kind() == op_kind::_sub_zps)) {
         // Only abx tag is respected for scale and zps inputs, should set
         // strides explicitly and execute reorder.
 

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -45,6 +45,7 @@ enum class GfxCoreFamily : uint32_t {
     XeHPC = 0xC08,
     Xe2 = 0xC09,
     Xe3 = 0x1E00,
+    Xe3p = 0x2300,
 };
 
 enum class ProductFamily : uint32_t {
@@ -63,6 +64,8 @@ enum class ProductFamily : uint32_t {
     LNL = 1275,
     LNL_M = 1276,
     PTL = 1300,
+    NVLP = 1360,
+    CRI = 1380,
 };
 
 struct SProgramBinaryHeader

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -52,7 +52,7 @@ status_t reduction_desc_init(reduction_desc_t *reduction_desc,
                                    reduction_norm_lp_sum,
                                    reduction_norm_lp_power_p_max,
                                    reduction_norm_lp_power_p_sum),
-                       p >= 1.0f),
+                       p >= 1.0f && !std::isinf(p)),
             VERBOSE_BAD_PARAM, "p");
     VCHECK_RED(IMPLICATION(one_of(alg_kind, reduction_norm_lp_max,
                                    reduction_norm_lp_sum,

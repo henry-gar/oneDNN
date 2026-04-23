@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright 2023-2024 Intel Corporation
+ * Copyright 2023 Intel Corporation
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,7 +32,7 @@ struct dnnl_constant_buffer_t : public graph::constant_buffer_t {
     dnnl_constant_buffer_t(
             size_t size, dnnl::engine &engine, graph::allocator_t *alc)
         : graph::constant_buffer_t(
-                size, engine.get(), alc, malloc_func, free_func) {}
+                  size, engine.get(), alc, malloc_func, free_func) {}
 
     static void *malloc_func(
             size_t size, impl::engine_t *eng, graph::allocator_t *alc) {

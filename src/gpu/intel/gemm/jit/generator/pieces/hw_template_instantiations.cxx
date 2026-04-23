@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -31,6 +31,8 @@ REG_XEHPC_ISA(template class Generator<HW::XeHPC>);
 REG_XE2_ISA(template class Generator<HW::Xe2>);
 #elif defined(DNNL_GPU_ISA_XE3)
 REG_XE3_ISA(template class Generator<HW::Xe3>);
+#elif defined(DNNL_GPU_ISA_XE3P)
+REG_XE3P_ISA(template class Generator<HW::Xe3p>);
 #else
 // Default to instantiating all classes
 REG_XELP_ISA(template class Generator<HW::Gen12LP>);
@@ -39,4 +41,5 @@ REG_XEHPG_ISA(template class Generator<HW::XeHPG>);
 REG_XEHPC_ISA(template class Generator<HW::XeHPC>);
 REG_XE2_ISA(template class Generator<HW::Xe2>);
 REG_XE3_ISA(template class Generator<HW::Xe3>);
+REG_XE3P_ISA(template class Generator<HW::Xe3p>);
 #endif

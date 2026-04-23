@@ -1,7 +1,7 @@
 /*******************************************************************************
-* Copyright 2022-2023 Intel Corporation
+* Copyright 2022 Intel Corporation
 * Copyright 2023-2025 FUJITSU LIMITED
-* Copyright 2024-2025 Arm Ltd. and affiliates
+* Copyright 2024-2026 Arm Ltd. and affiliates
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -41,7 +41,7 @@ enum {
     undefined,
 };
 
-impl::data_type_t get_accum_datatype(brgemm_t *brg) {
+impl::data_type_t get_accum_datatype(brgemm_desc_t *brg) {
     // this assert should check if 'init_kernel_datatype()' was previously
     // called.
     assert(brg->is_int8 || brg->is_bf16 || brg->is_f32 || brg->is_f16);
@@ -49,20 +49,21 @@ impl::data_type_t get_accum_datatype(brgemm_t *brg) {
 }
 
 status_t init_kernel_datatype(
-        brgemm_t *brg, impl::data_type_t dt_a, impl::data_type_t dt_b) {
+        brgemm_desc_t *brg, impl::data_type_t dt_a, impl::data_type_t dt_b) {
     if (!(dt_a != data_type::undef && dt_b != data_type::undef))
         return status::unimplemented;
     brg->is_int8 = utils::one_of(dt_a, data_type::u8, data_type::s8)
             && utils::one_of(dt_b, data_type::u8, data_type::s8);
     brg->is_bf16 = (dt_a == data_type::bf16) && (dt_b == data_type::bf16);
-    brg->is_f32 = (dt_a == data_type::f32) && (dt_b == data_type::f32);
+    brg->is_f32 = (dt_a == data_type::f32)
+            && utils::one_of(dt_b, data_type::f32, data_type::bf16);
     brg->is_f16 = utils::one_of(data_type::f16, dt_a, dt_b);
     if (!(brg->is_int8 || brg->is_bf16 || brg->is_f32 || brg->is_f16))
         return status::unimplemented;
     return status::success;
 }
 
-void init_common_conf(brgemm_t *brg, brgemm_batch_kind_t type, float alpha,
+void init_common_conf(brgemm_desc_t *brg, brgemm_batch_kind_t type, float alpha,
         float beta, const brgemm_strides_t *strides) {
     brg->beta = beta;
     brg->alpha = alpha;
@@ -85,14 +86,14 @@ void init_common_conf(brgemm_t *brg, brgemm_batch_kind_t type, float alpha,
 
 namespace brgemm_utils {
 
-bool can_dispatch_uker(const brgemm_t *brg) {
+bool can_dispatch_uker(const brgemm_desc_t *brg) {
     return false;
 }
-void maybe_try_bf32(brgemm_t *brg) {
+void maybe_try_bf32(brgemm_desc_t *brg) {
     //
 }
 
-status_t set_isa_impl(brgemm_t *brg) {
+status_t set_isa_impl(brgemm_desc_t *brg) {
     auto is_isa_ok = [&](cpu_isa_t isa) {
         return mayiuse(isa) &&
                 // maybe IMPLICATION(brg->isa_user != isa_undef,
@@ -105,37 +106,34 @@ status_t set_isa_impl(brgemm_t *brg) {
     } else if (brg->is_bf16 && !mayiuse_bf16()) {
         return status::unimplemented;
     } else if (brg->is_f32 || brg->is_bf16 || brg->is_int8) {
-        brg->isa_impl = utils::map(true, isa_undef, is_isa_ok(sve_512), sve_512,
-                is_isa_ok(sve_256), sve_256, is_isa_ok(sve_128), sve_128);
+        brg->isa_impl = utils::map(true, isa_undef, is_isa_ok(sme), sme,
+                is_isa_ok(sve_512), sve_512, is_isa_ok(sve_256), sve_256,
+                is_isa_ok(sve_128), sve_128);
         return status::success;
     }
     return status::success;
 }
 
-void set_brg_vmm(brgemm_t *brg) {
+void set_brg_vmm(brgemm_desc_t *brg) {
 
     brg->is_zmm = mayiuse(sve_512) && is_superset(brg->isa_impl, sve_512);
     brg->is_ymm = !brg->is_zmm && mayiuse(sve_256)
             && is_superset(brg->isa_impl, sve_256);
 }
 
-int calculate_ldb_params(brgemm_t *brg, const int try_ld_block2) {
+int calculate_ldb_params(brgemm_desc_t *brg, const int try_ld_block2) {
     brg->ld_block2 = try_ld_block2;
     brg->ldb2 = brg->ldb / brg->ld_block2;
     brg->ldb2_tail = brg->ldb % brg->ld_block2;
 
     if (brg->ldb2 == 0) brg->ld_block2 = nstl::max(1, brg->ldb2_tail);
-    brg->embd_bcst = brg->is_f32
-            && (brg->ldb2_tail <= 1 && brg->ldb2 == 0)
-            /*only sve512 or more can bcast*/
-            && is_superset(brg->isa_impl, sve_512);
 
     const int adj_ld_block2
             = (brg->ldb2 != 0) ? brg->ld_block2 : brg->ldb2_tail;
     return nstl::max(1, adj_ld_block2);
 }
 
-int calculate_max_bcast_block(brgemm_t *brg, const int adj_ld_block2) {
+int calculate_max_bcast_block(brgemm_desc_t *brg, const int adj_ld_block2) {
 
     constexpr int max_bcst_regs = 1;
     const bool req_compensation = brg->req_s8s8_compensation
@@ -147,8 +145,6 @@ int calculate_max_bcast_block(brgemm_t *brg, const int adj_ld_block2) {
     const int beta_regs = !one_of(brg->beta, 1.f, 0.f);
 
     const int max_isa_regs = isa_num_vregs(brg->isa_impl);
-    // note: the 'adj_ld_block2' already removes the necessary registers
-    // for 'embd_bcst'
     auto max_reg_count = max_isa_regs - max_bcst_regs - beta_regs
             - req_compensation - req_zp_a_comp_pads;
     if (req_zp_a_comp_pads)
@@ -186,7 +182,7 @@ inline size_t data_type_vnni_granularity(data_type_t data_type) {
     }
     return size_t(0); /* should not be reachable */
 }
-status_t brgemm_blocking(brgemm_t *brg) {
+status_t brgemm_blocking(brgemm_desc_t *brg) {
 
     CHECK(set_isa_impl(brg));
     if (brg->isa_impl == isa_undef) return status::unimplemented;
@@ -203,7 +199,7 @@ status_t brgemm_blocking(brgemm_t *brg) {
     // reduce 'ld_block2' to allow a larger 'bd_block'
     const int max_vpad = nstl::max(
             brg->brgattr.max_top_vpad, brg->brgattr.max_bottom_vpad);
-    if (is_superset(brg->isa_impl, sve_256) && max_bcast_block < max_vpad) {
+    if (max_bcast_block < max_vpad) {
         adj_ld_block2 = calculate_ldb_params(brg, 2);
         max_bcast_block = calculate_max_bcast_block(brg, adj_ld_block2);
     }
@@ -241,7 +237,7 @@ status_t brgemm_blocking(brgemm_t *brg) {
     return status::success;
 }
 
-status_t brdgmm_blocking(brgemm_t *brg) {
+status_t brdgmm_blocking(brgemm_desc_t *brg) {
 
     if (brg->isa_impl == isa_undef) return status::unimplemented;
 
@@ -295,7 +291,7 @@ status_t brdgmm_blocking(brgemm_t *brg) {
     return status::success;
 }
 
-status_t init_brgemm_conf(brgemm_t *brg, cpu_isa_t isa,
+status_t init_brgemm_conf(brgemm_desc_t *brg, cpu_isa_t isa,
         brgemm_batch_kind_t type, impl::data_type_t dt_a,
         impl::data_type_t dt_b, brgemm_layout_t layout, float alpha, float beta,
         dim_t LDA, dim_t LDB, dim_t LDC, dim_t M, dim_t N, dim_t K,
@@ -308,6 +304,8 @@ status_t init_brgemm_conf(brgemm_t *brg, cpu_isa_t isa,
     brg->dt_a = brg->is_row_major() ? dt_a : dt_b;
     brg->dt_b = brg->is_row_major() ? dt_b : dt_a;
     CHECK(init_kernel_datatype(brg, brg->dt_a, brg->dt_b));
+
+    if (brg->is_f32 && (dt_b == data_type::bf16)) return status::unimplemented;
 
     brg->dt_c = get_accum_datatype(brg);
     brg->dt_d = brg->dt_c;
@@ -328,10 +326,22 @@ status_t init_brgemm_conf(brgemm_t *brg, cpu_isa_t isa,
     brg->req_s8s8_compensation = (brg->is_int8 && (brg->dt_a == data_type::s8)
             && !isa_has_s8s8(brg->isa_impl));
 
-    brg->LDA = (brg->is_row_major()) ? static_cast<int>(LDA)
-                                     : static_cast<int>(LDB);
-    brg->LDB = (brg->is_row_major()) ? static_cast<int>(LDB)
-                                     : static_cast<int>(LDA);
+    // For gemv, we need both A and B to have contiguous elements in memory.
+    // Therefore, they cannot be blocked, and checking the column order ensures
+    // this for A, as it is only column major when wtag=ba. For B, LDB=1
+    // guarantees contiguous elements for B as LDB > 1 means that B is blocked.
+    brg->is_gemv = (M == 1 && brg->is_col_major()) || (N == 1 && LDB == 1);
+
+    if (brg->is_gemv) {
+        brg->LDA = static_cast<int>(LDA);
+        brg->LDB = static_cast<int>(LDB);
+    } else {
+        brg->LDA = (brg->is_row_major()) ? static_cast<int>(LDA)
+                                         : static_cast<int>(LDB);
+        brg->LDB = (brg->is_row_major()) ? static_cast<int>(LDB)
+                                         : static_cast<int>(LDA);
+    }
+
     brg->LDC = static_cast<int>(LDC);
     brg->LDD = static_cast<int>(LDC);
 
@@ -351,10 +361,18 @@ status_t init_brgemm_conf(brgemm_t *brg, cpu_isa_t isa,
     brg->rd_step = has_no_vnni_compute_instruction
             ? 1
             : data_type_vnni_granularity(brg->dt_b);
+
+    if ((sme == brg->isa_impl)
+            && (!brg->is_f32 || (data_type::f32 != dt_b)
+                    || (data_type::f32 != dt_a)
+                    || ((0.f != brg->beta) && (1.f != brg->beta))
+                    || (1.f != brg->alpha) || (brgemm_addr != brg->type)
+                    || (brgemm_row_major != layout)))
+        return status::unimplemented;
     return status::success;
 }
 
-status_t init_brdgmm_conf(brgemm_t *brg, cpu_isa_t isa,
+status_t init_brdgmm_conf(brgemm_desc_t *brg, cpu_isa_t isa,
         brgemm_batch_kind_t type, impl::data_type_t dt_a,
         impl::data_type_t dt_b, brgemm_layout_t layout, float alpha, float beta,
         dim_t LDA, dim_t LDC, dim_t M, dim_t N,
@@ -382,9 +400,13 @@ status_t init_brdgmm_conf(brgemm_t *brg, cpu_isa_t isa,
         return mayiuse(isa) && one_of(brg->isa_user, isa_undef, isa);
     };
 
-    if (brg->is_f32 || brg->is_bf16) {
+    if (brg->is_f32 || brg->is_bf16 || brg->is_int8) {
         brg->isa_impl = utils::map(true, isa_undef, is_isa_ok(sve_512), sve_512,
                 is_isa_ok(sve_256), sve_256, is_isa_ok(sve_128), sve_128);
+    }
+
+    if (!IMPLICATION(brg->is_bf16, mayiuse_bf16())) {
+        return status::unimplemented;
     }
 
     brg->is_dgmm = true;

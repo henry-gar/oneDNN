@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -185,8 +185,9 @@ std::string string_from_flags(normalization_flags_t flags) {
 
 problem_filter_t::problem_filter_t(const std::string &s) {
     auto parts = split(s, " ");
+    const std::string sep = "=";
     for (auto &part : parts) {
-        auto sub_parts = split(part, "=");
+        auto sub_parts = split(part, sep);
         assert(sub_parts.size() == 2);
         auto &name = sub_parts[0];
         auto &value = sub_parts[1];

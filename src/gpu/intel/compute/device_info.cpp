@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -20,7 +20,7 @@
 
 #include "common/type_helpers.hpp"
 #include "gpu/intel/compute/device_info.hpp"
-#include "gpu/intel/jit/utils/ngen_type_bridge.hpp"
+#include "gpu/intel/jit/utils/type_bridge.hpp"
 #include "gpu/intel/utils.hpp"
 #include "ngen.hpp"
 
@@ -45,6 +45,7 @@ uint64_t get_future_extensions(
         case gpu_arch_t::xe2:
         case gpu_arch_t::xe_hpc:
         case gpu_arch_t::xe3:
+        case gpu_arch_t::xe3p:
             extensions |= (uint64_t)device_ext_t::intel_global_float_atomics;
             extensions
                     |= (uint64_t)device_ext_t::intel_variable_eu_thread_count;
@@ -62,6 +63,40 @@ uint64_t get_future_extensions(
         extensions |= (uint64_t)device_ext_t::future_bf16_cvt;
     }
     return extensions;
+}
+
+status_t device_info_t::init(
+        impl::engine_t *engine, const std::vector<uint8_t> &cache_blob) {
+    if (!cache_blob.empty()) {
+        CHECK(init_from_cache_blob(cache_blob));
+        return init_serialized_device_info(cache_blob);
+    }
+
+    CHECK(init_device_name(engine));
+    CHECK(init_arch(engine));
+    CHECK(init_runtime_version(engine));
+    CHECK(init_extensions(engine));
+    CHECK(init_attributes(engine));
+    fixup_l3_cache_size();
+
+    CHECK(init_attributes_common(engine));
+
+    if (engine->is_cache_blob_supported()) {
+        CHECK(init_serialized_device_info());
+    }
+
+    return status::success;
+}
+
+const ngen::Product &device_info_t::ngen_product(gpu_product_t &product) {
+    static_assert(sizeof(ngen::Product) == sizeof(compute::gpu_product_t),
+            "Can't cast gpu_product_t to ngen::Product");
+    return reinterpret_cast<const ngen::Product &>(product);
+}
+
+ngen::HW device_info_t::ngen_hw() const {
+    ngen::Product p = jit::get_ngen_product(*this);
+    return ngen::getCore(p.family);
 }
 
 int device_info_t::stepping_id() const {
@@ -104,7 +139,11 @@ bool device_info_t::mayiuse_sub_group(int size) const {
         case gpu_arch_t::xe_lp:
         case gpu_arch_t::xe_hp:
         case gpu_arch_t::xe_hpg: return utils::one_of(size, 8, 16, 32);
-        default: return utils::one_of(size, 16, 32);
+        case gpu_arch_t::xe_hpc:
+        case gpu_arch_t::xe2:
+        case gpu_arch_t::xe3:
+        case gpu_arch_t::xe3p: return utils::one_of(size, 16, 32);
+        default: return utils::one_of(size, 32);
     }
 }
 
@@ -140,6 +179,7 @@ int device_info_t::max_eus_per_wg(gpu_arch_t gpu_arch) {
     switch (gpu_arch) {
         case gpu::intel::compute::gpu_arch_t::xe_hpc:
         case gpu::intel::compute::gpu_arch_t::xe2:
+        case gpu::intel::compute::gpu_arch_t::xe3p:
         case gpu::intel::compute::gpu_arch_t::xe3: return 8;
         case gpu::intel::compute::gpu_arch_t::xe_lp:
         case gpu::intel::compute::gpu_arch_t::xe_hp:
@@ -153,6 +193,7 @@ int device_info_t::max_subgroup_size(gpu_arch_t gpu_arch) {
     switch (gpu_arch) {
         case gpu::intel::compute::gpu_arch_t::xe_hpc:
         case gpu::intel::compute::gpu_arch_t::xe2:
+        case gpu::intel::compute::gpu_arch_t::xe3p:
         case gpu::intel::compute::gpu_arch_t::xe3: return 32;
         case gpu::intel::compute::gpu_arch_t::xe_lp:
         case gpu::intel::compute::gpu_arch_t::xe_hp:
@@ -174,6 +215,7 @@ int device_info_t::min_subgroup_size() const {
         case gpu_arch_t::xe_hpg: return 8;
         case gpu_arch_t::xe_hpc:
         case gpu_arch_t::xe2:
+        case gpu_arch_t::xe3p:
         case gpu_arch_t::xe3: return 16;
         default: return 0;
     }
@@ -183,6 +225,7 @@ int device_info_t::max_exec_size(gpu_arch_t gpu_arch) {
     switch (gpu_arch) {
         case gpu::intel::compute::gpu_arch_t::xe_hpc:
         case gpu::intel::compute::gpu_arch_t::xe2:
+        case gpu::intel::compute::gpu_arch_t::xe3p:
         case gpu::intel::compute::gpu_arch_t::xe3: return 128;
         default: return 64;
     }
@@ -216,6 +259,7 @@ int device_info_t::threads_per_eu(gpu_arch_t gpu_arch, bool large_grf_mode) {
         case gpu::intel::compute::gpu_arch_t::xe_hpg:
         case gpu::intel::compute::gpu_arch_t::xe_hpc:
         case gpu::intel::compute::gpu_arch_t::xe2:
+        case gpu::intel::compute::gpu_arch_t::xe3p:
         case gpu::intel::compute::gpu_arch_t::xe3:
             return large_grf_mode ? 4 : 8;
         case gpu::intel::compute::gpu_arch_t::unknown: return 7;
@@ -223,7 +267,9 @@ int device_info_t::threads_per_eu(gpu_arch_t gpu_arch, bool large_grf_mode) {
     return 7;
 }
 
-int device_info_t::max_slm_size(gpu_arch_t gpu_arch) {
+int device_info_t::max_slm_size(gpu_product_t product) {
+    auto family = ngen_product(product).family;
+    auto gpu_arch = jit::convert_ngen_arch_to_dnnl(ngen::getCore(family));
     int slm_size = 0; // SLM size per SS or DSS.
     switch (gpu_arch) {
         case gpu::intel::compute::gpu_arch_t::xe_lp:
@@ -234,26 +280,34 @@ int device_info_t::max_slm_size(gpu_arch_t gpu_arch) {
         case gpu::intel::compute::gpu_arch_t::xe_hpc:
         case gpu::intel::compute::gpu_arch_t::xe2:
         case gpu::intel::compute::gpu_arch_t::xe3: slm_size = (1 << 17); break;
+        case gpu::intel::compute::gpu_arch_t::xe3p:
+            slm_size
+                    = (family == ngen::ProductFamily::NVLP) ? 3 << 16 : 3 << 17;
+            break;
         case gpu::intel::compute::gpu_arch_t::unknown: assert(!"not expected");
     }
     return slm_size;
 }
 
-int device_info_t::max_slm_size_per_tg(gpu_arch_t gpu_arch) {
+int device_info_t::max_slm_size_per_tg(gpu_product_t product) {
+    auto gpu_arch = jit::convert_ngen_arch_to_dnnl(
+            ngen::getCore(ngen_product(product).family));
     switch (gpu_arch) {
         case gpu::intel::compute::gpu_arch_t::xe_hp:
         case gpu::intel::compute::gpu_arch_t::xe_hpg: return (1 << 16);
-        default: return max_slm_size(gpu_arch);
+        default: return max_slm_size(product);
     }
 }
 
 int device_info_t::max_slm_size_per_tg(
-        gpu_arch_t gpu_arch, int tg_size, bool large_grf_mode) {
+        int tg_size, bool large_grf_mode, gpu_product_t product) {
+    auto gpu_arch = jit::convert_ngen_arch_to_dnnl(
+            ngen::getCore(ngen_product(product).family));
     int eus_per_ss = max_eus_per_wg(gpu_arch);
     int tgs_per_ss
             = eus_per_ss * threads_per_eu(gpu_arch, large_grf_mode) / tg_size;
-    int slm_per_tg = max_slm_size(gpu_arch) / tgs_per_ss;
-    return std::min(max_slm_size_per_tg(gpu_arch), slm_per_tg);
+    int slm_per_tg = max_slm_size(product) / tgs_per_ss;
+    return std::min(max_slm_size_per_tg(product), slm_per_tg);
 }
 
 size_t device_info_t::icache_size() const {
@@ -264,6 +318,7 @@ size_t device_info_t::icache_size() const {
         case gpu::intel::compute::gpu_arch_t::xe_hpc: return 80 * 1024;
         case gpu::intel::compute::gpu_arch_t::xe2: return 96 * 1024;
         case gpu::intel::compute::gpu_arch_t::xe3: return 96 * 1024;
+        case gpu::intel::compute::gpu_arch_t::xe3p: return 80 * 1024;
         case gpu::intel::compute::gpu_arch_t::unknown: assert(!"not expected");
     }
     return 0;
@@ -320,6 +375,7 @@ status_t device_info_t::init_serialized_device_info(
     serialized_device_info_.append(mayiuse_ngen_kernels_);
     serialized_device_info_.append(mayiuse_system_memory_allocators_);
     serialized_device_info_.append(mayiuse_non_uniform_work_groups_);
+    serialized_device_info_.append(is_efficient_64bit_);
 
     const size_t name_size = name_.size();
     serialized_device_info_.append(name_size);
@@ -360,6 +416,7 @@ status_t device_info_t::init_from_cache_blob(
     DESERIALIZE(mayiuse_ngen_kernels_, bool);
     DESERIALIZE(mayiuse_system_memory_allocators_, bool);
     DESERIALIZE(mayiuse_non_uniform_work_groups_, bool);
+    DESERIALIZE(is_efficient_64bit_, bool);
 #undef DESERIALIZE
 
     // name_ is not trivially copyable type

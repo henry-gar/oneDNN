@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -55,8 +55,8 @@ static void adjust_lws_calc_kernel(int ic_block, nhwc_params_t &conf,
     auto max_lws = intel_engine->device_info()->max_wg_size(large_grf_mode);
     auto eus_per_ss = intel_engine->device_info()->max_eus_per_wg();
     const int max_ss = div_up(eu_count, eus_per_ss);
-    auto gpu_arch = intel_engine->device_info()->gpu_arch();
-    const int max_slm_size = compute::device_info_t::max_slm_size(gpu_arch);
+    const int max_slm_size = compute::device_info_t::max_slm_size(
+            intel_engine->device_info()->gpu_product());
 
     auto generated_nd = dispatch.nd_range();
     const compute::range_t &base_gws = generated_nd.global_range();
@@ -201,6 +201,7 @@ static status_t init_conf_common(nhwc_params_t &conf, offsets_t &off,
     conf.impl = impl_t::nhwc_opt;
     init_conf_basic(conf, pd);
     set_offsets(data_mdw, off.src_off);
+    conf.require_stateless_addressing = pd->has_large_buffers();
 
     // TODO: create flags() accessor that returns the correct type
     conf.flags = (normalization_flags_t)pd->desc()->flags;
@@ -302,6 +303,7 @@ static status_t init_kernel_ctx_common(compute::kernel_ctx_t &kernel_ctx,
         const compute::dispatch_t &dispatch_reduce_stat,
         const compute::dispatch_t &dispatch,
         const compute::dispatch_t &dispatch_reduce_aux, const offsets_t &off) {
+    kernel_ctx.require_stateless_addressing(conf.require_stateless_addressing);
     kernel_ctx.set_data_type(conf.data_type);
 
     kernel_ctx.define_int("NDIMS", conf.ndims);

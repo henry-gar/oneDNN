@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -16,8 +16,8 @@
 
 #include "gpu/intel/conv/jit/problem.hpp"
 #include "gpu/intel/jit/ir/block_2d_utils.hpp"
-#include "gpu/intel/jit/ir/fma.hpp"
 #include "gpu/intel/jit/ir/hw.hpp"
+#include "gpu/intel/jit/ir/legacy.hpp"
 #include "gpu/intel/jit/ir/tensor_config.hpp"
 
 namespace dnnl {
@@ -271,7 +271,7 @@ const memory_desc_t &problem_t::c_md() const {
             conv_pd->invariant_dst_md());
 }
 
-status_t problem_t::init_abc_data_types(const hw_t &hw) {
+status_t problem_t::init_abc_data_types(const dsl::hw_t &hw) {
     a_data_type = pick_a(src_data_type, wei_data_type, dst_data_type);
     b_data_type = pick_b(src_data_type, wei_data_type, dst_data_type);
     // Always use f32 for accumulation/storing in the main kernel.
@@ -288,21 +288,21 @@ status_t problem_t::init_abc_data_types(const hw_t &hw) {
                 = gpu_utils::dev_getenv("use_matching_fpmath", false);
         if (use_matching_fpmath
                 && attr->mayiconvert(data_type::f32, data_type::bf16)
-                && get_supported_fma_kind(
-                           hw, data_type::bf16, data_type::bf16, data_type::f32)
+                && get_supported_fma_kind(hw, dsl::type_t::bf16(),
+                           dsl::type_t::bf16(), dsl::type_t::f32())
                         != fma_kind_t::undef) {
             a_data_type = data_type::bf16;
             b_data_type = data_type::bf16;
         } else if (use_matching_fpmath
                 && attr->mayiconvert(data_type::f32, data_type::f16)
-                && get_supported_fma_kind(
-                           hw, data_type::f16, data_type::f16, data_type::f32)
+                && get_supported_fma_kind(hw, dsl::type_t::f16(),
+                           dsl::type_t::f16(), dsl::type_t::f32())
                         != fma_kind_t::undef) {
             a_data_type = data_type::f16;
             b_data_type = data_type::f16;
         } else if (attr->mayiconvert(data_type::f32, data_type::tf32)
-                && get_supported_fma_kind(
-                           hw, data_type::tf32, data_type::tf32, data_type::f32)
+                && get_supported_fma_kind(hw, dsl::type_t::tf32(),
+                           dsl::type_t::tf32(), dsl::type_t::f32())
                         != fma_kind_t::undef) {
             a_data_type = data_type::tf32;
             b_data_type = data_type::tf32;
@@ -345,23 +345,28 @@ bool problem_t::with_sum_post_op() const {
     return post_ops.find(primitive_kind::sum) != -1;
 }
 
-void problem_t::init_transpose(const hw_t &hw) {
+void problem_t::init_transpose(const dsl::hw_t &hw) {
     bool is_dw = (g > 1) && (oc == 1) && (ic == 1);
     bool wei_any
             = (conv_pd->invariant_wei_md()->format_kind == format_kind::any);
     bool has_zp = !attr->zero_points_.has_default_values();
-    bool allow_fwd = (mb <= 8 && oc <= 3 && ic <= 3 && kw <= 2)
-            || (oc <= 2 && ic <= 2);
-    bool allow_bwd_d = (mb <= 8 && oc <= 3 && ic <= 3);
-    bool allow_bwd_w = (mb <= 8 && oc <= 3 && ic >= 16);
-    ab_swap_transpose = wei_any && !is_dw && !has_zp;
-    if (is_fwd) ab_swap_transpose &= allow_fwd;
-    if (is_bwd_d) ab_swap_transpose &= allow_bwd_d;
-    if (is_bwd_w) ab_swap_transpose &= allow_bwd_w;
-    if (is_fwd && is_nchw_ok(*this, hw, tensor_kind_t::src))
-        ab_swap_transpose = true;
-    if (is_bwd_d && is_nchw_ok(*this, hw, tensor_kind_t::dst))
-        ab_swap_transpose = true;
+    if (!is_dw && !has_zp) {
+        if (is_fwd) {
+            bool allow = (mb <= 8 && oc <= 3 && ic <= 3 && kw <= 2)
+                    || (oc <= 2 && ic <= 2);
+            ab_swap_transpose = wei_any && allow;
+            if (is_nchw_ok(*this, hw, tensor_kind_t::src))
+                ab_swap_transpose = true;
+        } else if (is_bwd_d) {
+            bool allow = (mb <= 8 && oc <= 3 && ic <= 3);
+            ab_swap_transpose = wei_any && allow;
+            if (is_nchw_ok(*this, hw, tensor_kind_t::dst))
+                ab_swap_transpose = true;
+        } else if (is_bwd_w) {
+            bool allow = (mb <= 8 && oc <= 3 && ic >= 16);
+            ab_swap_transpose = wei_any && allow;
+        }
+    }
     ab_swap_transpose
             = gpu_utils::dev_getenv("ab_swap_transpose", ab_swap_transpose);
 }
@@ -434,17 +439,17 @@ pvar_t to_gemm(const pvar_t &d, prop_kind_t prop, bool is_transpose) {
     };
     auto pick
             = [&](const pvar_t &fwd, const pvar_t &bwd_d, const pvar_t &bwd_w) {
-                  if (is_transpose) {
-                      if (is_fwd) return transpose_gemm(fwd);
-                      if (is_bwd_d) return transpose_gemm(bwd_d);
-                      if (is_bwd_w) return transpose_gemm(bwd_w);
-                  }
-                  if (is_fwd) return fwd;
-                  if (is_bwd_d) return bwd_d;
-                  if (is_bwd_w) return bwd_w;
-                  gpu_error_not_expected();
-                  return pvar_t();
-              };
+        if (is_transpose) {
+            if (is_fwd) return transpose_gemm(fwd);
+            if (is_bwd_d) return transpose_gemm(bwd_d);
+            if (is_bwd_w) return transpose_gemm(bwd_w);
+        }
+        if (is_fwd) return fwd;
+        if (is_bwd_d) return bwd_d;
+        if (is_bwd_w) return bwd_w;
+        gpu_error_not_expected();
+        return pvar_t();
+    };
     if (d == pvars::g) return pvars::b;
     if (d == pvars::mb) return pick(pvars::m, pvars::m, pvars::k);
     if (d == pvars::oc) return pick(pvars::n, pvars::k, pvars::n);
@@ -489,7 +494,7 @@ std::string get_plain_user_tag(
             }
         }
     } else {
-        for (auto *t : {"axb", "abx"}) {
+        for (std::string t : {"axb", "abx"}) {
             if (matches_tag(md, t)) return t;
         }
     }

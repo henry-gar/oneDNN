@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -436,7 +436,7 @@ status_t jit_xf16_sum_t<src_data_type, dst_data_type, isa>::execute(
     const dim_t num_blocks = nelems / num_elems_in_block;
     const dim_t tail = nelems % num_elems_in_block;
 
-    parallel(0, [&](const int ithr, const int nthr) {
+    parallel(0, [= COMPAT_THIS_CAPTURE](const int ithr, const int nthr) {
         dim_t start {0}, end {0};
         balance211(num_blocks, nthr, ithr, start, end);
         auto arg = jit_sum_call_t();

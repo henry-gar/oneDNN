@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -249,22 +249,26 @@ status_t xe_t::pd_t::init_conf(impl::engine_t *engine) {
         const int subgroup_size = 16;
         const dim_t last_dim = dst_d.dims()[ndims - 1];
         int rem = last_dim % subgroup_size;
+        dim_t rounded_last_dim = utils::rnd_up(last_dim, (dim_t)subgroup_size);
         if (rem) { conf.has_tail = 1; }
-        conf.nvect = subgroup_size;
-        bool all_dims_broadcast = true;
 
+        // When last_dim is not a multiple of 16, block reads span across
+        // row boundaries. This is only safe when src1 is fully broadcast
+        // (read as scalar), otherwise src1 block reads go OOB.
+        bool all_dims_broadcast = true;
         for (int i = 0; i < ndims; i++) {
             if (src1_d.dims()[i] != 1) all_dims_broadcast = false;
         }
-
         VDISPATCH_BINARY_IC(!rem || all_dims_broadcast, VERBOSE_BAD_PARAM,
                 "tail processing fail");
-        dim_t rounded_last_dim = utils::rnd_up(last_dim, subgroup_size);
+
+        conf.nvect = subgroup_size;
 
         dim_t mixed_dim = 1;
         for (int i = 0; i < (ndims - 1); ++i) {
             mixed_dim *= dst_d.dims()[i];
         }
+
         VDISPATCH_BINARY_IC(!rem || (mixed_dim * last_dim) % subgroup_size != 0,
                 VERBOSE_BAD_PARAM, "bad tail processing fail");
 
@@ -285,7 +289,7 @@ status_t xe_t::pd_t::init_conf(impl::engine_t *engine) {
 }
 
 status_t xe_t::pd_t::init_kernel_ctx(compute::kernel_ctx_t &kernel_ctx) const {
-    def_binary_alg_kinds(kernel_ctx);
+    kernel_ctx.require_stateless_addressing(has_large_buffers());
     kernel_ctx.define_int("BINARY_ALG", conf.alg);
     kernel_ctx.define_int(
             "IS_TERNARY", (conf.alg == alg_kind::binary_select) ? 1 : 0);
@@ -298,6 +302,14 @@ status_t xe_t::pd_t::init_kernel_ctx(compute::kernel_ctx_t &kernel_ctx) const {
     kernel_ctx.define_int("IS_XA16B", conf.isXa16b);
     kernel_ctx.define_int("MB_BLOCK", conf.mb_block);
     kernel_ctx.define_int("HAS_TAIL", conf.has_tail);
+    if (conf.has_tail && conf.is_plain_layout) {
+        const memory_desc_wrapper dst_d(dst_md());
+        dim_t total_elems = 1;
+        for (int i = 0; i < dst_d.ndims(); i++) {
+            total_elems *= dst_d.dims()[i];
+        }
+        kernel_ctx.define_int("TOTAL_ELEMS", total_elems);
+    }
     kernel_ctx.define_int("SAME_SRC_DT", conf.same_src_dt);
     kernel_ctx.define_int("IS_SRC1_BROADCAST", conf.is_src1_broadcast);
     kernel_ctx.define_int("IS_SRC0_BLOCKED", conf.is_src0_blocked);

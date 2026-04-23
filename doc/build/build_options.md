@@ -13,7 +13,7 @@ oneDNN supports the following build-time options.
 | ONEDNN_BUILD_EXAMPLES           | **ON**, OFF                                         | Controls building the examples                                                                                     |
 | ONEDNN_BUILD_TESTS              | **ON**, OFF                                         | Controls building the tests                                                                                        |
 | ONEDNN_BUILD_GRAPH              | **ON**, OFF                                         | Controls building graph component                                                                                  |
-| ONEDNN_ENABLE_GRAPH_DUMP        | ON, **OFF**                                         | Controls dumping graph artifacts                                                                                   |
+| ONEDNN_ENABLE_GRAPH_DUMP        | **ON**, OFF                                         | Controls dumping graph artifacts                                                                                   |
 | ONEDNN_ARCH_OPT_FLAGS           | *compiler flags*                                    | Specifies compiler optimization flags (see warning note below)                                                     |
 | ONEDNN_ENABLE_CONCURRENT_EXEC   | ON, **OFF**                                         | Disables sharing a common scratchpad between primitives in #dnnl::scratchpad_mode::library mode                    |
 | ONEDNN_ENABLE_JIT_PROFILING     | **ON**, OFF                                         | Enables [integration with performance profilers](@ref dev_guide_profilers)                                         |
@@ -27,6 +27,7 @@ oneDNN supports the following build-time options.
 | ONEDNN_ENABLE_PRIMITIVE_GPU_ISA | **ALL**, GPU_ISA_NAME                               | Specifies a set of functionality to be available for GPU backend based on GPU ISA                                  |
 | ONEDNN_ENABLE_GEMM_KERNELS_ISA  | **ALL**, NONE, ISA_NAME                             | Specifies a set of functionality to be available for GeMM kernels for CPU backend based on ISA                     |
 | ONEDNN_EXPERIMENTAL             | ON, **OFF**                                         | Enables [experimental features](@ref dev_guide_experimental)                                                       |
+| ONEDNN_SAFE_RBP                 | ON, **OFF**                                         | Enables restriction for JIT kernels to pollute RBP vector register content                                         |
 | ONEDNN_VERBOSE                  | **ON**, OFF                                         | Enables [verbose mode](@ref dev_guide_verbose)                                                                     |
 | ONEDNN_DEV_MODE                 | ON, **OFF**                                         | Enables internal tracing and `debuginfo` logging in verbose output (for oneDNN developers)                         |
 | ONEDNN_AARCH64_USE_ACL          | ON, **OFF**                                         | Enables integration with Arm Compute Library for AArch64 builds                                                    |
@@ -139,6 +140,14 @@ AVX2 sets, but removes AVX512 and AMX kernels:
 -DONEDNN_ENABLE_GEMM_KERNELS_ISA=AVX2
 ```
 
+#### ONEDNN_SAFE_RBP
+Supported exclusively on x64 CPU architectures for BRGEMM-based primitives.
+When enabled (`ON`), this control ensures that JIT-generated kernels preserve
+the RBP register state, preventing corruption of frame pointers. This
+facilitates accurate stack unwinding and profiler trace collection from
+JIT-compiled code regions. Enabling this feature may introduce performance
+overhead due to additional register management.
+
 ### Configuring testing
 
 #### ONEDNN_TEST_SET
@@ -236,28 +245,37 @@ oneDNN has functional limitations if built with TBB:
 
 #### Threadpool
 To build oneDNN with support for threadpool threading, set `ONEDNN_CPU_RUNTIME`
-to `THREADPOOL`
+to `THREADPOOL`:
 
 ~~~sh
 $ cmake -DONEDNN_CPU_RUNTIME=THREADPOOL ..
 ~~~
 
+Threadpool threading support has the same limitations as TBB plus more:
+* As threadpools are attached to streams which are only passed during primitive
+  execution, work decomposition is performed statically at primitive creation
+  time. At the primitive execution time, the threadpool is responsible for
+  balancing this decomposition across available worker threads.
+
+##### Threadpool validation
 The `_ONEDNN_TEST_THREADPOOL_IMPL` CMake variable controls which of the three
-threadpool implementations would be used for testing: `STANDALONE`, `TBB`, or
-`EIGEN`. The latter two require also passing `TBBROOT` or `Eigen3_DIR` paths
-to CMake. For example:
+threadpool implementations would be used for testing: `STANDALONE`, `TBB`,
+`EIGEN`, `EIGEN_ASYNC`.
 
+The `TBB` requires passing `TBBROOT` for CMake to find a package.
+
+The `EIGEN` requires Eigen 5.0 or higher and Abseil-CPP packages to be
+discoverable by CMake.
+
+The `EIGEN_ASYNC` has same requirements as `EIGEN` and additionally requires
+OpenXLA threadpool package, however, additional actions might be required to
+compile tests since this threadpool implementation relies on internal OpenXLA
+headers.
+
+For example:
 ~~~sh
-$ cmake -DONEDNN_CPU_RUNTIME=THREADPOOL -D_ONEDNN_TEST_THREADPOOL_IMPL=EIGEN -DEigen3_DIR=/path/to/eigen/share/eigen3/cmake ..
+$ cmake -DONEDNN_CPU_RUNTIME=THREADPOOL -D_ONEDNN_TEST_THREADPOOL_IMPL=EIGEN -DCMAKE_PREFIX_PATH="/path/to/eigen/share/eigen3/cmake;/path/to/absl/lib64/cmake" ..
 ~~~
-
-Threadpool threading support is experimental and has the same limitations as
-TBB plus more:
-* As threadpools are attached to streams which are only passed during
-  primitive execution, work decomposition is performed statically at the
-  primitive creation time. At the primitive execution time, the threadpool is
-  responsible for balancing the static decomposition from the previous item
-  across available worker threads.
 
 ### AArch64 Options
 
@@ -309,7 +327,7 @@ subject to change without notice, see
 for details.
 
 ## GPU Options
-Intel Processor Graphics is supported by oneDNN GPU engine. GPU engine
+Intel Graphics is supported by oneDNN GPU engine. GPU engine
 is disabled in the default build configuration.
 
 ### Runtimes
@@ -317,9 +335,9 @@ To enable GPU support you need to specify the GPU runtime by setting
 `ONEDNN_GPU_RUNTIME` CMake option. The default value is `"NONE"` which
 corresponds to no GPU support in the library.
 
-#### OpenCL\*
-OpenCL runtime requires Intel(R) SDK for OpenCL\* applications. You can
-explicitly specify the path to the SDK using `-DOPENCLROOT` CMake option.
+#### OpenCL
+Building oneDNN with OpenCL runtime requires an OpenCL SDK. You can
+explicitly specify the path to the SDK using CMake option `-DOPENCLROOT`.
 
 ~~~sh
 $ cmake -DONEDNN_GPU_RUNTIME=OCL -DOPENCLROOT=/path/to/opencl/sdk ..

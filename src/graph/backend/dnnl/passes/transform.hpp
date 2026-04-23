@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright 2021-2025 Intel Corporation
+ * Copyright 2021 Intel Corporation
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -47,6 +47,8 @@ status_t replace_quant_data_with_binary_post_op(
         std::shared_ptr<subgraph_t> &sg);
 
 status_t fuse_post_ops(std::shared_ptr<subgraph_t> &sg);
+
+status_t fuse_dropout(std::shared_ptr<subgraph_t> &sg);
 
 // This pass is only used in the sdpa decompose kernel and handle matmul post
 // op. There is no any limit for matmul+post_binary about dims broadcast like
@@ -299,6 +301,17 @@ status_t fuse_implicit_causal_mask(std::shared_ptr<subgraph_t> &sg);
 
 /// This pass will transform the sdpa subgraph into a dnnl_sdpa op.
 status_t fuse_sdpa(std::shared_ptr<subgraph_t> &sg);
+/// This pass will transform the sdpa bwd subgraph into a dnnl_sdpa_bwd op.
+status_t fuse_sdpa_bwd(std::shared_ptr<subgraph_t> &sg);
+
+/// This pass will transform the gated mlp subgraph into a _gated_mlp op.
+status_t fuse_gated_mlp(std::shared_ptr<subgraph_t> &sg);
+
+/// This pass will decompose the softmax with stats output into a normal softmax
+/// without stats output and some small ops to compute the stats.
+/// The main reason for this pass is that the current implementation
+/// of softmax primitive doesn't support stats.
+status_t decompose_softmax_with_stats(std::shared_ptr<subgraph_t> &sg);
 
 } // namespace dnnl_impl
 } // namespace graph

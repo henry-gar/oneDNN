@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2024-2025 Intel Corporation
+* Copyright 2024 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -16,10 +16,13 @@
 
 /// @example cpu_brgemm.cpp
 /// > Annotated version: @ref cpu_brgemm_example_cpp
-///
-/// @page cpu_brgemm_example_cpp BRGeMM ukernel example
-/// This C++ API example demonstrates how to create and execute a BRGeMM
+
+/// @page cpu_brgemm_example_cpp_brief
+/// @brief This C++ API example demonstrates how to create and execute a BRGeMM
 /// ukernel.
+
+/// @page cpu_brgemm_example_cpp BRGeMM ukernel example
+/// \copybrief cpu_brgemm_example_cpp_brief
 ///
 /// @include cpu_brgemm.cpp
 
@@ -118,9 +121,9 @@ void brgemm_example() {
     // Initialize binary_add.
     std::generate(
             binary_add_user_data.begin(), binary_add_user_data.end(), []() {
-                static int i = 3;
-                return i++ % 6;
-            });
+        static int i = 3;
+        return i++ % 6;
+    });
     // Initialize B scales.
     std::generate(B_scales_user_data.begin(), B_scales_user_data.end(), []() {
         static int i = 4;

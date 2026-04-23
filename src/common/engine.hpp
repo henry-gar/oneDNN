@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2016-2024 Intel Corporation
+* Copyright 2016 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -113,23 +113,27 @@ struct dnnl_engine : public dnnl::impl::c_compatible {
      * a NULL-terminated list */
     virtual const dnnl::impl::impl_list_item_t *get_reorder_implementation_list(
             const dnnl::impl::memory_desc_t *src_md,
-            const dnnl::impl::memory_desc_t *dst_md) const = 0;
+            const dnnl::impl::memory_desc_t *dst_md) const
+            = 0;
 
     /** return the list of concat implementations. engine guarantees to return
      * a NULL-terminated list */
     virtual const dnnl::impl::impl_list_item_t *
-    get_concat_implementation_list() const = 0;
+    get_concat_implementation_list() const
+            = 0;
 
     /** return the list of sum implementations. engine guarantees to return
      * a NULL-terminated list */
     virtual const dnnl::impl::impl_list_item_t *
-    get_sum_implementation_list() const = 0;
+    get_sum_implementation_list() const
+            = 0;
 
     /** return the list of implementations for a given descriptor.
      * engine guarantees to return a NULL-terminated list */
 
     virtual const dnnl::impl::impl_list_item_t *get_implementation_list(
-            const dnnl::impl::op_desc_t *desc) const = 0;
+            const dnnl::impl::op_desc_t *desc) const
+            = 0;
 
     virtual dnnl::impl::status_t serialize_device(
             dnnl::impl::serialization_stream_t &sstream) const {
@@ -146,6 +150,15 @@ struct dnnl_engine : public dnnl::impl::c_compatible {
             size_t size, uint8_t *cache_blob) const {
         assert(!"unexpected");
         return dnnl::impl::status::runtime_error;
+    }
+
+    bool is_cache_blob_supported() const {
+        if (kind() != dnnl::impl::engine_kind::gpu) return false;
+        if (!dnnl::impl::utils::one_of(runtime_kind(),
+                    dnnl::impl::runtime_kind::ocl,
+                    dnnl::impl::runtime_kind::ze))
+            return false;
+        return true;
     }
 
     virtual bool mayiuse_system_memory_allocators() const { return false; }
@@ -185,6 +198,8 @@ inline runtime_kind_t get_default_runtime(engine_kind_t kind) {
     if (kind == engine_kind::gpu) return runtime_kind::ocl;
 #elif DNNL_GPU_RUNTIME == DNNL_RUNTIME_SYCL
     if (kind == engine_kind::gpu) return runtime_kind::sycl;
+#elif DNNL_GPU_RUNTIME == DNNL_RUNTIME_ZE
+    if (kind == engine_kind::gpu) return runtime_kind::ze;
 #endif
 #if DNNL_CPU_RUNTIME == DNNL_RUNTIME_SEQ
     return runtime_kind::seq;

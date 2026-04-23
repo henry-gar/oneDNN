@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2024-2025 Intel Corporation
+* Copyright 2024 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -17,10 +17,12 @@
 /// @example vanilla_rnn.cpp
 /// > Annotated version: @ref vanilla_rnn_example_cpp
 
+/// @page vanilla_rnn_example_cpp_brief
+/// @brief This C++ API example demonstrates how to create and execute a
+/// [Vanilla RNN](@ref dev_guide_rnn) primitive in forward training propagation mode.
+
 /// @page vanilla_rnn_example_cpp Vanilla RNN Primitive Example
-/// This C++ API example demonstrates how to create and execute a
-/// [Vanilla RNN](@ref dev_guide_rnn) primitive in forward training propagation
-/// mode.
+/// \copybrief vanilla_rnn_example_cpp_brief
 ///
 /// Key optimizations included in this example:
 /// - Creation of optimized memory format from the primitive descriptor.

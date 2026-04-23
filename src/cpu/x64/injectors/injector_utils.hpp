@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -95,7 +95,7 @@ public:
     inline jit_generator_t &jit() const { return jit_; }
     inline bool ExtendedRegisters() const {
         return is_superset(isa_, avx512_core)
-                && (mayiuse(avx10_2_512) || mayiuse(avx10_2_512_amx_2));
+                && (mayiuse(avx10_2) || mayiuse(avx10_2_amx_2));
     }
 
     inline int Size() const { return size_; }
@@ -123,8 +123,16 @@ class reg64_savable_t : public Xbyak::Reg64 {
 public:
     DNNL_DISALLOW_COPY_AND_ASSIGN(reg64_savable_t);
 
-    reg64_savable_t(
-            registry_scratchpad_t &regscratchpad, const Xbyak::Reg64 &reg);
+    // base constructor
+    reg64_savable_t(registry_scratchpad_t &regscratchpad,
+            const Xbyak::Reg64 &reg, bool is_storable = true);
+
+    // This constructor provides conditional substitution:
+    // choose a different register when a condition is met
+    // (e.g., to avoid booking scratchpad by using a truly free register).
+    reg64_savable_t(registry_scratchpad_t &regscratchpad,
+            const Xbyak::Reg64 &reg, const Xbyak::Reg64 &alternative_reg,
+            bool use_alternative);
 
     // This constructor is used to utilize extended registers (e.g. r16-r31).
     // If second register is provided and the ISA allows using extended registers
@@ -164,7 +172,7 @@ public:
     reg64_savable_backup_t(
             const reg64_savable_t &other, const Xbyak::Reg64 &ext_reg)
         : reg64_savable_t(other.regscratchpad_,
-                other.regscratchpad_.ExtendedRegisters() ? ext_reg : other)
+                  other.regscratchpad_.ExtendedRegisters() ? ext_reg : other)
         , other_(other) {}
 
     void save() const override { other_.saveTo(*this); }

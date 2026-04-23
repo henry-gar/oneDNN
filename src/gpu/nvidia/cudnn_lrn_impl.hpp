@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2022 Intel Corporation
+* Copyright 2020 Intel Corporation
 * Copyright 2020 Codeplay Software Limited
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
@@ -42,7 +42,8 @@ struct cudnn_lrn_impl_base_t {
     }
     virtual status_t init(const lrn_pd_t *pd) = 0;
     virtual void execute(
-            cudnnHandle_t handle, const std::vector<void *> &args) const = 0;
+            cudnnHandle_t handle, const std::vector<void *> &args) const
+            = 0;
 
 protected:
     enum io { src_idx = 0, dst_idx, d_src_idx, d_dst_idx, NUM_IO };

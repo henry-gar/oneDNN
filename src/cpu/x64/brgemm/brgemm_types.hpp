@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -72,6 +72,12 @@ typedef enum {
     brgemm_prf2,
     brgemm_prfNTA,
 } brgemm_kernel_prefetching_t;
+
+typedef enum {
+    brgemm_prfw_default = 0,
+    brgemm_prfw_store,
+    brgemm_prfw_loop_store,
+} brgemm_kernel_prefetchw_t;
 
 typedef enum {
     brgemm_innermost_undef = 0,
@@ -170,6 +176,8 @@ struct DNNL_API brgemm_attr_t {
     brgemm_kernel_loop_order_t hint_loop_order;
     brgemm_kernel_prefetching_t hint_prefetching
             = brgemm_kernel_prefetching_t::brgemm_prf_default;
+    brgemm_kernel_prefetchw_t hint_prefetchw
+            = brgemm_kernel_prefetchw_t::brgemm_prfw_default;
     brgemm_prf_t hint_prfA, hint_prfB, hint_prfC;
 
     // This parameter determines how we will read the tail by K dimension from
@@ -362,6 +370,7 @@ struct brgemm_desc_t {
     bool is_runtime_ldd = false;
 
     bool is_gemv = false;
+    bool treat_y_as_row = false;
 
     static constexpr int MAX_VPAD = 100;
     static constexpr int AMX_TILES_NUM = 8;
@@ -369,17 +378,16 @@ struct brgemm_desc_t {
 
     void set_attr(const primitive_attr_t *ppdattr);
     void set_dst_md(const memory_desc_t *pdst_md);
-    const primitive_attr_t *attr() const { return attr_; };
-    const memory_desc_t *dst_md() const { return dst_md_; };
+    const primitive_attr_t *attr() const { return attr_; }
+    const memory_desc_t *dst_md() const { return dst_md_; }
 
     // return 'true' when FP8 MAC is not natively supported by the CPU ISA
     bool is_fp8_via_convert() const {
-        return is_fp8
-                && utils::one_of(isa_impl, avx10_1_512_amx_fp16, avx10_2_512);
+        return is_fp8 && utils::one_of(isa_impl, avx10_1_512_amx_fp16, avx10_2);
     }
 
     bool is_fp8_via_convert_non_amx() const {
-        return is_fp8_via_convert() && isa_impl == avx10_2_512;
+        return is_fp8_via_convert() && isa_impl == avx10_2;
     }
 
     bool is_input_convert() const { return is_bf32 || is_fp8_via_convert(); }
@@ -526,6 +534,15 @@ struct brgemm_desc_t {
                 || with_src_scales || with_wei_scales || with_dst_scales;
     }
 
+    bool can_dispatch_uker() const noexcept {
+        using namespace utils;
+        return is_tmm
+                && one_of(type, brgemm_addr, brgemm_offs, brgemm_static_offs)
+                && brgattr.use_uker
+                && everyone_is(false, is_runtime_lda, is_runtime_ldb,
+                        is_runtime_ldc, is_runtime_ldd);
+    }
+
     bool is_xf16() const noexcept { return is_bf16 || is_f16; }
 
     bool is_f16_b_non_amx_vnni() const {
@@ -567,8 +584,8 @@ struct brgemm_desc_t {
 private:
     primitive_attr_t *attr_ {nullptr};
     memory_desc_t *dst_md_ {nullptr};
-    void set_attr_null() { attr_ = nullptr; };
-    void set_dst_md_null() { dst_md_ = nullptr; };
+    void set_attr_null() { attr_ = nullptr; }
+    void set_dst_md_null() { dst_md_ = nullptr; }
 
     void cleanup_attr();
     void cleanup_dst_md();

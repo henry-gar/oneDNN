@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -39,13 +39,14 @@ void check_correctness(
     for_(const auto &i_stat_tag : s.stat_tag)
     for_(const auto &i_ss_dt : s.ss_dt)
     for_(const auto &i_flags : s.flags)
+    for_(const auto &i_eps : s.eps)
     for_(const auto &i_attr : s.attributes)
     for_(const auto &i_ctx_init : s.ctx_init)
     for_(const auto &i_ctx_exe : s.ctx_exe)
     for (auto i_inplace : s.inplace) {
         const prb_t prb(s.prb_dims, i_tag, i_stat_tag, i_ss_dt, i_dir, i_dt,
-                i_flags, s.check_alg, i_inplace, i_attr, i_ctx_init, i_ctx_exe,
-                s.impl_filter);
+                i_flags, s.check_alg, i_eps, i_inplace, i_attr, i_ctx_init,
+                i_ctx_exe, s.impl_filter);
         if (s.pattern && !match_regex(prb.str(), s.pattern)) return;
 
         task_executor.submit(prb, s.perf_template, createit, checkit, doit);
@@ -55,9 +56,9 @@ void check_correctness(
 int verify_input(const settings_t &s, const settings_t &def) {
     for_(const auto &i_scales : s.scales)
     for (const auto &e : i_scales.scales) {
-        if (e.second.policy != policy_t::COMMON) {
-            BENCHDNN_PRINT(
-                    0, "%s\n", "ERROR: scales support only `common` policy.");
+        if (!e.second.has_single_element()) {
+            BENCHDNN_PRINT(0, "%s\n",
+                    "ERROR: scales support only a single element input.");
             return FAIL;
         }
     }

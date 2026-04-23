@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2022 Intel Corporation
+* Copyright 2021 Intel Corporation
 * Copyright 2022 FUJITSU LIMITED
 * Copyright 2025 Arm Ltd. and affiliates
 *
@@ -774,10 +774,11 @@ jit_io_multi_dt_helper_t<Vmm>::jit_io_multi_dt_helper_t(jit_generator_t *host,
             storage_.emplace(dt,
                     std::make_shared<jit_io_helper_t<Vmm>>(host, isa, dt,
                             io_conf, tail_conf,
-                            store_saturation_needed ? utils::optional_t<
-                                    io_saturation_conf_t> {saturation_conf
-                                                                   ->second}
-                                                    : utils::nullopt,
+                            store_saturation_needed
+                                    ? utils::optional_t<
+                                              io_saturation_conf_t> {saturation_conf
+                                                                             ->second}
+                                    : utils::nullopt,
                             gather_conf));
         }
     }

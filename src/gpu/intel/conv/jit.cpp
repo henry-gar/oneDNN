@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2025 Intel Corporation
+* Copyright 2021 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -114,7 +114,7 @@ public:
             CONV_CHECK(init_kernel_infos(pd));
 
             return status::success;
-        } catch (std::runtime_error &err) {
+        } catch (std::exception &err) {
             return report_runtime_error(pd, engine, err.what());
         }
     }
@@ -145,9 +145,15 @@ public:
             tiler->set_cur_version(primitive->version());
         }
 
+        int desc_idx = gpu_utils::dev_getenv("desc_idx", -1);
         for (int try_iter = 0; try_iter < max_tries; try_iter++) {
-            if (try_iter != 0 && !tiler->is_tuning_mode())
+            if (try_iter < desc_idx) {
                 tiler->move_next(cfg);
+                continue;
+            }
+            if ((try_iter != 0 && !tiler->is_tuning_mode())) {
+                tiler->move_next(cfg);
+            }
             try {
                 cfg = data.pd_cfg;
                 cfg.set_pd(pd);
@@ -191,8 +197,7 @@ public:
                                     make_kernel<reorder::jit::kernel_t>(
                                             primitive,
                                             /*register_kernel=*/false, engine,
-                                            reorder_cfg, "conv_reorder", info,
-                                            cfg.is_dpas_or_dpasw_fma()));
+                                            reorder_cfg, "conv_reorder", info));
                             break;
                         }
                         case kernel_id_t::post_reorder: {
@@ -203,8 +208,7 @@ public:
                                     make_kernel<reorder::jit::kernel_t>(
                                             primitive,
                                             /*register_kernel=*/false, engine,
-                                            reorder_cfg, "conv_reorder", info,
-                                            cfg.is_dpas_or_dpasw_fma()));
+                                            reorder_cfg, "conv_reorder", info));
                             break;
                         }
                         case kernel_id_t::zero_out:
@@ -215,9 +219,7 @@ public:
                             tmp_kernels.push_back(
                                     make_kernel<zero_out_kernel_t>(primitive,
                                             /*register_kernel=*/false, engine,
-                                            cfg.options(), info,
-                                            cfg.is_dpas_or_dpasw_fma(),
-                                            engine));
+                                            cfg.options(), info, engine));
                             break;
 
                         case kernel_id_t::zp_precalc:
@@ -238,7 +240,7 @@ public:
                     return report_runtime_error(pd, engine, err.what());
                 tiler->notify_out_of_registers(cfg);
                 continue;
-            } catch (std::runtime_error &err) {
+            } catch (std::exception &err) {
                 if (handle_exception(try_iter, max_tries))
                     return report_runtime_error(pd, engine, err.what());
                 continue;
@@ -279,10 +281,11 @@ public:
                     CONV_CHECK(primitive->parallel_for(
                             ctx, nd_ranges_[i], kernels_[i], arg_list));
                 } else if (info.id() == kernel_id_t::zp_precalc) {
-                    auto scratchpad_arg = [&](std::unique_ptr<memory_t,
-                                                      memory_deleter_t> &retn,
-                                                  const std::string &name,
-                                                  const memory_desc_t *md) {
+                    auto scratchpad_arg
+                            = [&](std::unique_ptr<memory_t, memory_deleter_t>
+                                              &retn,
+                                      const std::string &name,
+                                      const memory_desc_t *md) {
                         auto s = ctx.get_scratchpad_grantor()
                                          .get_memory_storage(info.key(name));
                         return safe_ptr_assign(
@@ -302,8 +305,10 @@ public:
                     e_args[DNNL_ARG_DST] = memory_arg_t {zp_dst.get(), false};
                     exec_ctx_t e_ctx(ctx, std::move(e_args));
                     const auto nm = memory_tracking::names::key_nested_multiple;
-                    nested_scratchpad_t ns(ctx, nm, zp_prim_);
-                    e_ctx.set_scratchpad_grantor(ns.grantor());
+                    auto *nested_grantor = create_nested_grantor(
+                            ctx.get_scratchpad_grantor(), nm,
+                            zp_prim_->pd()->scratchpad_registry());
+                    e_ctx.set_scratchpad_grantor(nested_grantor);
                     CONV_CHECK(zp_prim_->execute(e_ctx));
                 }
                 nsubmitted++;
@@ -354,14 +359,35 @@ private:
         // Initialize kernel arguments.
         int scratchpad_key = memory_tracking::names::key_none;
         for (auto &t : data.tensor_cfg.tensors()) {
+            auto buf_type = [pd](int key) {
+                if (key & DNNL_ARG_ATTR_ZERO_POINTS) {
+                    key &= ~DNNL_ARG_ATTR_ZERO_POINTS;
+                    auto &zp = pd->attr()->zero_points_;
+                    if (zp.get(key).is_host_scalar()) switch (key) {
+                            case DNNL_ARG_SRC:
+                                return (zp.has_default_values(DNNL_ARG_WEIGHTS))
+                                        ? dsl::type_t::f32()
+                                        : dsl::type_t::s32();
+                            case DNNL_ARG_DST: return dsl::type_t::f32();
+                            default: return to_ir(zp.get(key).get_data_type());
+                        }
+                } else if (key & DNNL_ARG_ATTR_SCALES) {
+                    key &= ~DNNL_ARG_ATTR_SCALES;
+                    auto &sc = pd->attr()->scales_;
+                    if (sc.get(key).is_host_scalar())
+                        return to_ir(sc.get(key).get_data_type());
+                }
+                return dsl::type_t::byte(dsl::type::attr_t::ptr);
+            };
             const bool wei_reorder_precalc = (t.name == "wei")
                     && cfg.zp_cfg().needs_src_reorder_precalc;
             const bool src_conv_precalc = (t.name == "src_zero_points")
                     && cfg.zp_cfg().needs_src_conv_precalc;
 
-            const auto compute_buf = make_buffer(t.name);
             size_t compute_size = size_bytes(t.compute_layout);
             int compute_arg_key = t.arg_key;
+            const auto compute_buf
+                    = var_t::make(buf_type(compute_arg_key), t.name);
 
             if (compute_arg_key == DNNL_ARG_UNDEF) {
                 gpu_assert(!t.needs_reorder);
@@ -370,13 +396,15 @@ private:
                 continue;
             }
 
-            auto add_compute_arg = [&](kernel_info_t &ki, const expr_t &buf,
-                                           bool is_input) {
+            auto add_compute_arg
+                    = [&](kernel_info_t &ki, const expr_t &buf, bool is_input) {
                 if (t.needs_reorder || src_conv_precalc)
                     ki.register_scratchpad_arg(
                             buf, compute_arg_key, is_input, compute_size);
-                else
+                else if (buf.type().is_ptr())
                     ki.register_user_arg(buf, compute_arg_key, is_input);
+                else
+                    ki.register_immediate_arg(buf, expr_t(), compute_arg_key);
             };
             auto scratchpad_book = [&](int key) {
                 pd->scratchpad_registry().registrar().book(into<uint32_t>(key),
@@ -385,8 +413,8 @@ private:
             auto create_zero_out_info = [&]() -> kernel_info_t & {
                 auto &zero_out_info
                         = create_kernel_info(pd, kernel_id_t::zero_out);
-                auto size_var = var_t::make(type_t::u32(), "size");
-                zero_out_info.register_internal_arg(
+                auto size_var = var_t::make(dsl::type_t::u32(), "size");
+                zero_out_info.register_immediate_arg(
                         size_var, into<uint32_t>(compute_size));
                 zero_out_info.set_nd_range(zero_out_kernel_desc_t::nd_range(
                         cfg.simd(), compute_size));

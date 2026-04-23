@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2025 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -62,8 +62,7 @@ struct many_inputs_t : public primitive_t {
         const memory_desc_wrapper data_s(pd()->src_md());
 
         kernel_ctx.set_data_type(data_s.data_type());
-
-        kernel_ctx.define_int("N_ELEMS", data_d.nelems(true));
+        kernel_ctx.require_stateless_addressing(pd()->has_large_buffers());
 
         const int num_arrs = pd()->n_inputs() - 1;
         int N_INPUTS = (num_arrs) % max_num_arrs;

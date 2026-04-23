@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2016-2025 Intel Corporation
+* Copyright 2016 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -271,24 +271,61 @@ dnnl_status_t DNNL_API dnnl_primitive_attr_clone(
 ///     otherwise.
 dnnl_status_t DNNL_API dnnl_primitive_attr_destroy(dnnl_primitive_attr_t attr);
 
-/// Returns probability for output dropout primitive attribute.
+/// Gets dropout primitive attribute.
 ///
 /// @param attr Primitive attributes.
-/// @param dropout_desc Output dropout memory descriptor
+/// @param mask_desc Output memory descriptor for dropout masks. If a default
+///     memory descriptor is returned, the mask values will not be written to
+///     the output memory buffer during the primitive execution.
 /// @returns #dnnl_success on success and a status describing the error
 ///     otherwise.
 dnnl_status_t DNNL_API dnnl_primitive_attr_get_dropout(
-        const_dnnl_primitive_attr_t attr,
-        const_dnnl_memory_desc_t *dropout_desc);
+        const_dnnl_primitive_attr_t attr, const_dnnl_memory_desc_t *mask_desc);
 
-/// Sets probability for output dropout primitive attribute.
+/// Sets dropout primitive attribute.
 ///
 /// @param attr Primitive attributes.
-/// @param dropout_desc Output dropout memory descriptor
+/// @param mask_desc Memory descriptor for dropout masks. If a default memory
+///     descriptor is passed, the mask values will not be written to the output
+///     memory buffer during the primitive execution.
 /// @returns #dnnl_success on success and a status describing the error
 ///     otherwise.
 dnnl_status_t DNNL_API dnnl_primitive_attr_set_dropout(
-        dnnl_primitive_attr_t attr, const_dnnl_memory_desc_t dropout_desc);
+        dnnl_primitive_attr_t attr, const_dnnl_memory_desc_t mask_desc);
+
+/// Gets dropout primitive attribute parameters.
+///
+/// @param attr Primitive attributes.
+/// @param mask_desc Output memory descriptor for dropout masks. If a default
+///     memory descriptor is returned, the mask values will not be written to
+///     the output memory buffer during the primitive execution.
+/// @param seed_dt Output datatype for seed argument.
+/// @param use_offset Output boolean. If true, an offset argument must be passed
+///     at the execution and will be used in random number generation.
+/// @param use_host_scalars Output boolean. If true, probability, seed and
+///     offset arguments are passed as host_scalar memory objects.
+/// @returns #dnnl_success on success and a status describing the error
+///     otherwise.
+dnnl_status_t DNNL_API dnnl_primitive_attr_get_dropout_v2(
+        const_dnnl_primitive_attr_t attr, const_dnnl_memory_desc_t *mask_desc,
+        dnnl_data_type_t *seed_dt, int *use_offset, int *use_host_scalars);
+
+/// Sets dropout primitive attribute parameters.
+///
+/// @param attr Primitive attributes.
+/// @param mask_desc Memory descriptor for dropout masks. If a default memory
+///     descriptor is passed, the mask values will not be written to the output
+///     memory buffer during the primitive execution.
+/// @param seed_dt Datatype for seed argument.
+/// @param use_offset If true, an offset argument must be passed at the
+///     execution and will be used in random number generation.
+/// @param use_host_scalars If true, probability, seed and offset arguments are
+///     passed as host_scalar memory objects.
+/// @returns #dnnl_success on success and a status describing the error
+///     otherwise.
+dnnl_status_t DNNL_API dnnl_primitive_attr_set_dropout_v2(
+        dnnl_primitive_attr_t attr, const_dnnl_memory_desc_t mask_desc,
+        dnnl_data_type_t seed_dt, int use_offset, int use_host_scalars);
 
 /// Returns the floating-point math mode primitive attribute.
 ///
@@ -480,6 +517,35 @@ dnnl_status_t DNNL_API dnnl_primitive_attr_set_scales_v2(
         dnnl_primitive_attr_t attr, int arg, int mask, int ndims,
         const dnnl_dims_t group_dims, dnnl_data_type_t data_type,
         int is_on_host);
+
+/// Sets primitive attributes scaling factors for primitive operations for a
+/// given memory argument. The scaling factors must be passed at execution time
+/// as an argument with index #DNNL_ARG_ATTR_SCALES | arg.
+/// @sa dnnl_primitive_attr_set_scales
+///
+/// @param attr Primitive attributes.
+/// @param arg Parameter argument index as passed to the
+///     dnnl_primitive_execute() call.
+/// @param mask Scaling factors correspondence mask that defines the
+///     correspondence between the tensor dimensions and the @p scales array.
+///     The set i-th bit indicates that a dedicated scaling factor is used for
+///     each index along that dimension. Set the mask to 0 to use a common
+///     scaling factor for the whole tensor.
+/// @param ndims Number of group dimensions.
+/// @param group_dims Scaling factors correspondence groups that define the
+///     correspondence between the tensor dimensions and the scales array.
+///     The group dimensions should only be provided for each logical dimension
+///     that has correspondence mask @p mask set.
+/// @param data_type Scaling factors data_type.
+/// @param is_on_host Indicates whether the scale is a host-side scalar.
+/// @param qmode Quantization mode, can be #dnnl_quantization_mode_static_sazp
+///     or #dnnl_quantization_mode_dynamic_mx
+/// @returns #dnnl_success on success and a status describing the error
+///     otherwise.
+dnnl_status_t DNNL_API dnnl_primitive_attr_set_scales_v3(
+        dnnl_primitive_attr_t attr, int arg, int mask, int ndims,
+        const dnnl_dims_t group_dims, dnnl_data_type_t data_type,
+        int is_on_host, dnnl_quantization_mode_t qmode);
 
 /// Sets primitive attributes zero points for primitive operations for a given
 /// memory argument. The zero points must be passed at execution time
@@ -1078,6 +1144,43 @@ dnnl_status_t DNNL_API dnnl_memory_desc_create_with_coo_encoding(
 dnnl_status_t DNNL_API dnnl_memory_desc_create_with_packed_encoding(
         dnnl_memory_desc_t *memory_desc, int ndims, const dnnl_dims_t dims,
         dnnl_data_type_t data_type, dnnl_dim_t nnz);
+
+#if DNNL_EXPERIMENTAL_GROUPED_MEMORY
+/// Creates a memory descriptor for grouped memory encoding, that
+/// stores multiple independent sub-tensors.
+///
+/// Common use case is Mixture-of-Experts (MoE) workloads where each expert
+/// processes different numbers of tokens.
+///
+/// Memory layout consists of two buffers:
+/// - Buffer 0 (values): Concatenated data [group0 | group1 | ... | groupN-1]
+/// - Buffer 1 (offsets): Cumulative indices [size0, size0 + size1, ...]
+///
+/// Example in the context of MoE:
+/// Below is how to describe 3 experts with token counts [1, 3, 5] and feature dim 256
+/// - Descriptor dims: {9, 256} where 9 is 1 + 3 + 5 (total tokens)
+/// - Variable dimension: 0 (token count varies per expert)
+/// - Group count: 3 (number of experts)
+/// - Values buffer: 9 x 256 elements
+/// - Offsets buffer: [1, 4, 9] (cumulative token counts)
+///
+/// @note
+///     Only s32 offsets are currently supported.
+///
+/// @param memory_desc Output memory descriptor.
+/// @param ndims Number of dimensions for the tensor.
+/// @param dims Array of dimensions representing the overall tensor shape.
+/// @param data_type Elements data type.
+/// @param variable_dim_idx Index of the dimension with variable size per sub-tensor.
+/// @param group_count Number of sub-tensors included.
+/// @param offsets_dt Data type of the offsets array.
+/// @returns #dnnl_success on success and a status describing the error
+///     otherwise.
+dnnl_status_t DNNL_API dnnl_memory_desc_create_with_grouped_encoding(
+        dnnl_memory_desc_t *memory_desc, int ndims, const dnnl_dims_t dims,
+        dnnl_data_type_t data_type, int variable_dim_idx,
+        dnnl_dim_t group_count, dnnl_data_type_t offsets_dt);
+#endif
 
 /// Creates a memory descriptor for a scalar value that resides on the host.
 ///
@@ -3736,7 +3839,8 @@ dnnl_status_t DNNL_API dnnl_resampling_backward_primitive_desc_create(
 ///     #dnnl_reduction_mul, #dnnl_reduction_mean, #dnnl_reduction_norm_lp_max,
 ///     #dnnl_reduction_norm_lp_sum, #dnnl_reduction_norm_lp_power_p_max,
 ///     #dnnl_reduction_norm_lp_power_p_sum.
-/// @param p Algorithm specific parameter.
+/// @param p Algorithm specific parameter. For Lp-norm algorithms, must be a
+///     finite value >= 1.0.
 /// @param eps Algorithm specific parameter.
 /// @param src_desc Source memory descriptor.
 /// @param dst_desc Destination memory descriptor.
@@ -3863,16 +3967,18 @@ dnnl_status_t DNNL_API dnnl_set_jit_profiling_jitdumpdir(const char *dir);
 ///     The ISAs are only partially ordered:
 ///         - SSE41 < AVX < AVX2 < AVX2_VNNI < AVX2_VNNI_2,
 ///         - AVX2 < AVX512_CORE < AVX512_CORE_VNNI < AVX512_CORE_BF16
-///           < AVX10_1_512 < AVX10_2_512,
+///           < AVX10_1_512 < AVX10_2,
 ///         - AVX10_1_512 < AVX10_1_512_AMX < AVX10_1_512_AMX_FP16
-///           < AVX10_2_512_AMX_2,
+///           < AVX10_2_AMX_2,
 ///         - AVX2_VNNI < AVX10_1_512,
-///         - AVX10_2_512 < AVX10_2_512_AMX_2
+///         - AVX10_2 < AVX10_2_AMX_2
 ///
 ///     Aliases:
 ///         - AVX512_CORE_FP16 = AVX10_1_512
 ///         - AVX512_CORE_AMX = AVX10_1_512_AMX
 ///         - AVX512_CORE_AMX_FP16 = AVX10_1_512_AMX_FP16
+///         - AVX10_2_512 = AVX10_2
+///         - AVX10_2_512_AMX_2 = AVX10_2_AMX_2
 ///
 /// @sa @ref dev_guide_cpu_dispatcher_control for more details
 ///

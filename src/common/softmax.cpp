@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2016-2025 Intel Corporation
+* Copyright 2016 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -108,7 +108,7 @@ status_t softmax_attr_check(const softmax_desc_t &desc, const engine_t *engine,
         const data_type_t src_dt = desc.src_desc.data_type;
         const data_type_t dst_dt = desc.dst_desc.data_type;
 
-        auto fwd_attr_mask = smask_t::post_ops;
+        auto fwd_attr_mask = smask_t::post_ops | smask_t::dropout;
 
         const bool is_int8 = utils::one_of(src_dt, s8, u8)
                 || utils::one_of(dst_dt, s8, u8);

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2024 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -115,7 +115,7 @@ public:
         std::vector<uint8_t> report(report_size);
 
         cl_int err;
-        err = clGetEventProfilingInfo(event,
+        err = xpu::ocl::clGetEventProfilingInfo(event,
                 CL_PROFILING_COMMAND_PERFCOUNTERS_INTEL, report_size,
                 report.data(), &out_size);
         if (err != CL_SUCCESS) return 0;

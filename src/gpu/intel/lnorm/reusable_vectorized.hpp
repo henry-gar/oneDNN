@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -77,7 +77,10 @@ struct reusable_vectorized_params_t
     /// Saves the mean and variance to memory
     bool save_stats = false;
 
-    uint8_t padding[3] = {false};
+    /// Check if kernel requires stateless addressing model
+    bool require_stateless_addressing = true;
+
+    uint8_t padding[2] = {false};
 };
 
 struct reusable_vectorized_runtime_params_t {

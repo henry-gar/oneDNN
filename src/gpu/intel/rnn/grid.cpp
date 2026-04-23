@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -29,9 +29,9 @@
 #include "gpu/intel/rnn/grid.hpp"
 
 #include "common/c_types_map.hpp"
-#include "common/gemm_utils.hpp"
 #include "common/type_helpers.hpp"
 #include "gpu/intel/gemm/primitive.hpp"
+#include "gpu/intel/gemm/utils.hpp"
 #include "gpu/intel/primitive_attr.hpp"
 #include "gpu/intel/rnn/config.hpp"
 
@@ -158,6 +158,18 @@ static status_t init_ocl_conf(ocl_conf_t &ocl_conf, const pd_t *pd,
     const memory_desc_wrapper &weights_layer_d = pd->weights_md(0);
     const memory_desc_wrapper &dst_iter_c_d = pd->dst_md(2);
 
+    ocl_conf.require_stateless_addressing = pd->has_large_buffers();
+    ocl_conf.use_int32_offset = true;
+    auto update_use_int32_offset = [&](const memory_desc_t *md) {
+        if (!md || md->format_kind == format_kind::undef) return;
+        if (memory_desc_wrapper(md).nelems(true) > INT32_MAX)
+            ocl_conf.use_int32_offset = false;
+    };
+    for (int i = 0; i < pd->n_inputs(); ++i)
+        update_use_int32_offset(pd->invariant_src_md(i));
+    update_use_int32_offset(pd->invariant_wei_md());
+    for (int i = 0; i < pd->n_outputs(); ++i)
+        update_use_int32_offset(pd->invariant_dst_md(i));
     ocl_conf.src_dt = conf.src_data_type;
     ocl_conf.src_c_dt = src_iter_c_d.data_type();
     ocl_conf.wei_dt = weights_layer_d.data_type();
@@ -206,9 +218,9 @@ static status_t init_ocl_conf(ocl_conf_t &ocl_conf, const pd_t *pd,
             into<int>(ocl_conf.deterministic
                             ? conf.mb
                             : std::min(into<dim_t>(8),
-                                    utils::rnd_up_pow2(
-                                            max_elemwise_threads_per_eu
-                                            / preferred_threads_per_eu))));
+                                      utils::rnd_up_pow2(
+                                              max_elemwise_threads_per_eu
+                                              / preferred_threads_per_eu))));
     ocl_conf.need_bias_atomic_reduce
             = !ocl_conf.is_fwd && ocl_conf.elemwise_bwd_batch_block < conf.mb;
 
@@ -336,6 +348,9 @@ status_t ocl_conf_t::init_kernel_ctx(compute::kernel_ctx_t &kernel_ctx) const {
         CHECK(ocl_attr.set_gpu_attr(gpu_primitive_attr_t(threads_per_eu)));
     ocl_attr.deterministic_ = deterministic;
     kernel_ctx = compute::kernel_ctx_t(&ocl_attr);
+
+    kernel_ctx.use_int32_offset(use_int32_offset);
+    kernel_ctx.require_stateless_addressing(require_stateless_addressing);
 
     kernel_ctx.add_option("-cl-std=CL2.0");
 
@@ -965,14 +980,15 @@ status_t simple_common_t<aprop>::init(impl::engine_t *engine) {
     CHECK(create_kernels(engine, kernels_, kernel_names, pd()->ocl_conf));
 
     bool gemm_ok = utils::everyone_is(status::success,
-            pd()->gemm_layer_fwd_pd_ ? create_nested_primitive(
-                    gemm_layer_fwd_, pd()->gemm_layer_fwd_pd_, engine)
+            pd()->gemm_layer_fwd_pd_ ? create_nested_primitive(gemm_layer_fwd_,
+                                               pd()->gemm_layer_fwd_pd_, engine)
                                      : status::success,
-            pd()->gemm_layer_fwd_src_pd_ ? create_nested_primitive(
-                    gemm_layer_fwd_src_, pd()->gemm_layer_fwd_src_pd_, engine)
-                                         : status::success,
-            pd()->gemm_iter_fwd_pd_ ? create_nested_primitive(
-                    gemm_iter_fwd_, pd()->gemm_iter_fwd_pd_, engine)
+            pd()->gemm_layer_fwd_src_pd_
+                    ? create_nested_primitive(gemm_layer_fwd_src_,
+                              pd()->gemm_layer_fwd_src_pd_, engine)
+                    : status::success,
+            pd()->gemm_iter_fwd_pd_ ? create_nested_primitive(gemm_iter_fwd_,
+                                              pd()->gemm_iter_fwd_pd_, engine)
                                     : status::success);
     switch (aprop) {
         case prop_kind::forward:
@@ -980,7 +996,7 @@ status_t simple_common_t<aprop>::init(impl::engine_t *engine) {
                     && utils::everyone_is(status::success,
                             conf.is_vanilla_gru
                                     ? create_nested_primitive(gemm_iter_fwd_2_,
-                                            pd()->gemm_iter_fwd_2_pd_, engine)
+                                              pd()->gemm_iter_fwd_2_pd_, engine)
                                     : status::success);
             break;
         case prop_kind::backward:
@@ -990,9 +1006,9 @@ status_t simple_common_t<aprop>::init(impl::engine_t *engine) {
                                     pd()->gemm_layer_bwd_pd_, engine),
                             (pd()->gemm_layer_bwd_src_pd_
                                             ? create_nested_primitive(
-                                                    gemm_layer_bwd_src_,
-                                                    pd()->gemm_layer_bwd_src_pd_,
-                                                    engine)
+                                                      gemm_layer_bwd_src_,
+                                                      pd()->gemm_layer_bwd_src_pd_,
+                                                      engine)
                                             : status::success),
                             create_nested_primitive(gemm_iter_bwd_,
                                     pd()->gemm_iter_bwd_pd_, engine),
@@ -1000,20 +1016,22 @@ status_t simple_common_t<aprop>::init(impl::engine_t *engine) {
                                     pd()->gemm_diff_wei_layer_pd_, engine),
                             (pd()->gemm_diff_wei_layer_src_pd_
                                             ? create_nested_primitive(
-                                                    gemm_diff_wei_layer_src_,
-                                                    pd()->gemm_diff_wei_layer_src_pd_,
-                                                    engine)
+                                                      gemm_diff_wei_layer_src_,
+                                                      pd()->gemm_diff_wei_layer_src_pd_,
+                                                      engine)
                                             : status::success),
                             create_nested_primitive(gemm_diff_wei_iter_,
                                     pd()->gemm_diff_wei_iter_pd_, engine),
                             conf.is_vanilla_gru
                                     ? create_nested_primitive(gemm_iter_bwd_2_,
-                                            pd()->gemm_iter_bwd_2_pd_, engine)
+                                              pd()->gemm_iter_bwd_2_pd_, engine)
                                     : status::success,
-                            conf.is_vanilla_gru ? create_nested_primitive(
-                                    gemm_diff_wei_iter_2_,
-                                    pd()->gemm_diff_wei_iter_2_pd_, engine)
-                                                : status::success);
+                            conf.is_vanilla_gru
+                                    ? create_nested_primitive(
+                                              gemm_diff_wei_iter_2_,
+                                              pd()->gemm_diff_wei_iter_2_pd_,
+                                              engine)
+                                    : status::success);
             break;
         default: assert(!"unknown prop_kind"); return status::invalid_arguments;
     }
@@ -1077,12 +1095,13 @@ gemm_sig((simple_common_t<aprop>::gemm_primitive)) {
 
     auto gemm_ctx = gemm::exec_ctx_t(ctx, gemm_args);
 
-    std::unique_ptr<nested_scratchpad_t> ns;
     const auto init_gemm_nested_scratchpad
             = [&](const std::shared_ptr<impl::primitive_t> &gemm, int key) {
-                  ns = utils::make_unique<nested_scratchpad_t>(ctx, key, gemm);
-                  gemm_ctx.set_scratchpad_grantor(ns->grantor());
-              };
+        auto *nested_grantor
+                = create_nested_grantor(ctx.get_scratchpad_grantor(), key,
+                        gemm->pd()->scratchpad_registry());
+        gemm_ctx.set_scratchpad_grantor(nested_grantor);
+    };
 
     switch (gemm_kind) {
         case gemm_iter_fwd:
@@ -1187,7 +1206,7 @@ grid_execution_sig((simple_common_t<aprop>::linear_execution)) {
                 auto grid_layer = (!conf.copy_src_layer && lay == 0)
                         ? user_data.src_layer(dir, 0, true)
                         : workspace.states_range(
-                                lay - 1, lay - 1, dir, dir, 0, n_iter);
+                                  lay - 1, lay - 1, dir, dir, 0, n_iter);
 
                 auto gemm_grid_layer_fwd = (!conf.copy_src_layer && lay == 0)
                         ? gemm_layer_fwd_src
@@ -1604,8 +1623,8 @@ status_t simple_common_t<aprop>::execute_(const exec_ctx_t &ctx) const {
     bool is_lr = !one_of(conf.exec_dir, r2l, r2l);
     bool is_rl = !one_of(conf.exec_dir, l2r, l2r);
 
-    const memory_storage_t *scales_buf = nullptr;
-    if (pd()->conf.is_int8 && pd()->conf.copy_bias) {
+    const memory_storage_t *scales_buf = &memory_storage_t::empty_storage();
+    if (conf.is_int8 && conf.copy_bias) {
         scales_buf = &CTX_GPU_RES_STORAGE(SCALES_);
     }
 
@@ -1664,7 +1683,7 @@ status_t simple_common_t<aprop>::execute_(const exec_ctx_t &ctx) const {
             diff_src_iter_c_native_, workspace, shift, scale, dequantize_i));
 
     return status::success;
-};
+}
 // Fix for MSVS warning C4661.
 template <>
 cell_execution_sig(simple_fwd_t::cell_execution);

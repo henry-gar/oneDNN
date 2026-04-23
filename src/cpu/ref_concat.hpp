@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2017-2025 Intel Corporation
+* Copyright 2017 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -116,11 +116,10 @@ struct ref_concat_t : public primitive_t {
         engine_t *engine = ctx.stream()->engine();
         const auto n = pd()->n_inputs();
 
-        auto execute_reorder = [&](const std::shared_ptr<primitive_t> &reorder,
-                                       const memory_arg_t &src,
-                                       const memory_arg_t &dst,
-                                       const memory_arg_t *src_scales,
-                                       int r_num) {
+        auto execute_reorder
+                = [&](const std::shared_ptr<primitive_t> &reorder,
+                          const memory_arg_t &src, const memory_arg_t &dst,
+                          const memory_arg_t *src_scales, int r_num) {
             exec_args_t r_args;
             r_args[DNNL_ARG_SRC] = src;
             r_args[DNNL_ARG_DST] = dst;
@@ -128,14 +127,16 @@ struct ref_concat_t : public primitive_t {
                 r_args[DNNL_ARG_ATTR_SCALES | DNNL_ARG_SRC] = *src_scales;
             exec_ctx_t r_ctx(ctx, std::move(r_args));
 
-            nested_scratchpad_t ns(ctx, key_nested_multiple + r_num, reorder);
-            r_ctx.set_scratchpad_grantor(ns.grantor());
+            auto *nested_grantor = create_nested_grantor(
+                    ctx.get_scratchpad_grantor(), key_nested_multiple + r_num,
+                    reorder->pd()->scratchpad_registry());
+            r_ctx.set_scratchpad_grantor(nested_grantor);
             reorder->execute(r_ctx);
         };
 
         if (pd()->use_tent_dst()) {
             using namespace memory_tracking::names;
-            auto scratchpad = ctx.get_scratchpad_grantor();
+            const auto &scratchpad = ctx.get_scratchpad_grantor();
             auto tent_dst_storage
                     = scratchpad.get_memory_storage(key_concat_tent_dst);
 

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2024-2025 Intel Corporation
+* Copyright 2024 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -83,8 +83,6 @@ struct gen_t : public primitive_t {
     };
 
     status_t init(impl::engine_t *engine) override {
-        compute::kernel_ctx_t kernel_ctx;
-
         auto *gpu_engine = utils::downcast<ocl::engine_t *>(engine);
         if (!gpu_engine) return status::runtime_error;
 

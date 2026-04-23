@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -47,7 +47,7 @@ public:
             }
         }
         return false;
-    };
+    }
 
     void include(dim_idx_t dim, size_t size) {
         inc_blocks.emplace_back(into<dim_t>(dim), into<dim_t>(size), 1);
@@ -70,7 +70,7 @@ private:
         }
 
         return lws;
-    };
+    }
 
     std::vector<block_t> inc_blocks;
 };
@@ -234,6 +234,7 @@ status_t atomic_conf_t::init_dispatcher(
             dims::subgroup,
     };
     compute::named_buffer_t src("SRC");
+    src.data_type = conf.src_type;
     std::array<dim_t, 6> sizes = {
             outer_block.block,
             conf.global_acc,
@@ -253,6 +254,7 @@ status_t atomic_conf_t::init_dispatcher(
             = dim_t(outer_block.stride / conf.vect_size);
 
     compute::named_buffer_t dst("DST", src);
+    dst.data_type = conf.dst_type;
     dst.remove_dim(dims::loop);
     dst.remove_dim(dims::local); // broadcasted
     dst.remove_dim(dims::global); // broadcasted
@@ -388,6 +390,7 @@ status_t atomic_t::pd_t::init_conf(impl::engine_t *engine) {
                 phase.inner_block.block % phase.conf.subgroup_size == 0,
                 VERBOSE_BLOCKING_FAIL, "subgroup size mismatch");
         CHECK(phase.init_dispatcher(intel_engine, gpu_attr));
+        phase.conf.params.require_stateless_addressing = has_large_buffers();
     }
 
     for (atomic_conf_t &phase : phases) {
@@ -457,6 +460,8 @@ static void init_kernel_ctx_common(
     using namespace alg_kind;
 
     kernel_ctx.set_data_type(conf.src_type);
+    kernel_ctx.require_stateless_addressing(
+            conf.params.require_stateless_addressing);
     def_data_type(kernel_ctx, conf.src_type, "SRC");
     def_data_type(kernel_ctx, conf.dst_type, "DST");
 
@@ -556,9 +561,11 @@ status_t atomic_t::execute_atomic(const exec_ctx_t &ctx) const {
         eltwise_args[DNNL_ARG_DST] = ctx.args().at(DNNL_ARG_DST);
         exec_ctx_t eltwise_ctx(ctx, std::move(eltwise_args));
 
-        nested_scratchpad_t ns(
-                ctx, memory_tracking::names::key_nested, eltwise_p_);
-        eltwise_ctx.set_scratchpad_grantor(ns.grantor());
+        auto *nested_grantor
+                = create_nested_grantor(ctx.get_scratchpad_grantor(),
+                        memory_tracking::names::key_nested,
+                        eltwise_p_->pd()->scratchpad_registry());
+        eltwise_ctx.set_scratchpad_grantor(nested_grantor);
 
         CHECK(eltwise_p_->execute(eltwise_ctx));
     }

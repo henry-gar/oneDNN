@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2017-2025 Intel Corporation
+* Copyright 2017 Intel Corporation
 * Copyright 2018 YANDEX LLC
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
@@ -426,7 +426,7 @@ status_t jit_uni_pool_kernel_t<isa>::init_conf(
     // select jpp.ur_bc
     if (jpp.tag_kind == jit_memory_tag_kind_t::nspc) {
         auto min_ur_w = nstl::max(1, utils::div_up(jpp.l_pad, jpp.stride_w));
-        int min_ur_w1 = utils::div_up(right_pad, jpp.stride_w);
+        int min_ur_w1 = utils::div_up(nstl::max(0, right_pad), jpp.stride_w);
         if (min_ur_w < min_ur_w1) { min_ur_w = min_ur_w1; }
         jpp.ur_bc = nstl::min(jpp.nb_c, nstl::max(1, jpp.ur / min_ur_w));
         //take into account threading - to have enough work for parallelization
@@ -508,7 +508,7 @@ void jit_uni_pool_kernel_t<isa>::init_scratchpad(
 
 static int reg_ind(int shift, int bc, int j, int ur_bc, int ur_w) noexcept {
     return shift * ur_bc * ur_w + bc * ur_w + j;
-};
+}
 
 template <cpu_isa_t isa>
 inline void jit_uni_pool_kernel_t<isa>::put_one_in_vmm() {
@@ -835,8 +835,8 @@ inline void jit_uni_pool_kernel_t<isa>::avg_step(int ur_w, int ur_bc, int pad_l,
             = (jpp.tag_kind == jit_memory_tag_kind_t::nspc) ? jpp.c : c_block;
     Label kd_label, kh_label;
 
-    const auto is_tail_processing = [&](int bc,
-                                            bool process_with_postops = false) {
+    const auto is_tail_processing
+            = [&](int bc, bool process_with_postops = false) {
         if (isa == sse41 && (!jpp.is_c_padded || process_with_postops)) {
             return with_c_tail_proccessing && bc == (ur_bc - 1)
                     && ((jpp.c_tail > (jpp.c_block / 2) && sse_high_half)
@@ -879,7 +879,7 @@ inline void jit_uni_pool_kernel_t<isa>::avg_step(int ur_w, int ur_bc, int pad_l,
     L(kh_label);
     {
         for (int ki = 0; ki < kw; ki++) {
-            int jj_start = nstl::max(0, utils::div_up(pad_l - ki, stride_w));
+            int jj_start = utils::div_up(nstl::max(0, pad_l - ki), stride_w);
             int jj_end = ur_w
                     - utils::div_up(
                             nstl::max(0, ki + pad_r - (kw - 1)), stride_w);
@@ -999,7 +999,7 @@ inline void jit_uni_pool_kernel_t<isa>::max_step_fwd(int ur_w, int ur_bc,
     L(kh_label);
     {
         for (int ki = 0; ki < kw; ki++) {
-            int jj_start = nstl::max(0, utils::div_up(pad_l - ki, stride_w));
+            int jj_start = utils::div_up(nstl::max(0, pad_l - ki), stride_w);
             int jj_end = ur_w
                     - utils::div_up(
                             nstl::max(0, ki + pad_r - (kw - 1)), stride_w);
@@ -1168,7 +1168,7 @@ inline void jit_uni_pool_kernel_t<isa>::max_step_bwd(int ur_w, int ur_bc,
     L(kh_label);
     {
         for (int ki = 0; ki < kw; ki++) {
-            int jj_start = nstl::max(0, utils::div_up(pad_l - ki, stride_w));
+            int jj_start = utils::div_up(nstl::max(0, pad_l - ki), stride_w);
             int jj_end = ur_w
                     - utils::div_up(
                             nstl::max(0, ki + pad_r - (kw - 1)), stride_w);
@@ -1367,9 +1367,9 @@ void jit_uni_pool_kernel_t<isa>::generate() {
     mov(reg_ker_area_h, ptr[reg_param + GET_OFF(ker_area_h)]);
     mov(reg_nbc, ptr[reg_param + GET_OFF(ur_bc)]);
 
-    auto process_oi = [&](int ur_w, int ur_bc, int lpad, int rpad,
-                              bool with_c_tail_proccessing,
-                              bool inc_reg = true) {
+    auto process_oi
+            = [&](int ur_w, int ur_bc, int lpad, int rpad,
+                      bool with_c_tail_proccessing, bool inc_reg = true) {
         step(ur_w, ur_bc, lpad, rpad, with_c_tail_proccessing);
 
         if (isa == sse41) {

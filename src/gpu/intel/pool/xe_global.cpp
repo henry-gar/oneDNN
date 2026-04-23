@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2025 Intel Corporation
+* Copyright 2021 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -50,6 +50,7 @@ static status_t init_conf_common(
 
     set_default_conf(conf, *pd->desc(), *pd->invariant_src_md(),
             *pd->invariant_dst_md(), *pd->attr());
+    conf.require_stateless_addressing = pd->has_large_buffers();
 
     VDISPATCH_POOLING_IC(
             conf.iw == conf.kw && conf.ih == conf.kh && conf.ow * conf.oh == 1,
@@ -116,13 +117,14 @@ static status_t init_conf_common(
     conf.attr_info = attr_info_t::create(pd->attr());
 
     return status::success;
-};
+}
 
 static status_t init_kernel_ctx_common(compute::kernel_ctx_t &kernel_ctx,
         const conf_t &conf, const offsets_t &off, const post_ops_t &post_ops,
         const memory_desc_t *dst_md) {
     using namespace dnnl::impl::alg_kind;
     kernel_ctx.set_data_type(conf.src_dt);
+    kernel_ctx.require_stateless_addressing(conf.require_stateless_addressing);
 
     kernel_ctx.define_int("NDIMS", conf.ndims);
     kernel_ctx.define_int("MB", conf.mb);
@@ -200,9 +202,11 @@ status_t xe_global_fwd_t::execute_forward(const exec_ctx_t &ctx) const {
         reduction_args[DNNL_ARG_DST] = ctx.args().at(DNNL_ARG_DST);
         exec_ctx_t reduction_ctx(ctx, std::move(reduction_args));
 
-        nested_scratchpad_t ns(
-                ctx, memory_tracking::names::key_nested, reduction_p_);
-        reduction_ctx.set_scratchpad_grantor(ns.grantor());
+        auto *nested_grantor
+                = create_nested_grantor(ctx.get_scratchpad_grantor(),
+                        memory_tracking::names::key_nested,
+                        reduction_p_->pd()->scratchpad_registry());
+        reduction_ctx.set_scratchpad_grantor(nested_grantor);
 
         // Executing the reduction kernel
         return reduction_p_->execute(reduction_ctx);

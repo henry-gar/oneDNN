@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -369,6 +369,26 @@ struct batch_normalization_desc_t : public op_desc_t {
     // Batch normalization epsilon parameter.
     float batch_norm_epsilon {};
     unsigned flags {};
+};
+
+// A descriptor for a Gated MLP (GLU) operation.
+struct gated_mlp_desc_t : public op_desc_t {
+    gated_mlp_desc_t() : op_desc_t(primitive_kind::gated_mlp) {}
+
+    DECLARE_COMMON_OP_DESC_CLONE(gated_mlp_desc_t);
+
+    // Source memory descriptor.
+    memory_desc_t src_desc;
+    // Weights for gated portion.
+    memory_desc_t w_gate_desc;
+    // Weights for linear portion.
+    memory_desc_t w_up_desc;
+    // Weights for final FC out.
+    memory_desc_t w_down_desc;
+    // Destination memory descriptor.
+    memory_desc_t dst_desc;
+    // Activation kind.
+    alg_kind_t activation {};
 };
 
 // A descriptor of a Group Normalization operation.

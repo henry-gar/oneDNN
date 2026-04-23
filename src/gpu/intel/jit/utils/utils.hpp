@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2025 Intel Corporation
+* Copyright 2021 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -35,6 +35,20 @@
 
 #ifdef DNNL_DEV_MODE
 #include "common/profiler.hpp"
+#endif
+
+#if defined(__GNUC__)
+// clang-format off
+// Defines dump() method for debugging purposes, to pretty print the object.
+#define IR_DEFINE_DUMP() \
+    __attribute__((noinline)) \
+    __attribute__((used)) \
+    void dump() const { \
+        printf("%s\n", str().c_str()); \
+    }
+// clang-format on
+#else
+#define IR_DEFINE_DUMP()
 #endif
 
 namespace dnnl {
@@ -472,12 +486,12 @@ struct debug_profiler_t {
 #ifdef DNNL_DEV_MODE
     debug_profiler_t(const std::string &profile_name)
         : profile(profile_name) {};
-    void start() { profile.start(); };
-    void stamp(const char *name) { profile.stamp(name); };
-    void stop(const char *name) { profile.stop(name); };
-    void stop() { profile.stop(); };
-    void reset() { profile.reset(); };
-    std::string str() const { return profile.str(); };
+    void start() { profile.start(); }
+    void stamp(const char *name) { profile.stamp(name); }
+    void stop(const char *name) { profile.stop(name); }
+    void stop() { profile.stop(); }
+    void reset() { profile.reset(); }
+    std::string str() const { return profile.str(); }
 
 private:
     profiler_t profile;
@@ -488,7 +502,7 @@ private:
     void stop(const char *name) {};
     void stop() {};
     void reset() {};
-    std::string str() const { return ""; };
+    std::string str() const { return ""; }
 #endif
 };
 
@@ -694,6 +708,7 @@ static auto hw_names = nstl::to_array({
         make_enum_name(ngen::Core::XeHPC, "xehpc"),
         make_enum_name(ngen::Core::Xe2, "xe2"),
         make_enum_name(ngen::Core::Xe3, "xe3"),
+        make_enum_name(ngen::Core::Xe3p, "xe3p"),
 });
 GPU_DEFINE_PARSE_ENUM(ngen::HW, hw_names)
 
@@ -712,6 +727,9 @@ static auto product_family_names = nstl::to_array({
         make_enum_name(ngen::ProductFamily::PVC, "pvc"),
         make_enum_name(ngen::ProductFamily::GenericXe2, "xe2"),
         make_enum_name(ngen::ProductFamily::GenericXe3, "xe3"),
+        make_enum_name(ngen::ProductFamily::NVLP, "nvlp"),
+        make_enum_name(ngen::ProductFamily::CRI, "cri"),
+        make_enum_name(ngen::ProductFamily::GenericXe3p, "xe3p"),
 });
 GPU_DEFINE_PARSE_ENUM(ngen::ProductFamily, product_family_names)
 
@@ -1203,7 +1221,9 @@ void deserialize_from_hex(T &t, const std::string &s_hex) {
         using backing_t = typename std::underlying_type<E>::type; \
         return static_cast<E>(~static_cast<backing_t>(a)); \
     } \
-    constexpr bool any(E a) { return a != static_cast<E>(0); }
+    constexpr bool any(E a) { \
+        return a != static_cast<E>(0); \
+    }
 // NOLINTEND(bugprone-macro-parentheses)
 
 #define GPU_HW_CASE_(hw) \
@@ -1211,7 +1231,6 @@ void deserialize_from_hex(T &t, const std::string &s_hex) {
         GPU_HW_CASE(ngen::HW::hw); \
         break; \
     }
-
 #define GPU_HW_SWITCH(hw) \
     switch (hw) { \
         REG_XELP_ISA(GPU_HW_CASE_(XeLP)); \
@@ -1220,6 +1239,7 @@ void deserialize_from_hex(T &t, const std::string &s_hex) {
         REG_XEHPC_ISA(GPU_HW_CASE_(XeHPC)); \
         REG_XE2_ISA(GPU_HW_CASE_(Xe2)); \
         REG_XE3_ISA(GPU_HW_CASE_(Xe3)); \
+        REG_XE3P_ISA(GPU_HW_CASE_(Xe3p)); \
         default: gpu_assert(false) << "Unexpected GPU architecture"; \
     }
 

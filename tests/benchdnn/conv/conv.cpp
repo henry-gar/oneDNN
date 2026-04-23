@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2017-2025 Intel Corporation
+* Copyright 2017 Intel Corporation
 * Copyright 2021 FUJITSU LIMITED
 * Copyright 2021 Arm Ltd. and affiliates
 *
@@ -56,8 +56,8 @@ double get_non_zero_trust_percent(const prb_t *prb, data_kind_t kind) {
                     [k](const pk alg) { return alg == k; });
             count += std::any_of(non_neg_alpha_0_po.cbegin(),
                     non_neg_alpha_0_po.cend(), [k, alpha](const pk alg) {
-                        return alg == k && alpha == 0;
-                    });
+                return alg == k && alpha == 0;
+            });
         }
         // Check for u8 dst
         count += prb->get_dt(DST) == dnnl_u8;
@@ -170,16 +170,16 @@ int fill_data(data_kind_t kind, int exec_arg, const prb_t *prb,
 
     const auto &e_zp_src = prb->attr.zero_points.get(DNNL_ARG_SRC);
     const bool has_src_zp = !e_zp_src.is_def();
-    const int src_zp_mask
-            = attr_t::get_default_mask(e_zp_src.policy, prb->ndims);
+    const int src_zp_mask = prb->attr.zero_points.get_mask(
+            DNNL_ARG_SRC, dnnl_convolution, prb->ndims, prb->has_groups);
     // Apply src_zp for source tensor only.
     int src_zp = kind == SRC && has_src_zp && src_zp_mask == 0 ? e_zp_src.value
                                                                : 0;
 
     const auto &e_zp_wei = prb->attr.zero_points.get(DNNL_ARG_WEIGHTS);
     const bool has_wei_zp = !e_zp_wei.is_def();
-    const int wei_zp_mask
-            = attr_t::get_default_mask(e_zp_wei.policy, prb->ndims);
+    const int wei_zp_mask = prb->attr.zero_points.get_mask(
+            DNNL_ARG_WEIGHTS, dnnl_convolution, prb->ndims, prb->has_groups);
     // Apply wei_zp for weights tensor only.
     int wei_zp = kind == WEI && has_wei_zp && wei_zp_mask == 0 ? e_zp_wei.value
                                                                : 0;
@@ -441,8 +441,8 @@ void skip_invalid_prb(const prb_t *prb, res_t *res) {}
 
 void setup_cmp(compare::compare_t &cmp, const prb_t *prb, data_kind_t kind,
         const args_t &ref_args) {
-    const bool compare_with_norm = (prb->alg & WINO);
-    cmp.set_norm_validation_mode(compare_with_norm);
+    const bool allow_norm_check = (prb->alg & WINO);
+    cmp.set_allow_norm_check(allow_norm_check);
 
     float trh = 0.f;
     if (prb->alg & WINO) {
@@ -484,7 +484,7 @@ std::vector<int> supported_exec_args(dir_t dir) {
     return (dir & FLAG_FWD)    ? exec_fwd_args
             : (dir & FLAG_WEI) ? exec_bwd_w_args
                                : exec_bwd_d_args;
-};
+}
 
 int init_ref_memory_args(dnn_mem_map_t &ref_mem_map, dnn_mem_map_t &mem_map,
         dnnl_primitive_t prim, const prb_t *prb, res_t *res,
@@ -654,7 +654,7 @@ int doit(const std::vector<benchdnn_dnnl_wrapper_t<dnnl_primitive_t>> &v_prim,
 
     args_t args(mem_map), ref_args(ref_mem_map);
 
-    SAFE(execute_and_wait(prim, args, res), WARN);
+    SAFE(run_execution(prim, args, res), WARN);
 
     check_correctness(prb, get_kinds_to_check(prb), args, ref_args, setup_cmp,
             res, prb->dir, prim_ref);

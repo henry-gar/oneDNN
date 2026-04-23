@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -17,9 +17,12 @@
 /// @example cpu_getting_started.cpp
 /// > Annotated version: @ref graph_cpu_getting_started_cpp
 
-/// @page graph_cpu_getting_started_cpp Getting started on CPU with Graph API
-/// This is an example to demonstrate how to build a simple graph and run it on
+/// @page graph_cpu_getting_started_cpp_brief
+/// @brief This is an example to demonstrate how to build a simple graph and run it on
 /// CPU.
+
+/// @page graph_cpu_getting_started_cpp Getting started on CPU with Graph API
+/// \copybrief graph_cpu_getting_started_cpp_brief
 ///
 /// > Example code: @ref cpu_getting_started.cpp
 ///

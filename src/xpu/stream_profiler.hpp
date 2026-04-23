@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2024 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -55,7 +55,8 @@ struct stream_profiler_t {
     };
 
     virtual status_t get_info(profiling_data_kind_t data_kind, int *num_entries,
-            uint64_t *data) const = 0;
+            uint64_t *data) const
+            = 0;
 
     uint64_t stamp() const { return stamp_; }
 

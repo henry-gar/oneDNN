@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -17,10 +17,12 @@
 /// @example pooling.cpp
 /// > Annotated version: @ref pooling_example_cpp
 
+/// @page pooling_example_cpp_brief
+/// @brief This C++ API example demonstrates how to create and execute a
+/// [Pooling](@ref dev_guide_pooling) primitive in forward training propagation mode.
+
 /// @page pooling_example_cpp Pooling Primitive Example
-/// This C++ API example demonstrates how to create and execute a
-/// [Pooling](@ref dev_guide_pooling) primitive in forward training propagation
-/// mode.
+/// \copybrief pooling_example_cpp_brief
 ///
 /// @include pooling.cpp
 

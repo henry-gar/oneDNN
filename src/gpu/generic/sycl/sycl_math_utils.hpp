@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2022-2024 Intel Corporation
+* Copyright 2022 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -41,7 +41,7 @@ using rem_ref = typename utils::remove_reference<T>::type;
 
 template <typename T, typename U = rem_ref<T>>
 inline U div_up(const T a, const U b) {
-    return (a + b - 1) / b;
+    return a >= 1 ? 1 + (a - 1) / b : 0;
 }
 
 template <typename T, typename U = rem_ref<T>>

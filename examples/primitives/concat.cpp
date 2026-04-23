@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -17,9 +17,12 @@
 /// @example concat.cpp
 /// > Annotated version: @ref concat_example_cpp
 
-/// @page concat_example_cpp Concat Primitive Example
-/// This C++ API example demonstrates how to create and execute a
+/// @page concat_example_cpp_brief
+/// @brief This C++ API example demonstrates how to create and execute a
 /// [Concat](@ref dev_guide_concat) primitive.
+
+/// @page concat_example_cpp Concat Primitive Example
+/// \copybrief concat_example_cpp_brief
 ///
 /// Key optimizations included in this example:
 /// - Identical source (src) memory formats.

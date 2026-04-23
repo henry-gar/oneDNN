@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2023-2025 Intel Corporation
+* Copyright 2023 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -73,7 +73,9 @@ void handle_special_dt_set(
 
     ref_prim->init_memory_args(::get_test_engine());
     ref_prim->init_ref_memory_args(::get_test_engine(), res);
-    if (res->state == SKIPPED || res->state == UNIMPLEMENTED) return nullptr;
+    if (res->state == SKIPPED || res->state == UNIMPLEMENTED
+            || res->state == DEFERRED)
+        return nullptr;
     return ref_prim;
 }
 
@@ -390,29 +392,28 @@ partition_data_displacer_t::partition_data_displacer_t(
                             == op_ids_set_.end())
                 break;
 
-            const auto set_seq_len_displace_args =
-                    [&](const deserialized_op_t *op, int which_seq_len) {
-                        const size_t ndims = op->out_lts_[0].shape_.size();
-                        const size_t seq_len_idx = (which_seq_len == seq_len_q)
-                                ? ndims - 2
-                                : ndims - 1;
+            const auto set_seq_len_displace_args
+                    = [&](const deserialized_op_t *op, int which_seq_len) {
+                const size_t ndims = op->out_lts_[0].shape_.size();
+                const size_t seq_len_idx
+                        = (which_seq_len == seq_len_q) ? ndims - 2 : ndims - 1;
 
-                        for (size_t i = 0; i < op->in_lts_.size(); i++) {
-                            auto *parent_op = &dg_->get_op_by_out_lt(
-                                    op->in_lts_[i].id_);
-                            // For add->sub->ge, we consider the inputs of add
-                            // and sub as scalars if they have no parent
-                            // tensors.
-                            if (parent_op->empty()) {
-                                float user_set_value = static_cast<float>(
-                                        op->in_lts_[1 - i].shape_[seq_len_idx]);
-                                displace_args_.emplace(op->in_lts_[i].id_,
-                                        displace_args_t {*op, i, op->in_lts_[i],
-                                                filling_type_t::fixed_setting,
-                                                {{user_set_value}, cfg_name}});
-                            }
-                        }
-                    };
+                for (size_t i = 0; i < op->in_lts_.size(); i++) {
+                    auto *parent_op
+                            = &dg_->get_op_by_out_lt(op->in_lts_[i].id_);
+                    // For add->sub->ge, we consider the inputs of add
+                    // and sub as scalars if they have no parent
+                    // tensors.
+                    if (parent_op->empty()) {
+                        float user_set_value = static_cast<float>(
+                                op->in_lts_[1 - i].shape_[seq_len_idx]);
+                        displace_args_.emplace(op->in_lts_[i].id_,
+                                displace_args_t {*op, i, op->in_lts_[i],
+                                        filling_type_t::fixed_setting,
+                                        {{user_set_value}, cfg_name}});
+                    }
+                }
+            };
 
             // The bottom-right implicit causal mask handles future tokens
             // differently compared to the top-left casual mask. To support
@@ -451,6 +452,44 @@ partition_data_displacer_t::partition_data_displacer_t(
             displace_args_.emplace(aop_in_lt->id_,
                     displace_args_t {
                             aop, 1, *aop_in_lt, filling_type_t::softmax_stats});
+            break;
+        }
+
+        // Fill proper data for gated MLP shared activations.
+        while (aop.kind_ == "MatMul") {
+            if (dg.get_recognized_pattern() != graph_recognized_pattern_t::gmlp)
+                break;
+
+            // Bold assumption that first in_lts is shared.
+            // TODO: query the index from dg, maybe?
+            auto *aop_in_lt = &aop.in_lts_[0];
+
+            // Don't update Down MatMul.
+            auto *parent_op = &dg_->get_op_by_out_lt(aop_in_lt->id_);
+            if (!parent_op->empty()) break;
+
+            // Don't submit another displacer for same input.
+            if (displace_args_.find(aop_in_lt->id_) != displace_args_.end())
+                break;
+
+            // Fill activations very-very sparsely with small pow-2 values:
+            // (2^-12 ... 2^-14). The rationale is keep MatMul output values
+            // small in absolute value to avoid Multiply output values severely
+            // increase since it can be a square value of a MatMul output. This
+            // might happen because weights will be filled identically as they
+            // have identical shape, activations are shared between Gate and Up,
+            // unary activation (GeLU, etc.) may keep positive value as is.
+            static const std::vector<float> user_set {
+                    1.f / 4096.f, 1.f / 8192.f, 1.f / 16384.f};
+            // Use roughly 3 non-zero elements per K dim.
+            const auto &shape = aop_in_lt->shape_;
+            const auto K = shape[shape.size() - 1];
+            const float density = 3.f / K;
+            displace_args_.emplace(aop_in_lt->id_,
+                    displace_args_t {aop, 0, *aop_in_lt,
+                            filling_type_t::fixed_setting,
+                            {user_set, density,
+                                    "GMLP MatMul Activation displacer"}});
             break;
         }
     }
@@ -553,12 +592,13 @@ int partition_data_displacer_t::displace_input_data(size_t lt_id,
             case ::graph::op::kind::StaticTranspose: {
                 ::std::vector<int64_t> order;
                 op.get_attr_s64_vector(order, "order");
-                size_t ndims = order.size();
-                ::std::vector<int64_t> new_order(ndims, 0);
+                const size_t ndims = order.size();
+                op.attrs_["order"].s64_vector_
+                        = ::std::vector<int64_t>(ndims, 0);
                 for (size_t i = 0; i < ndims; i++) {
-                    new_order[(order[i] + ndims) % ndims] = i;
+                    op.attrs_["order"].s64_vector_[(order[i] + ndims) % ndims]
+                            = i;
                 }
-                op.attrs_["order"].s64_vector_ = new_order;
                 break;
             }
             case ::graph::op::kind::TypeCast:
@@ -602,34 +642,80 @@ int partition_data_displacer_t::displace_input_data(size_t lt_id,
         BENCHDNN_PRINT(3, "%s\n", "[DISPLACE]: Backward path ended.");
     }
 
-    bool mds_are_equal = dnnl_memory_desc_equal(mem_replace.md_, mem.md_) == 1;
-    bool mds_are_int8 = is_integral_dt(mem_replace.dt())
-            && is_integral_dt(mem.dt()) && mem_replace.sizeof_dt() == 1
-            && mem.sizeof_dt() == 1;
-    bool is_grouped_conv = false;
-    if (main_op.kind_ == "Convolution" || main_op.kind_ == "ConvTranspose") {
-        int64_t groups;
-        main_op.get_attr_s64(groups, "groups");
-        is_grouped_conv = groups > 1;
-    }
+    do {
+        const bool mds_are_equal
+                = dnnl_memory_desc_equal(mem_replace.md_, mem.md_) == 1;
+        if (mds_are_equal) {
+            SAFE(mem.reorder(mem_replace), WARN);
+            break;
+        }
 
-    bool is_reshaped_dims = mem_replace.nelems() == mem.nelems()
-            && mem_replace.ndims() != mem.ndims();
+        // Below are valid cases when `mem_replace.md_` and `mem.md_` might not
+        // be equal yet valid.
+        //
+        // Case: Int8/Int4 descriptors are interchangeable. Treat filled data
+        // as mem.dt() and just reorder one to the other.
+        const bool mds_are_int8 = is_integral_dt(mem_replace.dt())
+                && is_integral_dt(mem.dt()) && mem_replace.sizeof_dt() == 1
+                && mem.sizeof_dt() == 1;
+        if (mds_are_int8) {
+            dnnl_memory_desc_destroy(mem_replace.md_);
+            dnnl_memory_desc_clone(&mem_replace.md_, mem.md_);
+            SAFE(mem.reorder(mem_replace), WARN);
+            break;
+        }
 
-    bool mds_ok = IMPLICATION(!mds_are_equal,
-            mds_are_int8 || is_grouped_conv || is_reshaped_dims);
-    SAFE(mds_ok ? OK : FAIL, WARN);
+        // Case w/ grouped convolutions when number of dimensions would be +1.
+        if (main_op.kind_ == "Convolution"
+                || main_op.kind_ == "ConvTranspose") {
+            int64_t groups = 0;
+            main_op.get_attr_s64(groups, "groups");
+            if (groups > 1) {
+                dnnl_memory_desc_destroy(mem_replace.md_);
+                dnnl_memory_desc_clone(&mem_replace.md_, mem.md_);
+                SAFE(mem.reorder(mem_replace), WARN);
+                break;
+            }
+        }
 
-    dnnl_memory_desc_t md = mem.md_;
-    if (is_reshaped_dims) {
-        DNN_SAFE_V(dnnl_memory_desc_create_with_strides(
-                &md, mem.ndims(), mem.dims(), mem_replace.dt(), mem.strides()));
-    }
-    dnnl_memory_desc_destroy(mem_replace.md_);
-    dnnl_memory_desc_clone(&mem_replace.md_, md);
-    SAFE(mem.reorder(mem_replace), WARN);
+        // Case when there're extra unit dims in replaced memory. Memory buffers
+        // are identical but different ndims are restricted in reorder API.
+        // `mem_replace.md_` requires manual adjustment before reordering.
+        const bool is_reshaped_dims = mem_replace.nelems() == mem.nelems()
+                && mem_replace.ndims() != mem.ndims();
+        if (is_reshaped_dims) {
+            dnnl_memory_desc_t new_replace_md {};
+            DNN_SAFE_V(dnnl_memory_desc_create_with_strides(&new_replace_md,
+                    mem.ndims(), mem.dims(), mem_replace.dt(), mem.strides()));
+            dnnl_memory_desc_destroy(mem_replace.md_);
+            dnnl_memory_desc_clone(&mem_replace.md_, new_replace_md);
+            SAFE(mem.reorder(mem_replace), WARN);
+            dnnl_memory_desc_destroy(new_replace_md);
+            break;
+        }
 
-    if (is_reshaped_dims) dnnl_memory_desc_destroy(md);
+        // Case when there're non-dense strides in `mem.md_` leading to "holes"
+        // in the data. To avoid dealing with all kinds of strides,
+        // `mem_replace` was filled as regular dense-strided memory letting a
+        // reorder to handle dense to srided data conversion.
+        const bool has_non_dense_strides
+                = !mem.is_dense() && mem_replace.is_dense();
+        if (has_non_dense_strides) {
+            dnnl_memory_desc_t new_replace_md {};
+            DNN_SAFE_V(dnnl_memory_desc_create_with_strides(&new_replace_md,
+                    mem.ndims(), mem.dims(), mem_replace.dt(),
+                    mem_replace.strides()));
+            dnnl_memory_desc_destroy(mem_replace.md_);
+            dnnl_memory_desc_clone(&mem_replace.md_, new_replace_md);
+            SAFE(mem.reorder(mem_replace), WARN);
+            dnnl_memory_desc_destroy(new_replace_md);
+            break;
+        }
+
+        // Non of valid cases were identified.
+        SAFE(FAIL, WARN);
+    } while (false);
+
     return OK;
 }
 
@@ -666,8 +752,11 @@ int partition_data_displacer_t::gen_compressed_sdpa_filling(
 
     auto ref_prim_ptr = init_ref_prim_and_fill_data(op, res);
     if (!ref_prim_ptr) {
-        if (res->state == INVALID_ARGUMENTS) return FAIL;
-        if (res->state == SKIPPED || res->state == UNIMPLEMENTED) return OK;
+        if (res->state == SKIPPED || res->state == UNIMPLEMENTED
+                || res->state == DEFERRED)
+            return OK;
+        else
+            return FAIL;
     }
 
     auto &gen_mem = const_cast<dnn_mem_t &>(ref_prim_ptr->get_arg(arg));
@@ -722,6 +811,10 @@ int partition_data_displacer_t::gen_fixed_set_filling(dnn_mem_t &mem,
         res_t *res) const {
 
     dnn_mem_t m(md, get_test_engine(), /* prefill = */ false);
+    if (!m.is_dense()) {
+        m = dnn_mem_t(query_md_ndims(md), query_md_dims(md), dnnl_f32, tag::abx,
+                get_test_engine(), /* prefill = */ false);
+    }
     const int64_t nelems = m.nelems();
 
     BENCHDNN_PRINT(6, "%s\n", fill_cfg.print_verbose().c_str());
@@ -743,8 +836,14 @@ int partition_data_displacer_t::gen_fixed_set_filling(dnn_mem_t &mem,
         int_seed.discard(1);
 
         std::uniform_int_distribution<> gen(0, n_vals - 1);
+        std::bernoulli_distribution b_dist(fill_cfg.density_);
 
         for (int64_t idx = idx_start; idx < idx_end; ++idx) {
+            bool is_one = fill_cfg.density_ == 1.f ? true : b_dist(int_seed);
+            if (!is_one) {
+                m.set_elem(idx, 0.f);
+                continue;
+            }
             const float val = vals[gen(int_seed)];
             m.set_elem(idx, val);
         }
@@ -758,6 +857,10 @@ int partition_data_displacer_t::gen_causal_mask_filling(
         dnn_mem_t &mem, const_dnnl_memory_desc_t md, res_t *res) const {
 
     dnn_mem_t tmp_mem(md, get_test_engine(), /* prefill = */ false);
+    if (!tmp_mem.is_dense()) {
+        tmp_mem = dnn_mem_t(query_md_ndims(md), query_md_dims(md), dnnl_f32,
+                tag::abx, get_test_engine(), /* prefill = */ false);
+    }
 
     const int ndims = query_md_ndims(md);
     assert(ndims >= 2); // This was checked at displacer initialization.
@@ -786,6 +889,10 @@ int partition_data_displacer_t::gen_softmax_stats_filling(
         res_t *res) const {
 
     dnn_mem_t m(md, get_test_engine(), /* prefill = */ false);
+    if (!m.is_dense()) {
+        m = dnn_mem_t(query_md_ndims(md), query_md_dims(md), dnnl_f32, tag::abx,
+                get_test_engine(), /* prefill = */ false);
+    }
 
     logical_tensor::dims softmax_src_shape = main_op.in_lts_[0].shape_;
     logical_tensor::dims softmax_stats_shape = main_op.in_lts_[1].shape_;

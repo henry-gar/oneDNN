@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2019-2025 Intel Corporation
+* Copyright 2019 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -140,7 +140,7 @@ void Generator<hw>::gemmScalarBinaryOpC(BinaryOp op, Type Tco, const GRFMultiran
         RegisterLayout scalarLayout(hw, Tacc, 1, 1, true);
         copyRegisters(Tco, Tacc, scalarLayout, scalarLayout, offsets, offsets, strategy, state);
     }
-    if (op == BinaryOp::Div && one_of(state.Tacc, Type::f32, Type::f16)) {
+    if (op == BinaryOp::Div && one_of(state.Tacc, {Type::f32, Type::f16})) {
         inv(1, offsetTc, offsetTc);
         op = BinaryOp::Mul;
     }
@@ -148,6 +148,34 @@ void Generator<hw>::gemmScalarBinaryOpC(BinaryOp op, Type Tco, const GRFMultiran
     map(hw, state.Tacc, state.C_regs[0], state.C_layout, strategy, [&](int simd, const RegData &r) {
         binaryOp(op, simd, r, r, offsetTc, state);
     });
+}
+
+// Apply binary operation to C with a scalar operand from a Subregister (e.g., host side scalar)
+template <HW hw>
+void Generator<hw>::gemmScalarBinaryOpC(BinaryOp op, Type Tco, const Subregister &scalar,
+                                        const GEMMProblem &problem, const GEMMStrategy &strategy, GEMMState &state)
+{
+    auto Tacc = state.Tacc;
+    auto offsetTc = scalar;
+
+    if (Tco != Tacc) {
+        offsetTc = state.ra.alloc_sub(Tacc.ngen());
+        CopyPlan plan(hw, strategy.systolicAvailable);
+        plan.append(Opcode::mov, 1, offsetTc, scalar);
+        copyExecute(std::move(plan), state);
+    }
+
+    if (op == BinaryOp::Div && one_of(state.Tacc, {Type::f32, Type::f16})) {
+        inv(1, offsetTc, offsetTc);
+        op = BinaryOp::Mul;
+    }
+
+    map(hw, state.Tacc, state.C_regs[0], state.C_layout, strategy, [&](int simd, const RegData &r) {
+        binaryOp(op, simd, r, r, offsetTc, state);
+    });
+
+    if (Tco != Tacc)
+        state.ra.safeRelease(offsetTc);
 }
 
 // Apply binary operation to C with a vector operand, optionally multiplied by a scalar.
@@ -188,7 +216,7 @@ void Generator<hw>::gemmVectorBinaryOpC(BinaryOp op, bool column, const GRFMulti
         offsetsPtr = &repackOffsets;
 
         // Late inversion, for binary divide.
-        if (op == BinaryOp::Div && one_of(Tacc, Type::f32, Type::f16)) {
+        if (op == BinaryOp::Div && one_of(Tacc, {Type::f32, Type::f16})) {
             map(hw, Tacc, repackOffsets, repackOffsets, strategy, [&](int simd, GRF r, GRF) {
                 inv(simd, r, r);
             });
@@ -334,6 +362,7 @@ bool Generator<hw>::gemmBinaryOpC(BinaryOp op, bool row, bool column,
             }
 
             mark(lDoneLoading);
+            if (simtCF && checkRemY) join(16);
             if (checkRemY)
                 cmp(simt | gt | state.flagAP, remY, y0);
 
@@ -413,21 +442,30 @@ bool Generator<hw>::gemmApplyCOffsetDispatch(const GEMMProblem &problem, const G
 
     if (state.flagSwizzle.isValid()) state.raVFlag.claim(state.flagSwizzle);
 
-    status << "Applying fixed C offset" << status_stream::endl;
-    ok = ok && gemmBinaryOpC(BinaryOp::Add, false, false, Tco, CO, CO_strategy, effCO, ldco, problem, strategy, state);
+    if (problem.cOffsetHostScalar() && state.inputs.co.isValid()) {
+        status << "Applying host scalar C offset" << status_stream::endl;
+        gemmScalarBinaryOpC(BinaryOp::Add, Tco, state.inputs.co, problem, strategy, state);
+    } else {
+        status << "Applying fixed C offset" << status_stream::endl;
+        ok = ok && gemmBinaryOpC(BinaryOp::Add, false, false, Tco, CO, CO_strategy, effCO, ldco, problem, strategy, state);
+    }
     jmpi(1, labelCODone);
 
     mark(labelCOColumn);
-    if (doMatrix) jmpi(1 | flagCOR, labelCOMatrix);
-    status << "Applying column-wise C offset" << status_stream::endl;
-    ok = ok && gemmBinaryOpC(BinaryOp::Add, false, true, Tco, CO, CO_strategy, effCO, ldco, problem, strategy, state);
+    if (!problem.cOffsetHostScalar()) {
+        if (doMatrix) jmpi(1 | flagCOR, labelCOMatrix);
+        status << "Applying column-wise C offset" << status_stream::endl;
+        ok = ok && gemmBinaryOpC(BinaryOp::Add, false, true, Tco, CO, CO_strategy, effCO, ldco, problem, strategy, state);
+    }
     jmpi(1, labelCODone);
 
     mark(labelCORow);
-    status << "Applying row-wise C offset" << status_stream::endl;
-    ok = ok && gemmBinaryOpC(BinaryOp::Add, true, false, Tco, CO, CO_strategy, effCO, ldco, problem, strategy, state);
+    if (!problem.cOffsetHostScalar()) {
+        status << "Applying row-wise C offset" << status_stream::endl;
+        ok = ok && gemmBinaryOpC(BinaryOp::Add, true, false, Tco, CO, CO_strategy, effCO, ldco, problem, strategy, state);
+    }
 
-    if (doMatrix) {
+    if (doMatrix && !problem.cOffsetHostScalar()) {
         jmpi(1, labelCODone);
 
         mark(labelCOMatrix);
@@ -489,13 +527,30 @@ void Generator<hw>::gemmLoadBinaryOpArgs(const GEMMProblem &problem, const GEMMS
         state.ra.claim(*arg);
     }
 
+    // CTI: Shift to the starting column + increase LDs due to interleaving
+    if (strategy.cInterleaveChunk > 1) {
+        for (size_t i = 0; i < problem.postOps.len(); i++) {
+            auto offset = state.inputs.binaryOffsets[i];
+            if (!offset.isValid()) continue;
+
+            bool row = problem.postOps.binaryRow[i];
+            bool col = problem.postOps.binaryCol[i];
+            if (!(row && col)) continue;
+            
+            auto ld = state.inputs.binaryLDs[i];
+            emad(1, offset, offset, state.ctiShiftJ0, ld, strategy, state);
+            mulConstant(1, ld, ld, strategy.cInterleaveChunk);
+        }
+        if (!strategy.persistentLoop()) state.ra.safeRelease(state.ctiShiftJ0);
+    }
+
     state.ra.safeRelease(temp);
 }
 
 template <HW hw>
 void Generator<hw>::gemmApplyPostOps(size_t poMin, size_t poMax, const GEMMProblem &problem, const GEMMStrategy &strategy, GEMMState &state)
 {
-    if (poMin >= poMax && !problem.postOps.cStochasticRound) return;
+    if (poMin >= poMax && !problem.binaryPostProcess()) return;
 
     Label lSkip;
     and_(1 | nz | state.flagAP, null.ud(), state.inputs.flags, FlagNonfinalKBlock);
@@ -589,6 +644,22 @@ void Generator<hw>::gemmApplyPostOps(size_t poMin, size_t poMax, const GEMMProbl
     }
     if(problem.postOps.cStochasticRound) {
         problem.postOps.injectStochasticRound(this, state.ra, C_grfs, C_ngrf, state.inputs.sroundSeed, problem.Tc_ext.ngen());
+    }
+    if(problem.hasCMXScale()) {
+        auto unrollM = strategy.unroll[LoopM];
+        auto unrollN = strategy.unroll[LoopN];
+        int n_elems = (unrollN / problem.cqGroupN) * (unrollM / problem.cqGroupM);
+        int m_stride = state.C_scaleLayout[0].ld / 4;
+        int n_regs = std::max(1, (n_elems * m_stride) / GRF::bytes(hw));
+        auto tmpCScales = state.ra.alloc_range(n_regs);
+        vector<MaskAssignment> masks;
+        assignMasks(state.C_scaleLayout,  LoopNone, LoopN,       masks, strategy, state);
+        loadMasks(masks,        state.remainders,        strategy, state);
+
+        problem.postOps.injectMXScale(this, state.ra, C_grfs, C_ngrf, tmpCScales.sub(hw, 0, ngen::DataType::ub), problem.Tc_ext.ngen(), unrollN);
+        storeMatrix(tmpCScales, state.C_scaleLayout, state.C_scaleAddrs, strategy, state);
+        state.ra.safeRelease(tmpCScales);
+        safeReleaseMaskAssignments(masks, state);
     }
 
     mark(lSkip);

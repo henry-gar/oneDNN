@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2021-2025 Intel Corporation
+* Copyright 2021 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -40,7 +40,7 @@ struct jit_uni_reduction_t : public primitive_t {
 
         status_t init(engine_t *engine);
 
-        const jit_reduction_conf_t &get_conf() const { return conf_; };
+        const jit_reduction_conf_t &get_conf() const { return conf_; }
 
     private:
         bool fill_post_ops_conf();

@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -17,9 +17,12 @@
 /// @example inner_product.cpp
 /// > Annotated version: @ref inner_product_example_cpp
 
-/// @page inner_product_example_cpp Inner Product Primitive Example
-/// This C++ API example demonstrates how to create and execute an
+/// @page inner_product_example_cpp_brief
+/// @brief This C++ API example demonstrates how to create and execute an
 /// [Inner Product](@ref dev_guide_inner_product) primitive.
+
+/// @page inner_product_example_cpp Inner Product Primitive Example
+/// \copybrief inner_product_example_cpp_brief
 ///
 /// Key optimizations included in this example:
 /// - Primitive attributes with fused post-ops;

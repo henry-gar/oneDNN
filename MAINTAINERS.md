@@ -3,7 +3,7 @@
 This document defines roles available in oneDNN project and includes the current
 list of Code Owners and Maintainers for the project.
 
-# Roles and responsibilties
+# Roles and responsibilities
 
 oneDNN project defines three main roles:
  * [Contributor](#contributor)
@@ -81,7 +81,7 @@ Responsibilities:
   * Follow and enforce the project [contributing guidelines](CONTRIBUTING.md)
   * Co-own with other component Maintainers on the technical direction of a specific component.
   * Co-own with other Maintainers on the project as a whole, including determining strategy and policy for the project.
-  * Suppport and guide Contributors and Code Owners.
+  * Support and guide Contributors and Code Owners.
 
 Requirements:
   * Experience as a Code Owner for at least 12 months.
@@ -89,7 +89,7 @@ Requirements:
   * Track record of major project contributions to a specific project component.
   * Demonstrated deep knowledge of a specific project component.
   * Demonstrated broad knowledge of the project across multiple areas.
-  * Commits to using priviledges responsibly for the good of the project.
+  * Commits to using privileges responsibly for the good of the project.
   * Is able to exercise judgment for the good of the project, independent of
     their employer, friends, or team.
 
@@ -114,10 +114,8 @@ Team: @uxlfoundation/onednn-arch
 | -----------------  | --------------------- | ----------------- | ---------- |
 | Denis Samoilov     | @densamoilov          | Intel Corporation | Maintainer |
 | Dmitry Zarukin     | @dzarukin             | Intel Corporation | Maintainer |
-| Mourad Gouicem     | @mgouicem             | Intel Corporation | Maintainer |
 | Vadim Pirogov      | @vpirogov             | Intel Corporation | Maintainer |
 | Ankit Manerikar    | @avmanerikar          | Intel Corporation | Code Owner |
-| Stefan Palicki     | @spalicki             | Intel Corporation | Code Owner |
 | Maria Zhukova      | @mzhukova             | Intel Corporation | Code Owner |
 
 ## Graph API
@@ -127,12 +125,7 @@ Team: @uxlfoundation/onednn-graph
 | Name               | Github ID             | Affiliation       | Role       |
 | ------------------ | --------------------- | ----------------- | ---------- |
 | Tao Lv             | @TaoLv                | Intel Corporation | Maintainer |
-| Zhitao Wang        | @wzt1997              | Intel Corporation | Code Owner |
-| Jiexin Zheng       | @Jiexin-Zheng         | Intel Corporation | Code Owner |
-| Shaojie Cui        | @ShanSimu             | Intel Corporation | Code Owner |
-| Yonghao Gu         | @gyhintel             | Intel Corporation | Code Owner |
 | Rong Zhang         | @rongzha1             | Intel Corporation | Code Owner |
-| Xiang Guo          | @xiang1guo            | Intel Corporation | Code Owner |
 | Yixin Bao          | @ElaineBao            | Intel Corporation | Code Owner |
 
 ## CPU Engine
@@ -147,9 +140,7 @@ Team: @uxlfoundation/onednn-cpu-x64
 | Tatyana Primak      | @tprimak              | Intel Corporation | Maintainer |
 | Alexander Simonov   | @asimonov1            | Intel Corporation | Code Owner |
 | Alexey Makarevich   | @amakarev             | Intel Corporation | Code Owner |
-| David Eberius       | @davideberius         | Intel Corporation | Code Owner |
 | Dmitriy Ovchinnikov | @inteldimitrius       | Intel Corporation | Code Owner |
-| Stefan Palicki      | @spalicki             | Intel Corporation | Code Owner |
 | Tomasz Czeszun      | @tczeszun             | Intel Corporation | Code Owner |
 | Yair Obodovsky      | @yair-obodovsky       | Intel Corporation | Code Owner |
 | Xuxin Zeng          | @xuxinzen             | Intel Corporation | Code Owner |
@@ -161,15 +152,16 @@ Team: @uxlfoundation/onednn-cpu-aarch64
 | Name               | Github ID             | Affiliation       | Role       |
 | ------------------ | --------------------- | ----------------- | ---------- |
 | Hamza Butt         | @theComputeKid        | Arm Ltd           | Maintainer |
+| Siddhartha Menon   | @Sqvid                | Arm Ltd           | Maintainer |
 | Aditya Tewari      | @aditew01             | Arm Ltd           | Code Owner |
 | Crefeda Rodrigues  | @cfrod                | Arm Ltd           | Code Owner |
 | David Svantesson   | @davsva01             | Arm Ltd           | Code Owner |
 | Jonathan Deakin    | @jondea               | Arm Ltd           | Code Owner |
+| Marek Michałowski  | @michalowski-arm      | Arm Ltd           | Code Owner |
 | Radu Salavat       | @Radu2k               | Arm Ltd           | Code Owner |
-| Siddhartha Menon   | @Sqvid                | Arm Ltd           | Code Owner |
-| Sunita Nadampalli  | @snadampal            | Amazon.com, Inc.  | Code Owner |
-| Ryo Suzuki         | @Ryo-not-rio          | Arm Ltd           | Code Owner |
 | Renato Arantes     | @renato-arantes       | Arm Ltd           | Code Owner |
+| Ryo Suzuki         | @Ryo-not-rio          | Arm Ltd           | Code Owner |
+| Sunita Nadampalli  | @snadampal            | Amazon.com, Inc.  | Code Owner |
 
 ### OpenPOWER (PPC64)
 
@@ -179,9 +171,14 @@ Vacant. Maintained by Core team.
 
 Vacant. Maintained by Core team.
 
-### RISC-V
+### RISC-V (RV64)
 
-Vacant. Maintained by Core team.
+Team: @uxlfoundation/onednn-cpu-rv64
+
+| Name               | Github ID             | Affiliation       | Role       |
+| ------------------ | --------------------- | ----------------- | ---------- |
+| Fei Zhang          | @zhangfeiv0           | ISCAS             | Code Owner |
+| Jian Zhang         | @zhangjian29          | ZTE Corporation   | Code Owner |
 
 ### Loongarch64
 
@@ -197,12 +194,10 @@ Team: @uxlfoundation/onednn-gpu-intel
 | ------------------ | --------------------- | ----------------- | ---------- |
 | Eugene Chereshnev  | @echeresh             | Intel Corporation | Maintainer |
 | Konstantin Arturov | @karturov             | Intel Corporation | Maintainer |
-| Peter Caday        | @petercad             | Intel Corporation | Maintainer |
 | Andy Kassen        | @atkassen             | Intel Corporation | Code Owner |
 | Daniel Youssif     | @dyoussif             | Intel Corporation | Code Owner |
 | Haleema Sadia      | @h-sadia              | Intel Corporation | Code Owner |
 | Andrey Guskov      | @hidefromkgb          | Intel Corporation | Code Owner |
-| Gallagher Pryor    | @pv-pterab-s          | Intel Corporation | Code Owner |
 | Kealan Barbieri    | @kealan-barbieri      | Intel Corporation | Code Owner |
 | Roy Oursler        | @rjoursler            | Intel Corporation | Code Owner |
 | Simon Ewing        | @Simonsays095         | Intel Corporation | Code Owner |
@@ -210,21 +205,17 @@ Team: @uxlfoundation/onednn-gpu-intel
 | Stefen Yurkevich   | @syurkevi             | Intel Corporation | Code Owner |
 | Umar Arshad        | @umar456              | Intel Corporation | Code Owner |
 
-### NVIDIA, AMD, and generic GPU
+### NVIDIA
 
-Teams:
-* @uxlfoundation/onednn-gpu-nvidia
-* @uxlfoundation/onednn-gpu-amd
-* @uxlfoundation/onednn-gpu-generic
+Vacant. Maintained by Core team.
 
-| Name               | Github ID             | Affiliation       | Role       |
-| ------------------ | --------------------- | ----------------- | ---------- |
-| Anton Mitkov       | @ShanoToni            | Codeplay Software | Code Owner |
-| Atharva Dubey      | @AD2605               | Codeplay Software | Code Owner |
-| Mehdi Goli         | @mehdi-goli           | Codeplay Software | Code Owner |
-| Nicolò Scipione    | @s-Nick               | Codeplay Software | Code Owner |
-| Svetlozar Georgiev | @sgeor255             | Codeplay Software | Code Owner |
-| Romain Biessy      | @Rbiessy              | Codeplay Software | Code Owner |
+### AMD
+
+Vacant. Maintained by Core team.
+
+### Generic SYCL
+
+Vacant. Maintained by Core team.
 
 ## Support functions
 
@@ -235,7 +226,8 @@ Team: @uxlfoundation/onednn-doc
 | Name               | Github ID             | Affiliation       | Role       |
 | ------------------ | --------------------- | ----------------- | ---------- |
 | Vadim Pirogov      | @vpirogov             | Intel Corporation | Maintainer |
-| Ranu Kundu         | @ranukund             | Intel Corporation | Code Owner |
+| Dmitry Zarukin     | @dzarukin             | Intel Corporation | Code Owner |
+| Maria Zhukova      | @mzhukova             | Intel Corporation | Code Owner |
 | Tao Lv             | @TaoLv                | Intel Corporation | Code Owner |
 
 ### DevOps
@@ -256,3 +248,4 @@ Team: @uxlfoundation/onednn-devops
 | ------------------ | --------------------- | ----------------- | ---------- |
 | Tatyana Primak     | @tprimak              | Intel Corporation | Maintainer |
 | Vadim Pirogov      | @vpirogov             | Intel Corporation | Maintainer |
+| Viktoria Gvozdeva  | @vgvozdeva            | Intel Corporation | Maintainer |

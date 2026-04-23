@@ -1,5 +1,5 @@
 /*******************************************************************************
-* Copyright 2020-2025 Intel Corporation
+* Copyright 2020 Intel Corporation
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -16,9 +16,12 @@
 
 /// @example matmul.cpp
 
-/// @page matmul_example_cpp Matmul Primitive Example
-/// This C++ API example demonstrates how to create and execute a
+/// @page matmul_example_cpp_brief
+/// @brief This C++ API example demonstrates how to create and execute a
 /// [MatMul](@ref dev_guide_matmul) primitive.
+
+/// @page matmul_example_cpp Matmul Primitive Example
+/// \copybrief matmul_example_cpp_brief
 ///
 /// Key optimizations included in this example:
 /// - Primitive attributes with fused post-ops.

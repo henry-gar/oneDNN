@@ -180,8 +180,8 @@ public:
         return true;
     }
 
-    int substitute(const pvar_map_t<dim_t> &values) {
-        int factor = 1;
+    dim_t substitute(const pvar_map_t<dim_t> &values) {
+        dim_t factor = 1;
         for (auto &v : values) {
             for (int i = 0; i < size(); i++) {
                 if (pvars_[i] == v) {
@@ -479,7 +479,7 @@ public:
         }
         rhs_.substitute(values);
         if (rhs_.size() != 1) return;
-        int factor = lhs_.substitute(values);
+        auto factor = lhs_.substitute(values);
         if (factor != 1) {
             gpu_assert(rhs().value() % factor == 0);
             rhs_ = req_rhs_t(rhs().value() / factor);
@@ -861,7 +861,7 @@ bool prb_reqs_t::can_prove(const req_impl_t &to_prove) const {
         if (r.impl().can_prove(to_prove)) return true;
     }
     if (to_prove.kind() == req_kind_t::mod_eq_0 && to_prove.rhs().is_value()) {
-        int mod = 1;
+        dim_t mod = 1;
         for (int i = 0; i < to_prove.lhs().size(); i++) {
             auto &lhs_pvar = to_prove.lhs()[i];
             mod *= max_factor(lhs_pvar);

@@ -18,6 +18,7 @@
 #define GRAPH_BACKEND_DNNL_EXECUTABLES_SDPA_HPP
 
 #include "graph/backend/dnnl/executables/base.hpp"
+#include "graph/backend/dnnl/executables/deleter_util.hpp"
 
 #include "common/sdpa_utils.hpp"
 
@@ -26,26 +27,12 @@ namespace impl {
 namespace graph {
 namespace dnnl_impl {
 
-struct pd_deleter_t {
-    void operator()(dnnl_primitive_desc_t pd) const {
-        dnnl_primitive_desc_destroy(pd);
-    }
-};
-
-struct prim_deleter_t {
-    void operator()(dnnl_primitive_t prim) const {
-        dnnl_primitive_destroy(prim);
-    }
-};
-
 struct sdpa_executable_t : public op_executable_t {
     DECLARE_ARG_INDICES_GETTER;
 
     sdpa_executable_t(std::shared_ptr<op_t> &op, const dnnl::engine &p_engine,
             pd_cache_t &pd_cache, const fpmath_t &fpmath,
             bool use_block_layout);
-
-    bool is_initialized() const { return is_initialized_; }
 
     void execute(const stream &stream,
             const std::unordered_map<int, memory> &args) const override;
@@ -61,6 +48,8 @@ struct sdpa_executable_t : public op_executable_t {
             const std::unordered_map<int, memory> &args,
             const std::vector<cl_event> &deps) const override;
 #endif
+
+    bool is_initialized() const override { return pd_ && prim_; }
 
 private:
     std::unique_ptr<dnnl_primitive_desc, pd_deleter_t> pd_;
@@ -71,7 +60,6 @@ private:
     bool with_explicit_mask_;
     attn_mask_type_t mask_type_;
     bool is_invert_scale_;
-    bool is_initialized_;
     bool with_dropout_;
 };
 
@@ -81,8 +69,6 @@ struct sdpa_bwd_executable_t : public op_executable_t {
     sdpa_bwd_executable_t(std::shared_ptr<op_t> &op,
             const dnnl::engine &p_engine, pd_cache_t &pd_cache,
             const fpmath_t &fpmath, bool use_block_layout);
-
-    bool is_initialized() const { return is_initialized_; }
 
     void execute(const stream &stream,
             const std::unordered_map<int, memory> &args) const override;
@@ -99,6 +85,8 @@ struct sdpa_bwd_executable_t : public op_executable_t {
             const std::vector<cl_event> &deps) const override;
 #endif
 
+    bool is_initialized() const override { return hint_pd_ && pd_ && prim_; }
+
 private:
     std::unique_ptr<dnnl_primitive_desc, pd_deleter_t> hint_pd_;
     std::unique_ptr<dnnl_primitive_desc, pd_deleter_t> pd_;
@@ -107,7 +95,6 @@ private:
     attn_mask_type_t mask_type_;
     bool is_invert_scale_;
     bool with_explicit_mask_;
-    bool is_initialized_;
     bool with_dropout_;
 };
 

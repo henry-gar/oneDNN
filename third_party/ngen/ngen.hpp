@@ -89,6 +89,12 @@ public:
 #include "ngen_registers.hpp"
 #endif
 
+#if __cplusplus >= 201402L
+#define DEPRECATED [[deprecated]]
+#else
+#define DEPRECATED
+#endif
+
 template <HW hw>
 class BinaryCodeGenerator
 {
@@ -337,7 +343,7 @@ public:
         pushStream(rootStream);
     }
 
-    explicit BinaryCodeGenerator(int stepping_ = 0, DebugConfig debugConfig = {}) : BinaryCodeGenerator({genericProductFamily(hw), stepping_, PlatformType::Unknown}, debugConfig) {}
+    DEPRECATED explicit BinaryCodeGenerator(int stepping_ = 0, DebugConfig debugConfig = {}) : BinaryCodeGenerator({genericProductFamily(hw), stepping_, PlatformType::Unknown}, debugConfig) {}
 
     BinaryCodeGenerator(BinaryCodeGenerator &&) = default;
 
@@ -2175,7 +2181,7 @@ BinaryCodeGenerator<hw>::opX(Opcode op, DataType defaultType, const InstructionM
     if (getBytes(src0.getType()) == 8)
         i.imm64.value = static_cast<uint64_t>(src0);
     else
-        i.imm32.value = static_cast<uint64_t>(src0);
+        i.imm32.value = (uint32_t)static_cast<uint64_t>(src0);
 
     db(i, loc);
 }
@@ -2345,7 +2351,7 @@ BinaryCodeGenerator<hw>::opX(Opcode op, DataType defaultType, const InstructionM
     i.binary.src0RegFile = src0.getRegFile();
     i.binary.src1RegFile = src1.getRegFile();
 
-    i.imm32.value = static_cast<uint64_t>(src1);
+    i.imm32.value = (uint32_t)static_cast<uint64_t>(src1);
 
     db(i, loc);
 }

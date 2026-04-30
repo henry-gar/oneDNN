@@ -187,7 +187,7 @@ status_t grouped_micro_gemm_t::pd_t::init_microkernels(impl::engine_t *engine) {
             float a, b;
             ss >> a;
             ss >> b;
-            Scalar alpha(a), beta(b);
+            Scalar alpha((int)a), beta((int)b);
             std::string strategyString;
             std::getline(ss >> std::ws, strategyString);
             parseStrategy(strategyString, hw, problem, strat);
@@ -204,7 +204,7 @@ status_t grouped_micro_gemm_t::pd_t::init_microkernels(impl::engine_t *engine) {
         // TODO: These values should be based on the eu_count
         dim_t m_unroll = sg_size_;
         float avg_m = float(M()) / ngroups_;
-        dim_t n_unroll = utils::rnd_up_pow2(dim_t(avg_m));
+        dim_t n_unroll = std::max<dim_t>(2, utils::rnd_up_pow2(dim_t(avg_m)));
         dim_t max_n_unroll = 0;
         dim_t max_wg_n = 4;
         dim_t min_wg_n = 1;
@@ -240,8 +240,8 @@ status_t grouped_micro_gemm_t::pd_t::init_microkernels(impl::engine_t *engine) {
                 == std::min(n_unroll, max_n_unroll));
         reqs.push_back(StrategyRequirement::WGM == 2);
         reqs.push_back(StrategyRequirement::WGN
-                == utils::rnd_up_pow2(std::max<dim_t>(min_wg_n,
-                        std::min<dim_t>(avg_m / reqs[1].value, max_wg_n))));
+                == utils::rnd_up_pow2(std::max(min_wg_n,
+                        std::min((dim_t)(avg_m / reqs[1].value), max_wg_n))));
         try {
             gemm_ = selectGEMM(
                     opts, hw_info, sizes, problem, reqs, strat_override);
@@ -489,7 +489,10 @@ status_t grouped_micro_gemm_t::pd_t::init(impl::engine_t *engine) {
     def_data_type(kernel_ctx_, bia_dt, "BIA");
     kernel_ctx_.define_int("WITH_BIAS", with_bias());
     kernel_ctx_.define_int("K_PARALLEL_LOCAL", is_gemv_);
+    kernel_ctx_.define_int("WITH_SPARSE_GROUPS", is_gemv_);
     kernel_ctx_.define_int("WITH_SLM", gemm_.getSetting("slm_size") > 0);
+    kernel_ctx_.define_int("NUM_GROUPS", ngroups_);
+    kernel_ctx_.add_option("-cl-std=CL3.0");
 
     return status::success;
 }
@@ -517,8 +520,6 @@ status_t grouped_micro_gemm_t::execute(const exec_ctx_t &ctx) const {
     const memory_desc_t *src_md = ctx.input(DNNL_ARG_SRC)->md();
     const memory_desc_t *wei_md = pd()->weights_md();
     const memory_desc_t *dst_md = ctx.output(DNNL_ARG_DST)->md();
-
-    const size_t num_groups = pd()->ngroups_;
 
     const bool with_src_scales = pd()->src_quant_.with_scale();
     const bool with_src_zero_points = pd()->src_quant_.with_zp();
@@ -599,7 +600,7 @@ status_t grouped_micro_gemm_t::execute(const exec_ctx_t &ctx) const {
     // Swap wg_tile_[mn]_ for col-major vs row-major representations
     gws[0] *= utils::div_up(n, wg_tile_m);
     gws[1] *= utils::div_up(m_dispatch, wg_tile_n);
-    gws[2] *= num_groups;
+    gws[2] *= pd()->is_gemv_ ? m_all : pd()->ngroups_;
 
     return parallel_for(ctx, compute::nd_range_t(gws, lws), kernel_, arg_list);
 }

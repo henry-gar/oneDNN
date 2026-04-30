@@ -156,7 +156,7 @@ status_t primitive_execute(
                         & dnnl::threadpool_interop::threadpool_iface::
                                 ASYNCHRONOUS)
                 && stream->engine()->kind() == engine_kind::cpu;
-        block_on_wait = !async_cpu;
+        block_on_wait = !is_async_cpu;
 #endif
         if (block_on_wait) stream->wait();
         double start_ms = get_msec();

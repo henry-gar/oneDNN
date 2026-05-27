@@ -55,6 +55,17 @@ struct gen_t : public primitive_t {
             assert(engine->kind() == engine_kind::gpu);
             auto *intel_engine = utils::downcast<intel::engine_t *>(engine);
 
+            CHECK(set_default_formats(false));
+
+            dev_info_ = intel_engine->device_info();
+            arch_ = dev_info_->gpu_arch();
+
+            CHECK(jit::pd_t::init(engine, arch_));
+
+            const auto d = desc();
+            auto m = desc()->m();
+            auto n = desc()->n();
+
             // Basic implementation attr support:
             auto attr_skip_mask = smask_t::post_ops | smask_t::fpmath_mode
                     | smask_t::accumulation_mode | smask_t::rounding_mode
@@ -64,20 +75,10 @@ struct gen_t : public primitive_t {
                     | smask_t::zero_points_groups;
             VDISPATCH_GEMM(attr()->has_default_values(attr_skip_mask),
                     VERBOSE_UNSUPPORTED_ATTR);
-
-            auto &attr_zps = attr()->zero_points_;
-
-            dev_info_ = intel_engine->device_info();
-            arch_ = dev_info_->gpu_arch();
-            int stepping = dev_info_->stepping_id();
-
-            const auto d = desc();
-
-            CHECK(set_default_formats(false));
-            CHECK(jit::pd_t::init(engine, arch_));
-
-            auto m = desc()->m();
-            auto n = desc()->n();
+            VDISPATCH_GEMM(
+                    !utils::one_of(DNNL_RUNTIME_DIM_VAL, d->m(), d->n(), d->k(),
+                            d->lda(), d->ldb(), d->ldc(), d->batch()),
+                    VERBOSE_RUNTIMEDIM_UNSUPPORTED);
 
             // If m = 1, swap A/B to use more efficient n = 1 kernels if possible.
             bool check_lda = ((d->transa() == dnnl_notrans && d->lda() == 1)
@@ -89,6 +90,11 @@ struct gen_t : public primitive_t {
             // swapped data type/alignment requirements. Currently mostly affects
             // weights-only compression cases, since A/B have different data types
             swap_ab_ &= !wei_decomp_;
+
+            // No kernels with transposed C, if swap_ab is disabled (e.g. due
+            // to wei_decomp_) - this case cannot be handled.
+            VDISPATCH_GEMM(IMPLICATION(d->transc() == dnnl_trans, swap_ab_),
+                    VERBOSE_UNSUPPORTED_TAG);
 
             if (swap_ab_) {
                 // Do not use transposed B when it is unnecessary
@@ -152,10 +158,6 @@ struct gen_t : public primitive_t {
             VDISPATCH_GEMM(!has_blocks(), VERBOSE_BLOCKING_FAIL, "");
             VDISPATCH_GEMM(
                     batch_dims() <= 4, VERBOSE_BAD_DIM, "batch", batch_dims());
-            VDISPATCH_GEMM(
-                    !utils::one_of(DNNL_RUNTIME_DIM_VAL, d->m(), d->n(), d->k(),
-                            d->lda(), d->ldb(), d->ldc(), d->batch()),
-                    VERBOSE_RUNTIMEDIM_UNSUPPORTED);
             VDISPATCH_GEMM(intel_engine->mayiuse_ngen_kernels(),
                     VERBOSE_UNSUPPORTED_DEVICE_FEATURE, "ngen_kernels");
 
@@ -170,10 +172,11 @@ struct gen_t : public primitive_t {
                     IMPLICATION(with_bias,
                             (d->c_type() != f64 || d->bias_type() == f64)),
                     VERBOSE_UNSUPPORTED_BIAS_CFG);
-            VDISPATCH_GEMM(IMPLICATION(with_sum_ab(),
-                                   !with_bias
-                                           && (attr_zps.has_default_values(
-                                                   DNNL_ARG_DST))),
+            VDISPATCH_GEMM(
+                    IMPLICATION(with_sum_ab(),
+                            !with_bias
+                                    && (attr()->zero_points_.has_default_values(
+                                            DNNL_ARG_DST))),
                     VERBOSE_UNSUPPORTED_ATTR);
 
             VDISPATCH_GEMM(attr()->post_ops_.check_sum_consistency(d->c_type(),
@@ -269,7 +272,9 @@ struct gen_t : public primitive_t {
             auto lda = ld(DNNL_ARG_A);
             auto ldb = ld(DNNL_ARG_B);
             if (swap_ab_) std::swap(lda, ldb);
-            auto entries = kernel_desc_.select_kernel(arch_, stepping,
+            auto product = intel_engine->device_info()->gpu_product();
+            int stepping = dev_info_->stepping_id();
+            auto entries = kernel_desc_.select_kernel(product, stepping,
                     dev_info_->eu_count(), has_systolic, is_integrated, mode,
                     problem, alpha(), beta(), m, n, d->k(), lda, ldb, d->ldc(),
                     d->batch());
@@ -367,9 +372,8 @@ struct gen_t : public primitive_t {
 
         status_t query(query_t what, int idx, void *result) const override {
             switch ((int)what) {
-                case (int)query::preferred_gpu_threads_per_eu: {
-                    int grfs = kernel_desc_.driver_info()->grfCount;
-                    *(int *)result = (grfs > 128) ? 4 : 8;
+                case (int)query::preferred_gpu_grf_per_thread: {
+                    *(int *)result = kernel_desc_.driver_info()->grfCount;
                     break;
                 }
                 default: return gemm::pd_t::query(what, idx, result);

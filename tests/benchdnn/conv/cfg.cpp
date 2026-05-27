@@ -31,13 +31,6 @@ cfg_t::cfg_t(const prb_t *prb, const std::vector<data_kind_t> &kinds) {
     }
 
     acc_mode_ = prb->attr.acc_mode;
-    bool inputs_f16 = true;
-    for (auto dk : {SRC, WEI, DST}) {
-        if (dk == output_data_kind_) continue;
-        inputs_f16 = inputs_f16 && get_dt(dk) == dnnl_f16;
-    }
-    // XXX: GPU convolution can use f16 accumulator when both inputs are f16.
-    if (is_gpu() && inputs_f16) acc_mode_ = dnnl_accumulation_mode_f16;
 
     // Keep legacy filling for Wino.
     if (prb->alg == WINO) {
@@ -99,7 +92,6 @@ cfg_t::cfg_entry_t::cfg_map_t cfg_t::get_cfg_map(data_kind_t kind) const {
             {{dnnl_bf16}, {-4, 4}},
             {{dnnl_f16}, {-4, 4}},
             {{dnnl_f4_e2m1}, {0, 1}},
-            {{dnnl_f4_e3m0}, {0, 1}},
             {{dnnl_f8_e5m2}, {-4, 4}},
             {{dnnl_f8_e4m3}, {-4, 4}},
             {{dnnl_s8}, {-4, 4}},
@@ -112,7 +104,6 @@ cfg_t::cfg_entry_t::cfg_map_t cfg_t::get_cfg_map(data_kind_t kind) const {
             {{dnnl_bf16}, {-4, 4}},
             {{dnnl_f16}, {-2, 2}},
             {{dnnl_f4_e2m1}, {-1, 1}},
-            {{dnnl_f4_e3m0}, {-1, 1}},
             {{dnnl_f8_e5m2}, {-2, 2}},
             {{dnnl_f8_e4m3}, {-2, 2}},
             {{dnnl_s8}, {-4, 4}},
@@ -137,7 +128,6 @@ cfg_t::cfg_entry_t::cfg_map_t cfg_t::get_cfg_map(data_kind_t kind) const {
             {{dnnl_bf16}, {-4, 4}},
             {{dnnl_f16}, {-4, 4}},
             {{dnnl_f4_e2m1}, {-2, 2}},
-            {{dnnl_f4_e3m0}, {-2, 2}},
             {{dnnl_f8_e5m2}, {-4, 4}},
             {{dnnl_f8_e4m3}, {-4, 4}},
             {{dnnl_s8}, {-4, 4}},

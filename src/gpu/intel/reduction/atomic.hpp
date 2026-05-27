@@ -54,7 +54,7 @@ struct atomic_key_params_t : trivially_serializable_t<atomic_key_params_t> {
     data_type_t src_type, dst_type;
 
     // Implementation-specific parameters
-    int32_t threads_per_eu;
+    int32_t grf_per_thread;
     int32_t subgroup_size;
     int32_t vect_size;
     int32_t full_unroll_factor;
@@ -109,7 +109,7 @@ struct atomic_t : public primitive_t {
         status_t init_finalization_pd(impl::engine_t *engine);
         void init_scratchpad();
 
-        int div = 0;
+        dim_t div = 0;
         float eps = 1, power = 1;
         std::vector<atomic_conf_t> phases;
         bool needs_finalization = false;

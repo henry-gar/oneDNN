@@ -36,9 +36,19 @@ DECLARE_2D_TILE_VREDUCE(ugemm_grouped_c_type, SUBGROUP_SIZE,
         ugemm_grouped_c_type_nblock0, ugemm_grouped_c_type_nblock1,
         bias_tile_type, SUBGROUP_SIZE, bias_br, bias_bc, bias_nbr, bias_nbc)
 
+/* When BIA_DATA_T is a struct it cannot be used as an ext_vector_type
+ * element. Use the underlying scalar type for tile storage. */
+#ifdef BIA_DT_BF16
+#define BIA_TILE_DATA_T ushort
+#define BIA_TILE_TO_REF(v) into_float(as_bf16(v))
+#else
+#define BIA_TILE_DATA_T BIA_DATA_T
+#define BIA_TILE_TO_REF BIA_TO_REF
+#endif
+
 #ifndef BIA_DT_F32
-DECLARE_2D_TILE(bias_in_tile_type, BIA_DATA_T, SUBGROUP_SIZE, bias_br, bias_bc,
-        bias_nbr, bias_nbc)
+DECLARE_2D_TILE(bias_in_tile_type, BIA_TILE_DATA_T, SUBGROUP_SIZE, bias_br,
+        bias_bc, bias_nbr, bias_nbc)
 #endif
 
 void load_bias(
@@ -47,26 +57,156 @@ void load_bias(
     tile_load(tile, ptr, n, 1, 0, sg_i0, 0);
 #else
     bias_in_tile_type bias_in_tile;
-    tile_load(&bias_in_tile, ptr, n, 1, 0, sg_i0, 0);
-    tile_convert(bias_in_tile, (*tile), BIA_TO_REF);
+    tile_load(&bias_in_tile, (const global BIA_TILE_DATA_T *)ptr, n, 1, 0,
+            sg_i0, 0);
+    tile_convert(bias_in_tile, (*tile), BIA_TILE_TO_REF);
 #endif
 }
 #endif
 
+#if WITH_SPARSE_GROUPS
+#define offsets_tile_br SUBGROUP_SIZE
+#define offsets_tile_bc 1
+#define offsets_tile_nbr \
+    MAX(1, \
+            NUM_GROUPS / (ugemm_grouped_sg_per_wg_m * SUBGROUP_SIZE) \
+                    / ugemm_grouped_sg_per_wg_n)
+#define offsets_tile_nbc 1
+DECLARE_2D_TILE(offsets_tile_type, int, SUBGROUP_SIZE, offsets_tile_br,
+        offsets_tile_bc, offsets_tile_nbr, offsets_tile_nbc)
+
+#define slm_src_offsets_size sizeof(off_t) * 2
+#define slm_batch_size sizeof(off_t)
+#define slm_sg_last_size \
+    sizeof(int) * ugemm_grouped_sg_per_wg_m *ugemm_grouped_sg_per_wg_n
+#define slm_sparse_total_size \
+    slm_src_offsets_size + slm_batch_size + slm_sg_last_size
+
+void find_sparse_batch(off_t *batch, int2 *src_range,
+        const global int *src_offsets, off_t flat_token, local char *slm) {
+    local off_t *slm_src_offset = (local off_t *)slm;
+    local off_t *slm_batch = slm_src_offset + 2;
+    local int *slm_sg_last = (local int *)(slm_batch + 1);
+
+    offsets_tile_type offsets_tile;
+    off_t sg_ij0 = sub_group_broadcast(get_local_linear_id(), 0);
+    int sg_idx = get_sub_group_id();
+    off_t sg_batch0 = sg_ij0 * offsets_tile_nbr;
+
+    tile_load(&offsets_tile, src_offsets, NUM_GROUPS, 1, 0, sg_batch0, 0);
+
+    // Share each subgroup's last tile value for cross-subgroup carry
+    if (get_sub_group_local_id() == SUBGROUP_SIZE - 1)
+        slm_sg_last[sg_idx] = offsets_tile.x[offsets_tile_nbr - 1][0];
+    work_group_barrier(CLK_LOCAL_MEM_FENCE);
+
+    int sg_carry = (sg_idx > 0) ? slm_sg_last[sg_idx - 1] : 0;
+
+    // Find the tile containing the current batch, use shuffle_up to
+    // query the next src_offset.
+    int carry_b = sg_carry;
+#pragma unroll
+    for (int b = 0, idx = sg_batch0 + get_sub_group_local_id();
+            b < offsets_tile_nbr; b++, idx += SUBGROUP_SIZE) {
+        off_t curr = offsets_tile.x[b][0];
+        off_t prev = intel_sub_group_shuffle_up(carry_b, curr, 1);
+
+        // Only one work-item should satisfy this condition
+        if (curr > flat_token && prev <= flat_token && idx < NUM_GROUPS) {
+            slm_src_offset[0] = prev;
+            slm_src_offset[1] = curr;
+            *slm_batch = idx;
+        }
+        carry_b = sub_group_broadcast(curr, SUBGROUP_SIZE - 1);
+    }
+    work_group_barrier(CLK_LOCAL_MEM_FENCE);
+
+    *batch = *slm_batch;
+    *src_range = (int2)(slm_src_offset[0], slm_src_offset[1]);
+}
+#else
+#define slm_sparse_total_size 0
+#endif
+
+/* When DST_DATA_T is a struct it cannot be used as an ext_vector_type
+ * element. Use the underlying scalar type for tile storage. */
+#ifdef DST_DT_BF16
+#define DST_TILE_DATA_T ushort
+#define CONVERT_TILE_DATA_T(v) (into_bf16(convert_float(v)).data)
+#else
+#define DST_TILE_DATA_T DST_DATA_T
+#define CONVERT_TILE_DATA_T CONVERT_DATA_T
+#endif
+
 #ifndef DST_DT_F32
-DECLARE_2D_TILE(c_tile_type_dst, DST_DATA_T, SUBGROUP_SIZE,
+DECLARE_2D_TILE(c_tile_type_dst, DST_TILE_DATA_T, SUBGROUP_SIZE,
         ugemm_grouped_c_type_block0, ugemm_grouped_c_type_block1,
         ugemm_grouped_c_type_nblock0, ugemm_grouped_c_type_nblock1)
 #endif
 
+/* FMA_TYPE: scalar type used by ugemm microkernels for bf16 matrix operands.
+ * bf16 is a struct in OpenCL C; the microkernel uses its punned ushort representation. */
+#if defined(WEI_DT_BF16) || defined(SRC_DT_BF16)
+#define FMA_TYPE ushort
+#endif
+
+/* Cast macros for ugemm_grouped pointer arguments: cast when the data type
+ * is a struct, since the ugemm microkernels use punned scalar types. */
+/* 4-bit and 8-bit struct types (BF8=f8_e5m2, HF8=f8_e4m3) are packed in uchar.
+ * bf16 uses its ushort representation (FMA_TYPE). */
+#if defined(WEI_DT_S4) || defined(WEI_DT_U4) || defined(WEI_DT_F4_E2M1) \
+        || defined(WEI_DT_F4_E3M0) || defined(WEI_DT_BF8) \
+        || defined(WEI_DT_HF8) || defined(WEI_DT_E8M0)
+#define AS_WEI_TILE_PTR(p) ((const global uchar *)(p))
+#elif defined(WEI_DT_BF16)
+#define AS_WEI_TILE_PTR(p) ((const global FMA_TYPE *)(p))
+#else
+#define AS_WEI_TILE_PTR(p) (p)
+#endif
+
+#if defined(SRC_DT_S4) || defined(SRC_DT_U4) || defined(SRC_DT_F4_E2M1) \
+        || defined(SRC_DT_F4_E3M0) || defined(SRC_DT_BF8) \
+        || defined(SRC_DT_HF8) || defined(SRC_DT_E8M0)
+#define AS_SRC_TILE_PTR(p) ((const global uchar *)(p))
+#elif defined(SRC_DT_BF16)
+#define AS_SRC_TILE_PTR(p) ((const global FMA_TYPE *)(p))
+#else
+#define AS_SRC_TILE_PTR(p) (p)
+#endif
+
+#if defined(WEI_SCALES_DT_BF16)
+#define AS_WEI_SCALES_PTR(p) ((const global ushort *)(p))
+#elif defined(WEI_SCALES_DT_E8M0) || defined(WEI_SCALES_DT_HF8)
+#define AS_WEI_SCALES_PTR(p) ((const global uchar *)(p))
+#else
+#define AS_WEI_SCALES_PTR(p) (p)
+#endif
+
+#if defined(SRC_SCALES_DT_BF16)
+#define AS_SRC_SCALES_PTR(p) ((const global ushort *)(p))
+#elif defined(SRC_SCALES_DT_E8M0) || defined(SRC_SCALES_DT_HF8)
+#define AS_SRC_SCALES_PTR(p) ((const global uchar *)(p))
+#else
+#define AS_SRC_SCALES_PTR(p) (p)
+#endif
+
+/* Subbyte zero-point types are packed in uchar. */
+#if defined(WEI_ZP_DT_U4) || defined(WEI_ZP_DT_S4)
+#define AS_WEI_ZP_PTR(p) ((const global uchar *)(p))
+#else
+#define AS_WEI_ZP_PTR(p) (p)
+#endif
+
 /* Optional quantization parameters */
 #define SRC_SCALE_ARGS \
-    OPTIONAL(AND(WITH_SRC_SCALES, SRC_SCALES_GROUPED), src_attr_scales)
+    OPTIONAL(AND(WITH_SRC_SCALES, SRC_SCALES_GROUPED), \
+            AS_SRC_SCALES_PTR(src_attr_scales))
 #define SRC_ZP_ARGS OPTIONAL(WITH_SRC_ZP, src_attr_zp)
 #define SRC_LD_ARGS OPTIONAL(OR(WITH_SRC_ZP, SRC_SCALES_GROUPED), ldsrcq)
 #define WEI_SCALE_ARGS \
-    OPTIONAL(AND(WITH_WEI_SCALES, WEI_SCALES_GROUPED), wei_attr_scales)
-#define WEI_ZP_ARGS OPTIONAL(WITH_WEI_ZP, wei_attr_zp)
+    OPTIONAL(AND(WITH_WEI_SCALES, WEI_SCALES_GROUPED), \
+            AS_WEI_SCALES_PTR(wei_attr_scales))
+#define WEI_ZP_ARGS OPTIONAL(WITH_WEI_ZP, AS_WEI_ZP_PTR(wei_attr_zp))
 #define WEI_LD_ARGS OPTIONAL(OR(WITH_WEI_ZP, WEI_SCALES_GROUPED), ldweiq)
 #define K_PARALLEL_LOCAL_ARGS OPTIONAL(K_PARALLEL_LOCAL, sg_k)
 
@@ -77,8 +217,9 @@ void store_results(ugemm_grouped_c_type *tile, global DST_DATA_T *ptr, int n,
     //tile_store_t_block2d(c_tile, dst, n, m, lddst, sg_j0, sg_i0);
 #else
     c_tile_type_dst tile_dst;
-    tile_convert((*tile), tile_dst, CONVERT_DATA_T);
-    tile_store(tile_dst, ptr, n, m, lddst, sg_i0, sg_j0);
+    tile_convert((*tile), tile_dst, CONVERT_TILE_DATA_T);
+    tile_store(
+            tile_dst, (global DST_TILE_DATA_T *)ptr, n, m, lddst, sg_i0, sg_j0);
     //tile_store_block2d(c_tile_dst, dst, n, m, lddst, sg_j0, sg_i0);
 #endif
 }
@@ -158,44 +299,66 @@ grouped_micro_gemm(const global SRC_DATA_T *src, long ldsrc,
         const global SRC_ZP_DATA_T *src_attr_zp, const long ldsrcq,
         const global WEI_SCALES_DATA_T *wei_attr_scales,
         const global WEI_ZP_DATA_T *wei_attr_zp, const long ldweiq,
-        const long n, const long k, const global BIA_DATA_T *bias) {
+        const long n, const long k, const global BIA_DATA_T *bias,
+        const global float *nvfp4_global_scale) {
 #if WITH_SLM
-    local char slm[ugemm_grouped_slm_size];
+    local char slm[MAX(ugemm_grouped_slm_size, slm_sparse_total_size)];
+#else
+#if WITH_SPARSE_GROUPS
+    local char slm[slm_sparse_total_size];
 #else
     local char *slm = NULL;
 #endif
+#endif
 
-    unsigned long batch = sub_group_broadcast(get_group_id(2), 0);
-    int2 src_offset
+    off_t sg_i = sub_group_broadcast(get_local_id(0) / SUBGROUP_SIZE, 0);
+    off_t sg_j = sub_group_broadcast(get_local_id(1), 0);
+#if K_PARALLEL_LOCAL
+    off_t sg_k = sub_group_broadcast(get_local_id(2), 0);
+#endif
+
+    off_t wg_i0 = get_group_id(0) * ugemm_grouped_wg_tile_m;
+    off_t wg_j0;
+    off_t batch;
+    off_t m;
+    off_t src_offset;
+
+#if WITH_SPARSE_GROUPS
+    off_t flat_token = get_group_id(2);
+    int2 src_range;
+    find_sparse_batch(&batch, &src_range, src_offsets, flat_token, slm);
+    m = (src_range.y - src_range.x);
+    src_offset = src_range.x;
+    wg_j0 = flat_token - src_range.x;
+
+    // Early exit for wg that can be processed by the previous ugemm tile
+    if (m > 1 && (wg_j0 % ugemm_grouped_wg_tile_n) != 0) { return; }
+#else
+    batch = sub_group_broadcast(get_group_id(2), 0);
+    int2 src_range
             = *(global int2 *)(src_offsets + (batch > 0 ? batch - 1 : batch));
 
-    int sg_i = sub_group_broadcast(get_local_id(0) / SUBGROUP_SIZE, 0);
-    int sg_j = sub_group_broadcast(get_local_id(1), 0);
-#if K_PARALLEL_LOCAL
-    int sg_k = sub_group_broadcast(get_local_id(2), 0);
+    m = batch > 0 ? (src_range.y - src_range.x) : src_range.x;
+    src_offset = batch > 0 ? src_range.x : 0;
+    wg_j0 = get_group_id(1) * ugemm_grouped_wg_tile_n;
+
+    if (wg_j0 >= m) return; /* early exit if outside batch */
 #endif
 
-    unsigned long wg_i0 = get_group_id(0) * ugemm_grouped_wg_tile_m;
-    unsigned long wg_j0 = get_group_id(1) * ugemm_grouped_wg_tile_n;
-    unsigned long sg_i0 = wg_i0 + sg_i * ugemm_grouped_sg_tile_m;
-    unsigned long sg_j0 = wg_j0 + sg_j * ugemm_grouped_sg_tile_n;
+    off_t sg_i0 = wg_i0 + sg_i * ugemm_grouped_sg_tile_m;
+    off_t sg_j0 = wg_j0 + sg_j * ugemm_grouped_sg_tile_n;
 
-    int m = batch > 0 ? (src_offset.y - src_offset.x) : src_offset.x;
-    if (wg_j0 >= m) return; /* early exit if outside batch */
-
-    src_offset.x = batch > 0 ? src_offset.x : 0;
-
-    src += src_offset.x * ldsrc / SRC_ELEMS_PER_BYTE;
+    src += src_offset * ldsrc / SRC_ELEMS_PER_BYTE;
     wei += batch * wei_strides[0] / WEI_ELEMS_PER_BYTE;
-    dst += src_offset.x * lddst;
+    dst += src_offset * lddst;
 
-    int ldwei = wei_strides[2] == 1 ? wei_strides[1] : wei_strides[2];
+    off_t ldwei = wei_strides[2] == 1 ? wei_strides[1] : wei_strides[2];
 
 #if WITH_SRC_SCALES
-    src_attr_scales += src_offset.x * ldsrcq;
+    src_attr_scales += src_offset * ldsrcq;
 #endif
 #if WITH_SRC_ZP
-    src_attr_zp += src_offset.x * ldsrcq / SRC_ZP_ELEMS_PER_BYTE;
+    src_attr_zp += src_offset * ldsrcq / SRC_ZP_ELEMS_PER_BYTE;
 #endif
 #if WITH_WEI_SCALES
     wei_attr_scales += batch * n * (k / WEI_GROUP_SIZE);
@@ -204,10 +367,12 @@ grouped_micro_gemm(const global SRC_DATA_T *src, long ldsrc,
     wei_attr_zp += batch * n * (k / WEI_GROUP_SIZE) / WEI_ZP_ELEMS_PER_BYTE;
 #endif
 
-    ugemm_grouped_c_type c_tile = ugemm_grouped(wei, ldwei, src, ldsrc, n, m, k,
-            wg_i0, wg_j0, 0, sg_i, sg_j K_PARALLEL_LOCAL_ARGS,
+    ugemm_grouped_c_type c_tile = ugemm_grouped(AS_WEI_TILE_PTR(wei), ldwei,
+            AS_SRC_TILE_PTR(src), ldsrc, n, m, k, wg_i0, wg_j0, 0, sg_i,
+            sg_j K_PARALLEL_LOCAL_ARGS,
             slm WEI_SCALE_ARGS WEI_ZP_ARGS WEI_LD_ARGS SRC_SCALE_ARGS
                     SRC_ZP_ARGS SRC_LD_ARGS);
+
 #if K_PARALLEL_LOCAL
     if (sg_k > 0) return;
 #endif
@@ -231,6 +396,15 @@ grouped_micro_gemm(const global SRC_DATA_T *src, long ldsrc,
     bias_tile_type bias_tile;
     load_bias(&bias_tile, bias, n, sg_i0);
     tile_vbroadcast_add(&c_tile, bias_tile);
+#endif
+
+#if WITH_NVFP4_GLOBAL_SCALE
+    {
+        float gs = *nvfp4_global_scale;
+#define binary_scale(v) ((v) * gs)
+        tile_elementwise(c_tile, binary_scale);
+#undef binary_scale
+    }
 #endif
 
     store_results(&c_tile, dst, n, m, lddst, sg_i0, sg_j0);

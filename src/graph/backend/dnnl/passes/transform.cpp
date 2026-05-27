@@ -2790,8 +2790,9 @@ status_t fuse_adjacent_reorders(std::shared_ptr<subgraph_t> &sg) {
             fused_dst_zps.reserve(max_num);
             for (size_t i = 0; i < max_num; i++) {
                 fused_scales.emplace_back(scales1[i] * scales2[i]);
-                fused_dst_zps.emplace_back(
-                        scales2[i] * (dst_zps1[i] - src_zps2[i]) + dst_zps2[i]);
+                fused_dst_zps.emplace_back(static_cast<int64_t>(
+                        scales2[i] * (dst_zps1[i] - src_zps2[i])
+                        + dst_zps2[i]));
             }
 
             int64_t axis = -1;
@@ -4635,6 +4636,10 @@ status_t fuse_sdpa(std::shared_ptr<subgraph_t> &sg) {
                 case op_kind::_dropout: {
                     if (has_dropout) valid_pattern = false;
                     has_dropout = true;
+                    break;
+                }
+                case op_kind::_reorder: {
+                    // allow reorder for typecast in xf16-f32 mixed pattern.
                     break;
                 }
                 default: valid_pattern = false;

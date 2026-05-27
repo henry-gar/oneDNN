@@ -385,19 +385,21 @@ void gen_desc_t::update_driver_info() {
 }
 
 std::vector<const gemmstone::kcatalog::Entry *>
-gen_nocopy_desc_t::select_kernel(compute::gpu_arch_t arch, int stepping,
+gen_nocopy_desc_t::select_kernel(compute::gpu_product_t product, int stepping,
         int eu_count, bool has_systolic, bool is_integrated, compute_mode mode,
         const gemmstone::GEMMProblem &problem, float alpha, float beta, dim_t m,
         dim_t n, dim_t k, dim_t lda, dim_t ldb, dim_t ldc, dim_t batch) {
     using namespace ngen;
     using namespace kcatalog;
 
-    arch_ = arch;
-    hw_ = convert_dnnl_arch_to_ngen(arch);
+    product_ = compute::device_info_t::ngen_product(product);
+    hw_ = getCore(product_.family);
+    arch_ = convert_ngen_arch_to_dnnl(hw_);
     stepping_ = stepping;
-    m_ = m;
-    n_ = n;
-    k_ = k;
+    problem_.product = product_;
+    m_ = into<int>(m);
+    n_ = into<int>(n);
+    k_ = into<int>(k);
     eu_count_ = eu_count;
     disable_systolic_ = !has_systolic;
     relaxed_acc_ = mode & mode_relaxed_acc;
@@ -425,7 +427,8 @@ gen_nocopy_desc_t::select_kernel(compute::gpu_arch_t arch, int stepping,
     bool can_2d_c = (ldc * problem.Tc_ext <= 16777216);
 
     // Xe2 requires stronger alignment for block 2D.
-    if (arch == compute::gpu_arch_t::xe2 || arch == compute::gpu_arch_t::xe3) {
+    if (arch_ == compute::gpu_arch_t::xe2
+            || arch_ == compute::gpu_arch_t::xe3) {
         can_2d_a &= (problem.A.alignment % 16 == 0);
         can_2d_b &= (problem.B.alignment % 16 == 0);
         can_2d_c &= (problem.C.alignment % 16 == 0);
@@ -531,14 +534,20 @@ gen_nocopy_desc_t::select_kernel(compute::gpu_arch_t arch, int stepping,
         return nullptr;
     });
 
-    // If both A/B are integers, we can use integer dpas/accumulation
-    // but only if there are no grouped scales (in these cases,
-    // we apply scales before dpas, and we must use fp dpas)
-    bool allow = gpu_utils::dev_getenv("ALLOW_IACC", true);
-    bool is_int = problem.Ta_ext.isInteger() && problem.Tb_ext.isInteger();
-    if (problem.asPtrDims < 1 && problem.bsPtrDims < 1 && is_int && allow) {
-        match_params.push_back(base);
-        match_params.back().selector.precisions[2] = "I";
+    // Allow cases with integer acc to reuse strategies with equal size float acc.
+    // Prioritize float acc strategies as theyre better optimized.
+    if (problem.Tc == Type::s32) {
+        size_t npatterns = match_params.size();
+        std::vector<MatchParams> float_strats;
+        for (size_t i = 0; i < npatterns; ++i) {
+            auto start = match_params[i];
+            if (!std::string("I").compare(start.selector.precisions[2])) {
+                float_strats.push_back(start);
+                float_strats.back().selector.precisions[2] = "S";
+            }
+        }
+        match_params.insert(
+                match_params.begin(), float_strats.begin(), float_strats.end());
     }
 
     eval_params_.sizes = base.sizes;
@@ -574,7 +583,8 @@ status_t gen_nocopy_desc_t::finalize() {
     };
     update_type(problem_.Ta, Ta_new);
     update_type(problem_.Tb, Tb_new);
-    update_type(problem_.Tc, Tc_new);
+    if (!(problem_.Tc == Type::s32 && Tc_new == Type::f32))
+        update_type(problem_.Tc, Tc_new);
 
     // If the kernel uses tf32 types, interpret the buffer as tf32 without
     // converting from fp32. This eliminates a rounding step, but improves performance
@@ -610,14 +620,14 @@ status_t gen_xe_systolic_kernel_desc_t::select_kernel(
     using namespace ngen;
     using namespace kcatalog;
 
-    auto ngen_product = compute::device_info_t::ngen_product(product);
-    hw_ = getCore(ngen_product.family);
+    product_ = compute::device_info_t::ngen_product(product);
+    hw_ = getCore(product_.family);
     arch_ = convert_ngen_arch_to_dnnl(hw_);
     stepping_ = stepping;
-    problem_.product = ngen_product;
-    m_ = m;
-    n_ = n;
-    k_ = k;
+    problem_.product = product_;
+    m_ = into<int>(m);
+    n_ = into<int>(n);
+    k_ = into<int>(k);
     eu_count_ = eu_count;
 
     if (!utils::one_of(hw_, HW::XeHP, HW::XeHPG, HW::XeHPC, HW::Xe2, HW::Xe3,
@@ -667,8 +677,8 @@ status_t gen_xe_systolic_kernel_desc_t::select_kernel(
         problem_.bOffset = ABOffset::Load;
         problem_.boPtrDims = 0;
     }
-    if (alpha == 1.0f) problem_.alpha = alpha;
-    if (beta == 0.0f || beta == 1.0f) problem_.beta = beta;
+    if (alpha == 1.0f) problem_.alpha = (int)alpha;
+    if (beta == 0.0f || beta == 1.0f) problem_.beta = (int)beta;
 
     auto status = transfer_post_ops(problem_, std::move(post_ops));
     if (status != status::success) return status;
@@ -869,9 +879,9 @@ void gen_kernel_t::init_interface() {
     }
     if (problem.batch == BatchMode::Strided) {
         for (int i = 0; i < problem.batchDims; i++) {
-            interface_.newArgument("stride_A" + std::to_string(i), DataType::d);
-            interface_.newArgument("stride_B" + std::to_string(i), DataType::d);
-            interface_.newArgument("stride_C" + std::to_string(i), DataType::d);
+            interface_.newArgument("stride_A" + std::to_string(i), DataType::q);
+            interface_.newArgument("stride_B" + std::to_string(i), DataType::q);
+            interface_.newArgument("stride_C" + std::to_string(i), DataType::q);
             if (problem.hasAScalePtr()) {
                 interface_.newArgument(
                         "scale_stride_A" + std::to_string(i), DataType::d);
@@ -882,7 +892,7 @@ void gen_kernel_t::init_interface() {
             }
             if (problem.hasCMXScale()) {
                 interface_.newArgument(
-                        "scale_stride_C" + std::to_string(i), DataType::d);
+                        "scale_stride_C" + std::to_string(i), DataType::q);
             }
             if (problem.hasAOffsetPtr()) {
                 interface_.newArgument(
@@ -907,7 +917,7 @@ void gen_kernel_t::init_interface() {
                 for (int b = 0; b < problem.batchDims; b++) {
                     interface_.newArgument("stride" + std::to_string(b)
                                     + "binary" + std::to_string(i),
-                            DataType::d);
+                            DataType::q);
                 }
             }
         }
@@ -1000,7 +1010,7 @@ status_t gen_kernel_t::get_kernel(
 
 #define ARCH_DISPATCH(arch) \
     case ngen::HW::arch: { \
-        gemm_kernel_generator_t<ngen::HW::arch> generator; \
+        gemm_kernel_generator_t<ngen::HW::arch> generator(desc()->product_); \
         generator.setStepping(desc()->stepping_); \
         generator.gemm(*desc()->problem(), *desc()->strategy(), interface_); \
         return generator.get_kernel(kernel, engine); \

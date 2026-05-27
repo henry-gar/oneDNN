@@ -153,7 +153,7 @@ argument index as specified by the following table.
 | \diffdst                    | DNNL_ARG_DIFF_DST                                                          | Input  |
 | \f$depthwise\f$             | DNNL_ARG_ATTR_POST_OP_DW                                                   | Input  |
 | \f$\text{binary post-op}\f$ | DNNL_ARG_ATTR_MULTIPLE_POST_OP(binary_post_op_position) \| DNNL_ARG_SRC_1  | Input  |
-|                             | DNNL_ARG_ATTR_MULTIPLE_POST_OP(binary_post_op_position) \| DNNL_ARG_SRC_2  | Input  |
+| \                           | DNNL_ARG_ATTR_MULTIPLE_POST_OP(binary_post_op_position) \| DNNL_ARG_SRC_2  | Input  |
 | \f$\text{prelu post-op}\f$  | DNNL_ARG_ATTR_MULTIPLE_POST_OP(prelu_post_op_position) \| DNNL_ARG_WEIGHTS | Input  |
 | [scratchpad]                | DNNL_ARG_SCRATCHPAD                                                        | Output |
 
@@ -251,13 +251,8 @@ The following masks are supported by the primitive:
 - 2, which applies a zero point value per each element in a `IC` or `OC`
   dimension for `DNNL_ARG_SRC` or `DNNL_ARG_DST` arguments respectively.
 
-When scales and/or zero-points masks are specified, the user must
-provide the corresponding scales and/or zero-points as additional
-input memory objects with argument `DNNL_ARG_ATTR_SCALES |
-DNNL_ARG_${MEMORY_INDEX}` or `DNNL_ARG_ATTR_ZERO_POINTS |
-DNNL_ARG_${MEMORY_INDEX}` during the execution stage.  For instance, a
-source tensor zero points memory argument would be passed with index
-(`DNNL_ARG_ATTR_ZERO_POINTS | DNNL_ARG_SRC`).
+Scales and zero-points require additional memory arguments at execution time.
+See the [quantization guide](@ref dgaq_execution) for details.
 
 
 @note The library does not prevent using post-ops in training, but note that

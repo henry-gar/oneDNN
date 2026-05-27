@@ -1301,7 +1301,7 @@ int flex_rewrite_t::op_attrs_rewrite(deserialized_graph_t &dgraph) {
                 temp_op.attrs_[attr_name].str_value_ = new_val;
             } else if (attr_type == "bool") {
                 temp_op.attrs_[attr_name].bool_value_
-                        = str2bool(new_val.c_str());
+                        = parser::parsers::str2bool(new_val);
             } else if (attr_type == "s64") {
                 temp_op.attrs_[attr_name].s64_value_ = stoll(new_val);
             } else if (attr_type == "s64[]") {
@@ -1620,6 +1620,7 @@ int flex_rewrite_t::update_output_info(deserialized_op_t &aop,
         case dnnl::graph::op::kind::ConvTransposeBackwardWeights:
         case dnnl::graph::op::kind::Dequantize:
         case dnnl::graph::op::kind::Divide:
+        case dnnl::graph::op::kind::Dropout:
         case dnnl::graph::op::kind::DynamicDequantize:
         case dnnl::graph::op::kind::DynamicQuantize:
         case dnnl::graph::op::kind::Elu:

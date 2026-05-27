@@ -54,7 +54,6 @@ Other problem specific options supported:
 | %attr%       | All                                                                   | Primitive attributes
 | %axis%       | Concat, Shuffle, Softmax                                              | Primitive axis
 | %desc%       | All                                                                   | String style problem descriptor
-| %DESC%       | All                                                                   | CSV-style problem descriptor values only
 | %dir%        | All, except Concat, RNN, Reorder, Sum                                 | Primitive prop kind
 | %direction%  | RNN                                                                   | RNN direction execution
 | %driver%     | All                                                                   | Name of the current driver (e.g. conv, reorder)
@@ -125,8 +124,10 @@ dumping results with a standard performance template:
                --batch=inputs/ip/test_ip_all
 ```
 ```
-Output template: perf,%engine%,%name%,%prb%,%Gops%,%Gfreq%,%-time%,%-Gflops%,%0time%,%0Gflops%
-perf,cpu,"resnet:ip1",mb112oc1000ic2048n"resnet:ip1",0.458752,0,0.521729,879.293,0.576451,795.822
+Template entries: perf,%engine%,%impl%,%name%,%prb%,%Gops%,%+ctime%,%-time%,%-Gflops%,%0time%,%0Gflops%
+perf,engine,impl,name,prb,Gops,max_ctime,min_time,min_Gflops,avg_time,avg_Gflops
+perf,cpu,brg_matmul:avx512_core,"resnet:ip1",--mode=P --max-ms-per-prb=6000 --ip ic2048oc1000n"resnet:ip1",0.008192,0.935547,0.0234375,349.525,0.0269902,303.518
+...
 ```
 
 Runs a set of inner products measuring performance and dumping results in
@@ -136,8 +137,10 @@ CSV-style:
                --batch=inputs/ip/test_ip_all
 ```
 ```
-Output template: perf,%engine%,%name%,%dir%,%cfg%,%attr%,%DESC%,%Gops%,%Gfreq%,%-time%,%-Gflops%,%0time%,%0Gflops%
-perf,cpu,"resnet:ip1",FWD_B,f32,,112,1000,2048,1,1,0.458752,0,0.520264,881.768,0.564043,813.328
+Template entries: perf,%engine%,%impl%,%name%,%dir%,%sdt%,%stag%,%wtag%,%dtag%,%attr%,%desc%,%Gops%,%+ctime%,%-time%,%-Gflops%,%0time%,%0Gflops%
+perf,engine,impl,name,dir,sdt,stag,wtag,dtag,attr,desc,Gops,max_ctime,min_time,min_Gflops,avg_time,avg_Gflops
+perf,cpu,brg_matmul:avx512_core,"resnet:ip1",FWD_B,f32:f32:f32,any,any,any,,ic2048oc1000n"resnet:ip1",0.008192,0.9375,0.0234375,349.525,0.027302,300.051
+...
 ```
 
 Runs a set of inner products measuring performance and dumping custom template -
@@ -148,6 +151,8 @@ not a special symbol here; any other delimiter can be used:
                --batch=inputs/ip/test_ip_all
 ```
 ```
-Output template: %prb%,%-time%,%-Gflops%
-mb112oc1000ic2048n"resnet:ip1",0.521973,878.881
+Template entries: %prb%,%-time%,%-Gflops%
+prb,min_time,min_Gflops
+--mode=P --ip ic2048oc1000n"resnet:ip1",0.0234375,349.525
+...
 ```

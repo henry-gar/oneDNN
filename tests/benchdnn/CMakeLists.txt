@@ -81,6 +81,16 @@ function(register_benchdnn_test engine driver test_file)
         set(mode_modifier "--mode-modifier=P")
     endif()
 
+    # TODO: workaround a hang in Level Zero backend when during parallel
+    # creation several resources are initialized.
+    # Remove me once resolved.
+    if(${engine} MATCHES "gpu"
+       AND ${driver} MATCHES "rnn"
+       AND ${DNNL_GPU_VENDOR} MATCHES "INTEL"
+       AND ${DNNL_GPU_RUNTIME} MATCHES "ZE")
+        set(mode_modifier "")
+    endif()
+
     foreach(tm ${test_mode})
         string(REPLACE "test_" "test_benchdnn_mode${tm}_" target_name ${test_file})
         set(cmd "--mode=${tm} ${mode_modifier} -v1 --engine=${engine} --${driver} --batch=${test_file}")
@@ -207,6 +217,11 @@ foreach(driver ${all_drivers})
             register_all_tests(cpu "${driver}" "${test_files_ci}")
         endif()
     elseif(DNNL_TEST_SET_COVERAGE EQUAL DNNL_TEST_SET_NIGHTLY)
+        if(NOT DNNL_EXPERIMENTAL_GROUPED_MEMORY)
+            list(REMOVE_ITEM test_files_gpu "test_matmul_grouped_gpu")
+            list(REMOVE_ITEM test_files_cpu "test_matmul_grouped_gpu")
+        endif()
+
         ## Filter out gpu, large cpu and invalid inputs from cpu
         ##
         ## Note: put longer/specialized names first to keep filtering working.

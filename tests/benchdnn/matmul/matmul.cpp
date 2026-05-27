@@ -205,7 +205,8 @@ dnnl_status_t init_pd(init_pd_args_t<prb_t> &init_pd_args) {
     }
 
     attr_args_t attr_args;
-    attr_args.prepare_post_ops_mds(prb->attr, prb->ndims, prb->dst_dims.data());
+    attr_args.prepare_post_ops_mds(prb->attr, prb->ndims, prb->dst_dims.data(),
+            dnnl_undefined_primitive, &prb->sparse_options);
 
     const auto overload_quant_mask = [&](policy_t policy, int arg) {
         // Overload PER_OC/PER_OCIC mask definition for batched cases.
@@ -497,10 +498,12 @@ static void fill_dense_fp_values(data_kind_t kind, const prb_t *prb,
 }
 
 #if DNNL_EXPERIMENTAL_GROUPED_MEMORY
+
 // Fill offsets buffer for grouped memory with cumulative sums
-static int fill_grouped_offsets(dnn_mem_t &mem, const prb_t *prb) {
-    const int64_t group_count = prb->sparse_options.get_group_count();
-    const auto &group_sizes = prb->sparse_options.get_group_sizes();
+static int fill_grouped_offsets(
+        dnn_mem_t &mem, const sparse_options_t &sparse_options) {
+    const int64_t group_count = sparse_options.get_group_count();
+    const auto &group_sizes = sparse_options.get_group_sizes();
 
     int64_t cumulative = 0;
     for (int64_t g = 0; g < group_count; g++) {
@@ -537,7 +540,7 @@ static int fill_grouped_data(data_kind_t kind, const prb_t *prb,
     }
 
     // Fill offsets buffer
-    SAFE(fill_grouped_offsets(mem_dt, prb), WARN);
+    SAFE(fill_grouped_offsets(mem_dt, prb->sparse_options), WARN);
 
     if (has_bench_mode_modifier(mode_modifier_t::no_ref_memory)) return OK;
 
@@ -656,16 +659,6 @@ void skip_unimplemented_prb(const prb_t *prb, res_t *res) {
     skip_unimplemented_binary_po(prb->attr, res);
     skip_unimplemented_prelu_po(prb->attr, res, dnnl_matmul);
 
-    if ((is_nvidia_gpu() || is_amd_gpu()) && !prb->sparse_options.is_def()) {
-        BENCHDNN_PRINT(2,
-                "[SKIP][%s:%d]: oneDNN doesn't support sparse matmul for "
-                "NVIDIA and AMD GPUs.\n",
-                __FILE__, __LINE__);
-        res->state = SKIPPED;
-        res->reason = skip_reason::case_not_supported;
-        return;
-    }
-
     const auto wei_encoding
             = prb->sparse_options.get_encoding(DNNL_ARG_WEIGHTS);
     bool is_wei_dense = (wei_encoding == dnnl_sparse_encoding_undef);
@@ -678,7 +671,7 @@ void skip_unimplemented_prb(const prb_t *prb, res_t *res) {
                 "for source.\n",
                 __FILE__, __LINE__);
         res->state = SKIPPED;
-        res->reason = skip_reason::case_not_supported;
+        res->reason = reason_t::skip_not_supported;
         return;
     }
 
@@ -703,7 +696,7 @@ void skip_unimplemented_prb(const prb_t *prb, res_t *res) {
                     "dense weights on CPU.\n",
                     __FILE__, __LINE__);
             res->state = SKIPPED;
-            res->reason = skip_reason::case_not_supported;
+            res->reason = reason_t::skip_not_supported;
             return;
         }
     }
@@ -714,7 +707,7 @@ void skip_unimplemented_prb(const prb_t *prb, res_t *res) {
                 "encoding.\n",
                 __FILE__, __LINE__);
         res->state = SKIPPED;
-        res->reason = skip_reason::case_not_supported;
+        res->reason = reason_t::skip_not_supported;
         return;
     }
 
@@ -725,7 +718,7 @@ void skip_unimplemented_prb(const prb_t *prb, res_t *res) {
             BENCHDNN_PRINT(2, "[SKIP][%s:%d]: CPU doesn't support x8s8f16.\n",
                     __FILE__, __LINE__);
             res->state = SKIPPED;
-            res->reason = skip_reason::case_not_supported;
+            res->reason = reason_t::skip_not_supported;
             return;
         }
 
@@ -751,7 +744,7 @@ void skip_unimplemented_prb(const prb_t *prb, res_t *res) {
                     "floating point source and weights.\n",
                     __FILE__, __LINE__);
             res->state = SKIPPED;
-            res->reason = skip_reason::case_not_supported;
+            res->reason = reason_t::skip_not_supported;
         }
 
         if (!is_int(prb->src_dt()) && !is_int(prb->wei_dt())
@@ -761,7 +754,7 @@ void skip_unimplemented_prb(const prb_t *prb, res_t *res) {
                     "with  floating point source and weights.\n",
                     __FILE__, __LINE__);
             res->state = SKIPPED;
-            res->reason = skip_reason::case_not_supported;
+            res->reason = reason_t::skip_not_supported;
         }
 
         if (!prb->attr.scales.is_def(DNNL_ARG_DST)
@@ -772,7 +765,7 @@ void skip_unimplemented_prb(const prb_t *prb, res_t *res) {
                     "are supported on CPU.\n",
                     __FILE__, __LINE__);
             res->state = SKIPPED;
-            res->reason = skip_reason::case_not_supported;
+            res->reason = reason_t::skip_not_supported;
             return;
         }
     }
@@ -785,7 +778,7 @@ void skip_unimplemented_prb(const prb_t *prb, res_t *res) {
                     "supported.\n",
                     __FILE__, __LINE__);
             res->state = SKIPPED;
-            res->reason = skip_reason::case_not_supported;
+            res->reason = reason_t::skip_not_supported;
             return;
         }
 
@@ -796,7 +789,7 @@ void skip_unimplemented_prb(const prb_t *prb, res_t *res) {
                     "argument.\n",
                     __FILE__, __LINE__);
             res->state = SKIPPED;
-            res->reason = skip_reason::case_not_supported;
+            res->reason = reason_t::skip_not_supported;
             return;
         }
 
@@ -818,7 +811,7 @@ void skip_unimplemented_prb(const prb_t *prb, res_t *res) {
                     "support certain features.\n",
                     __FILE__, __LINE__);
             res->state = SKIPPED;
-            res->reason = skip_reason::case_not_supported;
+            res->reason = reason_t::skip_not_supported;
             return;
         }
 
@@ -833,7 +826,7 @@ void skip_unimplemented_prb(const prb_t *prb, res_t *res) {
                     "configuration and 2D-matmul.\n",
                     __FILE__, __LINE__);
             res->state = SKIPPED;
-            res->reason = skip_reason::case_not_supported;
+            res->reason = reason_t::skip_not_supported;
             return;
         }
 
@@ -847,153 +840,39 @@ void skip_unimplemented_prb(const prb_t *prb, res_t *res) {
                     "pre-XeHPC platforms with limited post-op support.\n",
                     __FILE__, __LINE__);
             res->state = SKIPPED;
-            res->reason = skip_reason::case_not_supported;
+            res->reason = reason_t::skip_not_supported;
             return;
         }
 
-        if ((dnnl::impl::utils::one_of(
-                     dnnl_f4_e3m0, prb->src_dt(), prb->wei_dt(), prb->dst_dt())
-                    || dnnl::impl::utils::one_of(dnnl_f4_e2m1, prb->src_dt(),
-                            prb->wei_dt(), prb->dst_dt()))
+        if (dnnl::impl::utils::one_of(
+                    dnnl_f4_e2m1, prb->src_dt(), prb->wei_dt(), prb->dst_dt())
                 && (!po.is_def() || !prb->attr.scales.is_def())) {
             BENCHDNN_PRINT(2,
                     "[SKIP][%s:%d]: GPU supports fp4 through ref only on "
                     "pre-XeHPC platforms with limited post-op support.\n",
                     __FILE__, __LINE__);
             res->state = SKIPPED;
-            res->reason = skip_reason::case_not_supported;
+            res->reason = reason_t::skip_not_supported;
             return;
-        }
-        if (is_nvidia_gpu() || is_amd_gpu()) {
-            if (prb->attr.scales.has_host_scalars()) {
-                BENCHDNN_PRINT(2,
-                        "[SKIP][%s:%d]: Scales as host-side scalars are not "
-                        "supported on NVIDIA and AMD GPUs.\n",
-                        __FILE__, __LINE__);
-                res->state = SKIPPED;
-                res->reason = skip_reason::case_not_supported;
-                return;
-            }
-            if (prb->attr.zero_points.has_host_scalars()) {
-                BENCHDNN_PRINT(2,
-                        "[SKIP][%s:%d]: Zero-points as host-side scalars are "
-                        "not "
-                        "supported on NVIDIA and AMD GPUs.\n",
-                        __FILE__, __LINE__);
-                res->state = SKIPPED;
-                res->reason = skip_reason::case_not_supported;
-                return;
-            }
         }
     }
 }
 
 void skip_invalid_prb(const prb_t *prb, res_t *res) {
-    if (!prb->attr.zero_points.get(DNNL_ARG_WEIGHTS).is_def()
-            && (prb->wei_dt() != dnnl_s8 && prb->wei_dt() != dnnl_u8
-                    && prb->wei_dt() != dnnl_s4 && prb->wei_dt() != dnnl_u4)) {
-        BENCHDNN_PRINT(2,
-                "[INVALID][%s:%d]: Zero-points applied to a non-integral data "
-                "type.\n",
-                __FILE__, __LINE__);
-        res->state = SKIPPED;
-        res->reason = skip_reason::invalid_case;
-        return;
-    }
-
-    if (!prb->attr.scales.get(DNNL_ARG_WEIGHTS).is_def()) {
-        const auto &groups = prb->attr.scales.get(DNNL_ARG_WEIGHTS).groups;
-        if (!groups.empty()) {
-            if (prb->k % groups[0]) {
-                BENCHDNN_PRINT(2,
-                        "[INVALID][%s:%d]: Weight-only quantization scales "
-                        "require IC ('%d') to be divisible by groups ('%d')\n",
-                        __FILE__, __LINE__, (int)prb->k, (int)groups[0]);
-                res->state = SKIPPED;
-                res->reason = skip_reason::invalid_case;
-                return;
-            } else if (groups.size() > 2) {
-                BENCHDNN_PRINT(2,
-                        "[INVALID][%s:%d]: Weight-only quantization scales "
-                        "groups "
-                        "support only two dimensions\n",
-                        __FILE__, __LINE__);
-                res->state = SKIPPED;
-                res->reason = skip_reason::invalid_case;
-                return;
-            }
-        }
-    }
-
-    if (!prb->attr.zero_points.get(DNNL_ARG_WEIGHTS).is_def()) {
-        const auto &groups = prb->attr.zero_points.get(DNNL_ARG_WEIGHTS).groups;
-        if (!groups.empty()) {
-            if (groups[0] > 0 && (prb->k % groups[0])) {
-                BENCHDNN_PRINT(2,
-                        "[INVALID][%s:%d]: Weight-only quantization "
-                        "zero-points "
-                        "require IC ('%d') to be divisible by groups ('%d')\n",
-                        __FILE__, __LINE__, (int)prb->k, (int)groups[0]);
-                res->state = SKIPPED;
-                res->reason = skip_reason::invalid_case;
-                return;
-            } else if (groups.size() > 2) {
-                BENCHDNN_PRINT(2,
-                        "[INVALID][%s:%d]: Weight-only quantization "
-                        "zero-points "
-                        "groups support only two dimensions\n",
-                        __FILE__, __LINE__);
-                res->state = SKIPPED;
-                res->reason = skip_reason::invalid_case;
-                return;
-            }
-        }
-    }
-
-    // Check int4 weights byte alignment if format is specified.
-    if ((prb->wei_dt() == dnnl_s4 || prb->wei_dt() == dnnl_u4)
-            && (!prb->strides[WEI].empty()
-                    || (prb->wtag != tag::any && prb->wtag != tag::undef))) {
-        const auto &weights_rt_dims = get_runtime_dims(
-                prb->weights_dims(), prb->weights_runtime_dim_mask());
-        const auto wei_md = dnn_mem_t::init_md((int)weights_rt_dims.size(),
-                weights_rt_dims.data(), prb->wei_dt(), prb->wtag,
-                prb->strides[STRIDES_WEI]);
-
-        const auto wei_strides = query_md_strides(wei_md);
-        int n_unit_strides = 0;
-        for (int d = 0; d < query_md_ndims(wei_md); d++) {
-            if (wei_strides[d] == 1) {
-                n_unit_strides++;
-                if (n_unit_strides > 1) {
-                    BENCHDNN_PRINT(2,
-                            "[INVALID][%s:%d]: Int4 Weight-only quantization "
-                            "requires byte alignment for the tensor.\n",
-                            __FILE__, __LINE__);
-                    res->state = SKIPPED;
-                    res->reason = skip_reason::invalid_case;
-                    return;
-                }
-            }
-            if (wei_strides[d] > 1 && (wei_strides[d] % 2)) {
-                BENCHDNN_PRINT(2,
-                        "[INVALID][%s:%d]: Int4 Weight-only quantization "
-                        "requires "
-                        "byte alignment for the tensor.\n",
-                        __FILE__, __LINE__);
-                res->state = SKIPPED;
-                res->reason = skip_reason::invalid_case;
-                return;
-            }
-        }
-    }
-
     auto src_rt_mask = prb->src_runtime_dim_mask();
     auto wei_rt_mask = prb->weights_runtime_dim_mask();
     auto dst_rt_mask = prb->dst_runtime_dim_mask();
 
     // Memory layouts must be defined when some dimensions are unknown at pd
     // creation time.
+    //
+    // Note: this check must be removed from here, and the check should be
+    // delegated to the library API checks, but since it doesn't articulate
+    // what's the exact problem, keep it here until it does.
+    //
+    // Note: runtime_dims get initialized when prb is created which is past
+    // input verification point, that's why this and the check below live here,
+    // but not there.
     if ((src_rt_mask.any() && prb->stag == "any")
             || (wei_rt_mask.any() && prb->wtag == "any")
             || (dst_rt_mask.any() && prb->dtag == "any")) {
@@ -1003,7 +882,7 @@ void skip_invalid_prb(const prb_t *prb, res_t *res) {
                 "`--stag`, `--wtag`, and/or `--dtag`.\n",
                 __FILE__, __LINE__);
         res->state = SKIPPED;
-        res->reason = skip_reason::invalid_case;
+        res->reason = reason_t::invalid;
         return;
     }
 
@@ -1019,7 +898,7 @@ void skip_invalid_prb(const prb_t *prb, res_t *res) {
                 "dimensions must be consistent.\n",
                 __FILE__, __LINE__);
         res->state = SKIPPED;
-        res->reason = skip_reason::invalid_case;
+        res->reason = reason_t::invalid;
         return;
     }
 
@@ -1036,7 +915,7 @@ void skip_invalid_prb(const prb_t *prb, res_t *res) {
                     "be consistent.\n",
                     __FILE__, __LINE__);
             res->state = SKIPPED;
-            res->reason = skip_reason::invalid_case;
+            res->reason = reason_t::invalid;
             return;
         }
     }
@@ -1125,10 +1004,12 @@ int init_ref_memory_args(dnn_mem_map_t &ref_mem_map, dnn_mem_map_t &mem_map,
 #if DNNL_EXPERIMENTAL_GROUPED_MEMORY
                 // Grouped SRC/DST are excluded from `is_sparse` to keep the
                 // sparse and grouped paths separate below, so exclude them here
-                // to allow `no_ref_memory` to work for grouped cases
+                // to allow `no_ref_memory` to work for grouped cases.
+                // The hint is a direct runtime input to the library, not
+                // reference memory, so it must always be filled.
                 && !(is_grouped
-                        && (exec_arg == DNNL_ARG_SRC
-                                || exec_arg == DNNL_ARG_DST))
+                        && (exec_arg == DNNL_ARG_SRC || exec_arg == DNNL_ARG_DST
+                                || exec_arg == DNNL_ARG_HINT_MAX_GROUP_SIZE))
 #endif
                 && !is_sparse)
             continue;
@@ -1204,7 +1085,7 @@ int init_ref_memory_args(dnn_mem_map_t &ref_mem_map, dnn_mem_map_t &mem_map,
                 if (is_grouped) {
                     // Only offsets need to be filled
                     // as values are computed by the library
-                    SAFE(fill_grouped_offsets(mem, prb), WARN);
+                    SAFE(fill_grouped_offsets(mem, prb->sparse_options), WARN);
                 }
 #endif
                 const auto &po = prb->attr.post_ops;
@@ -1233,11 +1114,30 @@ int init_ref_memory_args(dnn_mem_map_t &ref_mem_map, dnn_mem_map_t &mem_map,
                 // TODO: introduce an order of processing arguments to avoid
                 // post filling manipulations.
                 break;
-            default:
+            default: {
                 SAFE(init_ref_memory_args_default_case(
                              exec_arg, mem, ref_mem, prb->attr, res),
                         WARN);
-                break;
+#if DNNL_EXPERIMENTAL_GROUPED_MEMORY
+                // Fill offsets for grouped binary post-op tensors
+                // Note that values are already filled by the default case above
+                if (is_grouped) {
+                    const auto &po = prb->attr.post_ops;
+                    // DNNL_ARG_ATTR_MULTIPLE_POST_OP(idx) = BASE * (idx + 1)
+                    const int po_idx
+                            = exec_arg / DNNL_ARG_ATTR_MULTIPLE_POST_OP_BASE
+                            - 1;
+                    const bool is_grouped_bin_po = po_idx >= 0
+                            && po_idx < po.len()
+                            && po.entry[po_idx].is_binary_kind()
+                            && po.entry[po_idx].binary.grouped;
+                    if (is_grouped_bin_po) {
+                        SAFE(fill_grouped_offsets(mem, prb->sparse_options),
+                                WARN);
+                    }
+                }
+#endif
+            } break;
         }
 
         update_ref_mem_map_from_prim(prim_ref, mem, ref_mem_map, exec_arg,

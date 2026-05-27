@@ -216,18 +216,21 @@ struct ref_grouped_t : public primitive_t {
                         (int)zp_gK);
             }
 
-            // Post-ops: only binary mul is supported (for NVFP4 global scale)
+            // Below is to allow using format_any for scalar [1, 1] as binary
+            // post-ops for NVFP4 global scale support
             const auto &po = attr()->post_ops_;
-            bool po_ok = true;
             for (int i = 0; i < po.len(); ++i) {
-                const auto &e = po.entry_[i];
-                po_ok = po_ok && e.is_binary()
-                        && e.binary.alg == alg_kind::binary_mul;
+                auto &e = attr_.post_ops_.entry_[i];
+                if (e.is_binary()) {
+                    const memory_desc_wrapper src1_d(e.binary.src1_desc);
+                    if (src1_d.format_any()) {
+                        VDISPATCH_MATMUL(src1_d.count_non_unit_dims(0),
+                                VERBOSE_UNSUPPORTED_POSTOP);
+                        CHECK(memory_desc_init_by_strides(
+                                e.binary.src1_desc, nullptr));
+                    }
+                }
             }
-            VDISPATCH_MATMUL(po_ok, VERBOSE_UNSUPPORTED_POSTOP);
-            VDISPATCH_MATMUL(attr_.post_ops_.set_default_formats(dst_md(0))
-                            == status::success,
-                    VERBOSE_UNSUPPORTED_POSTOP);
 
             return status::success;
         }
@@ -236,10 +239,14 @@ struct ref_grouped_t : public primitive_t {
     ref_grouped_t(const pd_t *apd) : primitive_t(apd) {}
 
     status_t init(engine_t *engine) override {
-        ref_post_ops
-                = utils::make_unique<ref_post_ops_t>(pd()->attr()->post_ops_);
-        if (!ref_post_ops) return status::out_of_memory;
-        CHECK(ref_post_ops->init(pd()->dst_md()));
+        const auto &po = pd()->attr()->post_ops_;
+        for (int i = 0; i < po.len(); ++i) {
+            const auto &e = po.entry_[i];
+            if (e.is_eltwise())
+                eltwise_po_.emplace_back(e.eltwise);
+            else if (e.is_binary())
+                binary_po_.emplace_back(e.binary);
+        }
         return status::success;
     }
 
@@ -247,7 +254,8 @@ struct ref_grouped_t : public primitive_t {
 
 private:
     const pd_t *pd() const { return (const pd_t *)primitive_t::pd().get(); }
-    std::unique_ptr<ref_post_ops_t> ref_post_ops;
+    std::vector<ref_eltwise_scalar_fwd_t> eltwise_po_;
+    std::vector<ref_binary_scalar_t> binary_po_;
 };
 
 } // namespace matmul

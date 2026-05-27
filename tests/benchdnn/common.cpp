@@ -32,6 +32,7 @@
 
 #include "utils/fill.hpp"
 #include "utils/parallel.hpp"
+#include "utils/parser.hpp"
 
 /* result structure */
 const char *state2str(res_state_t state) {
@@ -54,14 +55,20 @@ const char *state2str(res_state_t state) {
     return "STATE_UNDEF";
 }
 
-namespace skip_reason {
-std::string case_not_supported("Case not supported");
-std::string data_type_not_supported("Data type not supported");
-std::string invalid_case("Invalid case");
-std::string not_enough_ram("Not enough RAM");
-std::string skip_impl_hit("Skip-impl option hit");
-std::string skip_start("Skip-start option hit");
-} // namespace skip_reason
+std::string reason2str(reason_t reason) {
+    switch (reason) {
+        case reason_t::none: return "";
+        case reason_t::graph_untested_rewriter_error: return "Rewriter failed";
+        case reason_t::invalid: return "Invalid case";
+        case reason_t::failed_ref_not_expected: return "Ref Impl Not Expected";
+        case reason_t::skip_not_enough_ram: return "Not enough RAM";
+        case reason_t::skip_impl_hit: return "Skip-impl option hit";
+        case reason_t::skip_start: return "Skip-start option hit";
+        case reason_t::skip_not_supported: return "Case not supported";
+        case reason_t::skip_data_type: return "Data type not supported";
+        default: assert(!"unknown reason"); return std::string();
+    }
+}
 
 dir_t str2dir(const char *str) {
 #define CASE(x) \
@@ -122,7 +129,9 @@ void parse_result(res_t &res, const char *pstr) {
     }
 
     std::string reason;
-    if (!res.reason.empty()) { reason = " (" + res.reason + ")"; }
+    if (res.reason != reason_t::none) {
+        reason = " (" + reason2str(res.reason) + ")";
+    }
 
     std::string error_stat;
     if (res.errors > 0) {
@@ -187,10 +196,6 @@ void parse_result(res_t &res, const char *pstr) {
 
 /* misc */
 
-bool str2bool(const char *str) {
-    return !strcasecmp("true", str) || !strcasecmp("1", str);
-}
-
 const char *bool2str(bool value) {
     return value ? "true" : "false";
 }
@@ -229,7 +234,7 @@ bool match_regex(const char *str, const char *pattern) {
 bool skip_start(res_t *res, int idx) {
     if (idx < test_start) {
         res->state = SKIPPED;
-        res->reason = skip_reason::skip_start;
+        res->reason = reason_t::skip_start;
         return true;
     }
     return false;
@@ -615,8 +620,7 @@ std::string benchdnn_getenv_string(const char *name) {
     const int len = 128;
     char value_str[len];
     if (getenv(name, value_str, len) > 0) { value = value_str; }
-    std::transform(value.begin(), value.end(), value.begin(), ::tolower);
-    return value;
+    return parser::utils::lowercase(value);
 }
 
 std::string smart_bytes(double bytes) {

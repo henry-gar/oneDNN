@@ -1,5 +1,6 @@
 /*******************************************************************************
 * Copyright 2021 Intel Corporation
+* Copyright 2026 Arm Ltd. and affiliates
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -20,7 +21,7 @@
 #include "utils/perf_report.hpp"
 
 void base_perf_report_t::report(res_t *res, const char *prb_str) const {
-    dump_perf_footer();
+    dump_perf_header();
 
     dnnl::impl::stringstream_t ss;
 
@@ -105,7 +106,6 @@ void base_perf_report_t::handle_option(std::ostream &s, const char *&option,
     HANDLE("alg", dump_alg(s));
     HANDLE("cfg", dump_cfg(s));
     HANDLE("desc", dump_desc(s));
-    HANDLE("DESC", dump_desc_csv(s));
     HANDLE("engine", dump_engine(s));
     HANDLE("flags", dump_flags(s));
     HANDLE("activation", dump_rnn_activation(s));
@@ -155,4 +155,40 @@ void base_perf_report_t::handle_option(std::ostream &s, const char *&option,
     BENCHDNN_PRINT(0, "Error: perf report option \"%s\" is not supported\n",
             opt_name.c_str());
     SAFE_V(FAIL);
+}
+
+void base_perf_report_t::dump_perf_header() const {
+
+    static bool header_printed = false;
+    if (header_printed) return;
+
+    BENCHDNN_PRINT(0, "Template entries: %s\n", pt_);
+
+    // Process template into a CSV friendly header, which can be easily processed as a
+    // dataframe (i.e. no symbols other than _ and not starting with a number)
+    const char *pt = pt_;
+    char c;
+    dnnl::impl::stringstream_t ss;
+    while ((c = *pt++) != '\0') {
+        // Print anything that isn't %
+        if (c != '%') {
+            ss << c;
+            continue;
+        }
+        // Replace -/0/+ modifiers immediately after % with min/avg/max in header
+        char c_next = *pt;
+        if (c_next != '\0'
+                && (c_next == '-' || c_next == '0' || c_next == '+')) {
+            switch (c_next) {
+                case '-': ss << "min_"; break;
+                case '0': ss << "avg_"; break;
+                case '+': ss << "max_"; break;
+                default: break;
+            }
+            pt++;
+        }
+    }
+
+    BENCHDNN_PRINT(0, "%s\n", ss.str().c_str());
+    header_printed = true;
 }

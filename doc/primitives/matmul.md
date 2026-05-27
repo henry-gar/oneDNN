@@ -54,7 +54,7 @@ argument index as specified by the following table.
 | \f$\text{dropout probability}\f$ | DNNL_ARG_ATTR_DROPOUT_PROBABILITY                                          | Input  |
 | \f$\text{dropout rng seed}\f$    | DNNL_ARG_ATTR_DROPOUT_SEED                                                 | Input  |
 | \f$\text{binary post-op}\f$      | DNNL_ARG_ATTR_MULTIPLE_POST_OP(binary_post_op_position) \| DNNL_ARG_SRC_1  | Input  |
-|                                  | DNNL_ARG_ATTR_MULTIPLE_POST_OP(binary_post_op_position) \| DNNL_ARG_SRC_2  | Input  |
+| \                                | DNNL_ARG_ATTR_MULTIPLE_POST_OP(binary_post_op_position) \| DNNL_ARG_SRC_2  | Input  |
 | \f$\text{prelu post-op}\f$       | DNNL_ARG_ATTR_MULTIPLE_POST_OP(prelu_post_op_position) \| DNNL_ARG_WEIGHTS | Input  |
 | [scratchpad]                     | DNNL_ARG_SCRATCHPAD                                                        | Output |
 
@@ -159,28 +159,14 @@ The following attributes and post-ops are supported:
 | Post-op   | [Binary](@ref dnnl::post_ops::append_binary)                   | Applies a @ref dnnl_api_binary operation to the result                        | General binary post-op restrictions |
 | Post-op   | [Prelu](@ref dnnl::post_ops::append_prelu)                     | Applies an @ref dnnl_api_prelu operation to the result                        |                                     |
 
-The following masks are supported by the primitive:
-- 0, which applies one scale / zero point value to an entire tensor
-- 1, which applies a scale / zero point values along `k`-dimension
-  for #DNNL_ARG_WEIGHTS. Values could be grouped along this dimension
-  via specifying scales / zero points shapes for the attribute
-  (see the code example @ref matmul_with_weight_only_quantization_cpp).
-- 2, which applies a scale / zero point values per column along the
-  `n`-dimension for #DNNL_ARG_WEIGHTS.
+The `mask` and `groups` parameters for scales and zero-points follow the
+conventions described in the
+[quantization guide](@ref dgaq_constructing_mask_and_groups).
 
-When scales and/or zero-points masks are specified, the user must
-provide the corresponding scales and/or zero-points as additional
-input memory objects with argument `DNNL_ARG_ATTR_SCALES |
-DNNL_ARG_${MEMORY_INDEX}` or `DNNL_ARG_ATTR_ZERO_POINTS |
-DNNL_ARG_${MEMORY_INDEX}` during the execution stage. For instance, a
-source tensor zero points memory argument would be passed with index
-(`DNNL_ARG_ATTR_ZERO_POINTS | DNNL_ARG_SRC`).
-
-When Dropout is specified, at the execution stage the user must provide 2 input
-memory objects with #DNNL_ARG_ATTR_DROPOUT_PROBABILITY (1x1x...x1 f32 value
-from 0.f to 1.f) and #DNNL_ARG_ATTR_DROPOUT_SEED (1x1x...x1 s32 value from INT_MIN
-to INT_MAX), and 1 output memory object with #DNNL_ARG_ATTR_DROPOUT_MASK (u8
-memory buffer that shares its shape with the destination buffer).
+Scales, zero-points, and dropout require additional memory arguments at
+execution time. See the
+[quantization guide](@ref dgaq_execution) and the
+[dropout guide](@ref dev_guide_attributes_dropout) for details.
 
 @note Check the [list of examples and tutorials](#examples) below to see
 run-time attributes in use.
@@ -383,6 +369,13 @@ Setting attributes for grouped GEMM follows the regular matmul attribute API.
 Below are some examples of common use cases for MoE workloads.
 For more details on how to set attributes, refer to the @ref dev_guide_attributes page.
 
+#### Scales and Zero Points
+
+Scales and zero points for grouped GEMM follow the same API as regular matmul.
+Tensors must use dense memory descriptors.
+The data in the scales/zero points tensor must follow the same flat concatenated
+order as the grouped source/weights.
+
 Per-token source scales:
 ~~~cpp
 attr.set_scales_mask(DNNL_ARG_SRC, (1 << 0));  // Varies along M dimension
@@ -404,12 +397,57 @@ attr.set_scales_mask(DNNL_ARG_WEIGHTS, (1 << 0) | (1 << 2));
 // Layout: standard ab layout
 ~~~
 
+K-grouped weight scales (e.g., MXFP8 with block size 32):
+~~~cpp
+attr.set_scales(DNNL_ARG_WEIGHTS, (1 << 0) | (1 << 1) | (1 << 2),
+    {32, 1}, memory::data_type::e8m0);
+// Groups are 2D {gK, gN} and are applied to two last dimensions of the tensor
+// Scale tensor: [num_groups, K/32, N] - dense 3D tensor
+// Layout: standard abc layout
+~~~
+
 Bias per expert:
 ~~~cpp
 // Bias: [num_groups, N] - dense 2D tensor
 auto bias_md = memory::desc({num_groups, N},
     memory::data_type::f32, memory::format_tag::ab);
 // Layout: standard ab layout
+~~~
+
+#### Post-ops Support
+
+Post-ops for grouped GEMM follow the same API as regular matmul.
+Eltwise and binary multiplication post-ops are supported.
+
+Binary post-op tensors accept both dense and grouped memory descriptors.
+Note that when a grouped descriptor is provided, we use the binary tensor's
+own per-group offsets for addressing, but they must describe the same grouped
+partition as the grouped destination tensor.
+
+SiLU and element-wise matrix multiplication as post-op:
+~~~cpp
+// [total_tokens, N] tensor, that could be either grouped or dense with
+// memory::format_tag::ab
+auto binary_md = /*...*/;
+
+post_ops po;
+po.append_eltwise(algorithm::eltwise_swish, 1.0f, 0.f);  // SiLU first
+po.append_binary(algorithm::binary_mul, binary_md);      // then mul
+attr.set_post_ops(po);
+~~~
+
+Note that dense tensor must follow the same flat concatenated order as the grouped dst.
+
+Binary multiply with per-row broadcast:
+~~~cpp
+// [total_tokens, 1] tensor, that is one scalar per row
+// in the same flat concatenated order as the grouped destination
+auto routing_md = memory::desc({total_tokens, 1},
+    memory::data_type::f32, memory::format_tag::ab);
+
+post_ops po;
+po.append_binary(algorithm::binary_mul, routing_md);
+attr.set_post_ops(po);
 ~~~
 
 ### Execution Hints
@@ -455,10 +493,15 @@ The following are supported:
 - Zero points attribute for source and weights tensors:
   - The masks must match the scales mask
   - Source zero points data types include `u8`, `s8`
-  - Weights zero points data types include `u8`, `s8`, `u4`, `s4‘
-- Post-ops: binary post-ops are supported (e.g., binary `mul` with a scalar
-  `f32` tensor can be used to apply a global scale factor, as needed for NVFP4
-  two-level scaling).
+  - Weights zero points data types include `u8`, `s8`, `u4`, `s4`
+- Post-ops: eltwise and binary multiplication post-ops are supported. Binary post-op
+  tensors accept both dense and grouped memory descriptors.
+  Common patterns include `eltwise_swish` for SiLU activation,
+  `binary_mul` with a `[total_tokens, N]` grouped or dense tensor,
+  `binary_mul` with a `[total_tokens, 1]` dense tensor,
+  and `[1, 1]` that could be used to apply a global scale for NVFP4.
+  For grouped binary tensors, the per-group offsets must match the grouped dst
+  partition.
 - Bias supports per-expert shape.
 - Supported on CPU and GPU engines.
 

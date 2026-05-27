@@ -21,11 +21,11 @@
 #include <float.h>
 #include <math.h>
 #include <stddef.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include <cinttypes>
+#include <cstdio>
 #include <functional>
 #include <map>
 #include <string>
@@ -99,6 +99,55 @@ extern bool check_ref_impl;
 extern std::string skip_impl; /* empty or "" means skip nothing */
 extern std::string driver_name;
 
+// This is a safeguard for BENCHDNN_PRINTF macro against mismatches between
+// format specifiers and passed arguments that could lead to runtime failures.
+// Any discrepancies will emit warnings during build time for GCC and
+// clang builds.
+//
+// Note: an attribute can be attached to a declaration only, thus, there's a
+// dedicated declaration for GCC and clang.
+//
+// Note: additionally, this attribute doesn't have native support against C++11
+// variadic lists through templates, thus, this call is used directly in a
+// macro.
+//
+// Note: the approach is copied from verbose.cpp file.
+#if defined(__GNUC__) || defined(__clang__)
+inline void format_type_checker(const char *, ...)
+        __attribute__((format(printf, 1, 2)));
+#endif
+inline void format_type_checker(const char *, ...) {}
+
+template <typename... Args>
+void benchdnn_printf_impl(
+        const char *format, const char *filename, size_t line, Args... args) {
+    const int size = snprintf(nullptr, 0, format, args...) + 1;
+    if (size == 0) {
+        printf("Unexpected error in 'benchdnn_printf_impl'\n");
+        exit(1);
+    }
+
+    std::string msg(size, '\0');
+    snprintf(&msg[0], size, format, args...);
+
+    printf("%s (%s:%zu)\n", msg.c_str(), filename, line);
+}
+
+// This is a new implementation to move benchdnn print calls to.
+// Note: using former one can't be done as is since the 'format' is mixed with
+// other string literals.
+//
+// WARNING: if a function call is passed as an argument, it will be called
+// TWICE, once in format checking, the second time in `benchdnn_printf_impl`.
+#define BENCHDNN_PRINTF(v, fmt, ...) \
+    do { \
+        if (verbose >= v) { \
+            format_type_checker(fmt, __VA_ARGS__); \
+            benchdnn_printf_impl(fmt, __FILE__, __LINE__, __VA_ARGS__), \
+                    fflush(0); \
+        } \
+    } while (0)
+
 #define BENCHDNN_PRINT(v, fmt, ...) \
     do { \
         if (verbose >= v) { \
@@ -151,22 +200,12 @@ extern stat_t benchdnn_stat;
 
 const char *state2str(res_state_t state);
 
-namespace skip_reason {
-extern std::string case_not_supported;
-extern std::string data_type_not_supported;
-extern std::string invalid_case;
-extern std::string not_enough_ram;
-extern std::string skip_impl_hit;
-extern std::string skip_start;
-} // namespace skip_reason
-
 dir_t str2dir(const char *str);
 void parse_result(res_t &res, const char *pstr);
 
 /* misc */
 void init_fp_mode();
 
-bool str2bool(const char *str);
 const char *bool2str(bool value);
 
 bool match_regex(const char *str, const char *pattern);

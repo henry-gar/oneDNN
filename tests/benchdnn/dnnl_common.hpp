@@ -103,6 +103,7 @@ struct engine_t {
     engine_t(const engine_t &other);
     ~engine_t();
     operator dnnl_engine_t() const { return engine_; }
+    dnnl_engine_kind_t get_kind() const;
 
 private:
     engine_t &operator=(engine_t &other) = delete;
@@ -126,6 +127,7 @@ private:
 // Engine used to run oneDNN primitives for testing.
 inline const engine_t &get_test_engine() {
     static const engine_t instance(engine_tgt_kind);
+    assert(instance.get_kind() == engine_tgt_kind);
     return instance;
 }
 
@@ -334,11 +336,16 @@ int check_dnnl_status(dnnl_status_t status, const prb_t *prb, res_t *res) {
             // not supported.
             if (is_nvidia_gpu() || is_amd_gpu()) {
                 res->state = SKIPPED;
-                res->reason = skip_reason::case_not_supported;
+                res->reason = reason_t::skip_not_supported;
                 return OK;
             }
 
             // Check driver specific cases of unimplemented functionality.
+            // It means that the case is valid from API perspective but not
+            // supported by any implementation for a specific backend.
+            //
+            // Note: since it's done post pd creation, code in these
+            // driver-defined functions can end up being dead.
             skip_unimplemented_prb(prb, res);
             if (res->state == SKIPPED || res->state == DEFERRED) return OK;
 
@@ -383,7 +390,7 @@ int fetch_impl(benchdnn_dnnl_wrapper_t<dnnl_primitive_desc_t> &pdw,
         // Iterator is not supported, further logic is not applicable.
         if (!init_pd_args.is_iterator_supported) {
             if (res) res->state = SKIPPED;
-            if (res) res->reason = skip_reason::skip_impl_hit;
+            if (res) res->reason = reason_t::skip_impl_hit;
             return OK;
         }
 
@@ -392,7 +399,7 @@ int fetch_impl(benchdnn_dnnl_wrapper_t<dnnl_primitive_desc_t> &pdw,
             BENCHDNN_PRINT(2, "%s\n",
                     "[IMPL_FILTER] All implementations were skipped!");
             if (res) res->state = SKIPPED;
-            if (res) res->reason = skip_reason::skip_impl_hit;
+            if (res) res->reason = reason_t::skip_impl_hit;
             pdw.reset(nullptr);
             return OK;
         } else if (status == dnnl_success) {
@@ -461,7 +468,7 @@ int create_primitive(benchdnn_dnnl_wrapper_t<dnnl_primitive_t> &primw,
                     smart_bytes(res->mem_size_args.scratchpad_size).c_str(),
                     smart_bytes(gpu_max_alloc_capacity).c_str());
             res->state = SKIPPED;
-            res->reason = skip_reason::not_enough_ram;
+            res->reason = reason_t::skip_not_enough_ram;
             return OK;
         }
     }
@@ -504,6 +511,15 @@ int init_prim(benchdnn_dnnl_wrapper_t<dnnl_primitive_t> &user_prim,
         bool is_service_prim = false) {
     benchdnn_dnnl_wrapper_t<dnnl_primitive_t> primw;
 
+    // Verify that the problem is formed correctly. `invalid` means that there
+    // might be incompatible settings that the library can verify only in
+    // runtime, and it usually doesn't do that leading to unexpected results
+    // which is hard to debug, e.g., inplace mode with different-sized data
+    // types - it will lead to a crash or incorrect result.
+    //
+    // This function MUST NOT take care of cases that return `invalid_arguments`
+    // status. The library must return this status for all incorrect API calls
+    // and such cases must be updated on the user side.
     skip_invalid_prb(prb, res);
     if (res->state == SKIPPED) return OK;
 #ifndef DNNL_DISABLE_PRIMITIVE_CACHE

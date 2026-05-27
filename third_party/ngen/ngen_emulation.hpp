@@ -599,12 +599,10 @@ struct EmulationImplementation {
                     g.mad(mod, dstHi, dstLo, s0Hi, src1, loc);
                     g.mov(mod, dstLo, accLo, loc);
                 } else {
-                    auto acc = g.acc0.retype(dst.getType())[dst.getOffset()](dst.getHS());
                     dstHi.setType(isSigned(dst.getType()) ? DataType::d : DataType::ud);
-                    g.mov(mod, dst, 0);
-                    g.mul(mod, acc, s0Lo, src1, loc);
-                    g.mul(mod, dstHi, s0Hi, src1, loc);
-                    g.add(mod, dst, dst, acc);
+                    g.mul(mod, accHi, s0Hi, src1, loc);
+                    g.mul(mod, dst, s0Lo, src1, loc);
+                    g.add(mod, dstHi, dstHi, accHi, loc);
                 }
             } else if(s1D) {
                 auto s1Lo = lowWord(src1);
@@ -616,12 +614,10 @@ struct EmulationImplementation {
                     g.add(mod, dstHi, dstHi, dstLo, loc);
                     g.mov(mod, dstLo, accLo, loc);
                 }else{
-                    auto acc= g.acc0.retype(dst.getType())[dst.getOffset()](dst.getHS());
-                    dstHi.setType(isSigned(dst.getType())? DataType::d : DataType::ud);
-                    g.mov(mod, dst, 0);
-                    g.mul(mod, acc, s0Lo, src1, loc);
-                    g.mul(mod, dstHi, s0Hi, src1, loc);
-                    g.add(mod, dst, dst, acc);
+                    dstHi.setType(isSigned(dst.getType()) ? DataType::d : DataType::ud);
+                    g.mul(mod, accHi, s0Hi, src1, loc);
+                    g.mul(mod, dst, s0Lo, src1, loc);
+                    g.add(mod, dstHi, dstHi, accHi, loc);
                 }
 
             } else stub();
@@ -646,12 +642,19 @@ struct EmulationImplementation {
                     = g.acc0.retype(s0Type)[dstLo.getOffset()](dstLo.getHS());
             auto accHi
                     = g.acc0.retype(s0Type)[dstHi.getOffset()](dstHi.getHS());
-            g.mul(mod, accHi, src0, s1W2, loc);
-            g.macl(mod, dstHi, src0, s1Hi, loc);
-            g.mul(mod, accLo, src0, s1W0, loc);
-            g.mach(mod, dstLo, src0, s1Lo, loc);
-            g.add(mod, dstHi, dstHi, dstLo, loc);
-            g.mov(mod, dstLo, accLo, loc);
+            if (emulateDWxDW) {
+                g.mul(mod, accHi, src0, s1W2, loc);
+                g.macl(mod, dstHi, src0, s1Hi, loc);
+                g.mul(mod, accLo, src0, s1W0, loc);
+                g.mach(mod, dstLo, src0, s1Lo, loc);
+                g.add(mod, dstHi, dstHi, dstLo, loc);
+                g.mov(mod, dstLo, accLo, loc);
+            } else {
+                dstHi.setType(isSigned(dst.getType()) ? DataType::d : DataType::ud);
+                g.mul(mod, accHi, src0, s1Hi, loc);
+                g.mul(mod, dst, src0, s1Lo, loc);
+                g.add(mod, dstHi, dstHi, accHi, loc);
+            }
         } else if (dstQ && s0W && s1W) {
             RegData dstLo, dstHi;
             splitToDW(dst, dstLo, dstHi);

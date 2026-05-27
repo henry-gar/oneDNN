@@ -21,6 +21,8 @@
 
 #include <cctype>
 #include <sstream>
+#include <string>
+#include <unordered_map>
 
 GEMMSTONE_NAMESPACE_START
 
@@ -115,7 +117,7 @@ CacheSettingsLSC getCaching(char l1, char l2, char l3) {
         }
     }
 
-    throw std::runtime_error("Unknown cache setting");
+    stub("Unknown cache setting");
 }
 
 CacheSettingsLSC getCachingEntry(std::stringstream &s, HW hw)
@@ -124,8 +126,7 @@ CacheSettingsLSC getCachingEntry(std::stringstream &s, HW hw)
         char l1, l2, l3;
         s >> l1 >> l2 >> l3;
         return getCaching(l1, l2, l3);
-    } else
-    {
+    } else {
         char l1, l3;
         s >> l1 >> l3;
         return getCaching(l1, l3);
@@ -170,21 +171,26 @@ static void getTiling(std::stringstream &s, MatrixAddressingStrategy &astrategy)
     }
 }
 
+struct ParserContext {
+    ParserContext(GEMMStrategy &strategy, const GEMMProblem &problem, HW hw, std::stringstream &s)
+        : strategy(strategy), problem(problem), hw(hw), s(s) {}
+    GEMMStrategy &strategy;
+    const GEMMProblem &problem;
+    HW hw;
+    std::stringstream &s;
+    bool overrideFusedLoop = false;
+    bool gotSR = false;
+};
+
 void parseStrategy(const std::string &str, HW hw, const GEMMProblem &problem, GEMMStrategy &strategy)
 {
     std::stringstream s(str);
     s.imbue(std::locale::classic());
 
-    bool overrideFusedLoop = false;
-    bool gotSR = false;
-
     char eat, asA, asB, asC, accessA, accessB, accessC;
     char accessAUnaligned = '\0', accessBUnaligned = '\0';
     char accessAPrefetch = 's', accessBPrefetch = 's', accessCPrefetch = 's';
     char accessABPrefetchL3 = 'b';
-
-    auto A64 = AddressBase::createA64(true);
-    auto BTS = AddressBase::createBTS(0);
 
     s >> std::ws >> asA >> accessA;
         if (s.peek() == '/') s >> eat >> accessAUnaligned;
@@ -246,6 +252,9 @@ void parseStrategy(const std::string &str, HW hw, const GEMMProblem &problem, GE
         getCaching(s, hw, strategy.C_prefetch);
     }
 
+    auto A64 = AddressBase::createA64(true);
+    auto BTS = AddressBase::createBTS(0);
+
     if (!accessAUnaligned) accessAUnaligned = downgradeBlock2D(accessA);
     if (!accessBUnaligned) accessBUnaligned = downgradeBlock2D(accessB);
 
@@ -299,211 +308,208 @@ void parseStrategy(const std::string &str, HW hw, const GEMMProblem &problem, GE
     strategy.checkAdd32 = !native64Bit(hw) || (hw == HW::XeHPC);
     strategy.altCRemainder |= (strategy.C.accessType == AccessType::Block) || strategy.kParallel;
 
+    // These parsers are for basic flags, with no attached parametrization. For parameters with
+    // associated values (e.g. grf256), use a basic if/else if chain afterward
+    using BasicParameterParser = void(*)(ParserContext&);
+    using BasicParser = std::unordered_map<std::string, BasicParameterParser>;
+    static const BasicParser parser {
+        /* Allocation Settings */
+        {"cs", [](ParserContext& ctx) { ctx.strategy.registerScheme = GEMMStrategy::CSeparate; }},
+        {"acb", [](ParserContext& ctx) { ctx.strategy.registerScheme = GEMMStrategy::ACB; }},
+        {"bca", [](ParserContext& ctx) { ctx.strategy.registerScheme = GEMMStrategy::BCA; }},
+        {"vnc", [](ParserContext& ctx) { ctx.strategy.registerScheme = GEMMStrategy::VNC; }},
+        {"int", [](ParserContext& ctx) { ctx.strategy.registerScheme = GEMMStrategy::ABInterleave; }},
+        {"nse", [](ParserContext& ctx) { ctx.strategy.registerScheme = GEMMStrategy::NSeparate; }},
+        {"vav", [](ParserContext& ctx) { ctx.strategy.registerScheme = GEMMStrategy::VAvoid; }},
+        
+        /* Dispatch Settings */
+        {"mnk", [](ParserContext& ctx) {
+            ctx.strategy.loopOrder[0] = LoopM;
+            ctx.strategy.loopOrder[1] = LoopN;
+            ctx.strategy.loopOrder[2] = LoopK;
+        }},
+        {"nmk", [](ParserContext& ctx) {
+            ctx.strategy.loopOrder[0] = LoopN;
+            ctx.strategy.loopOrder[1] = LoopM;
+            ctx.strategy.loopOrder[2] = LoopK;
+        }},
+        {"bo", [](ParserContext& ctx) { ctx.strategy.cWalkOrder = WalkOrder::Boustrophedon; }},
+        {"hi", [](ParserContext& ctx) { ctx.strategy.cWalkOrder = WalkOrder::Hilbertlike; }},
+        {"nl", [](ParserContext& ctx) { ctx.strategy.cWalkOrder = WalkOrder::NestedLinear; }},
+        {"li", [](ParserContext& ctx) { ctx.strategy.cWalkOrder = WalkOrder::SimpleLinear; }},
+        {"pt", [](ParserContext& ctx) { ctx.strategy.persistent = true; }},
+        {"fm", [](ParserContext& ctx) {
+            ctx.strategy.fusedLoop = LoopM;
+            ctx.overrideFusedLoop = true;
+        }},
+        {"fn", [](ParserContext& ctx) {
+            ctx.strategy.fusedLoop = LoopN;
+            ctx.overrideFusedLoop = true;
+        }},
+        {"rm", [](ParserContext& ctx) { ctx.strategy.reverse[LoopM] = true; }},
+        {"rn", [](ParserContext& ctx) { ctx.strategy.reverse[LoopN] = true; }},
+        {"ym", [](ParserContext& ctx) { ctx.strategy.scramble[LoopM] = true; }},
+        {"yn", [](ParserContext& ctx) { ctx.strategy.scramble[LoopN] = true; }},
+        
+        /* K-Parallelism Settings */
+        {"kr", [](ParserContext& ctx) { ctx.strategy.kParallelLocal = true; }},
+        {"akr", [](ParserContext& ctx) { ctx.strategy.kParallelLocal = ctx.strategy.shrinkWGK = true; }},
+        {"ikr", [](ParserContext& ctx) { ctx.strategy.kParallelLocal = ctx.strategy.kInterleave = true; }},
+        {"fb", [](ParserContext& ctx) { ctx.strategy.fuseBeta = true; }},
+        {"afb", [](ParserContext& ctx) { ctx.strategy.fuseBeta = ctx.strategy.altFusedBeta = true; }},
+        {"fp", [](ParserContext& ctx) { ctx.strategy.fusePostOps = true; }},
+        {"zt", [](ParserContext& ctx) { ctx.strategy.zeroTempC = true; }},
+        {"rx", [](ParserContext& ctx) { ctx.strategy.relaxedAccumulation = true; }},
+        {"kb", [](ParserContext& ctx) {
+            auto &strategy = ctx.strategy;
+            strategy.kParallel = true;
+            strategy.C.atomic = true;
+            strategy.CO.atomic = ctx.problem.sumA || ctx.problem.sumB;
+            if (strategy.CO.atomic)
+                strategy.CO.base = AddressBase::createA64(true);
+        }},
+        {"kv", [](ParserContext& ctx) {
+            auto &strategy = ctx.strategy;
+            strategy.kParallelVariable = true;
+            strategy.fuseBeta = true;
+            strategy.fusePostOps = true;
+            strategy.C.atomic = true;
+            strategy.CO.atomic = ctx.problem.sumA || ctx.problem.sumB;
+            if (strategy.CO.atomic)
+                strategy.CO.base = AddressBase::createA64(true);
+        }},
+
+        /* Systolic Settings */
+        {"sys", [](ParserContext& ctx) { ctx.strategy.systolic = true; }},
+        {"fs", [](ParserContext& ctx) {
+            ctx.strategy.fixedSystolic = ctx.strategy.systolic = true;
+            ctx.strategy.CO.base = AddressBase::createBTS(0);
+        }},
+        {"sc", [](ParserContext& ctx) { ctx.strategy.splitCopy = true; }},
+        {"dw", [](ParserContext& ctx) { ctx.strategy.dpasw = true; }},
+        {"af", [](ParserContext& ctx) { ctx.strategy.atomicFMA = true; }},
+        {"xaf", [](ParserContext& ctx) { ctx.strategy.atomicFMA = ctx.strategy.extendedAtomicFMA = true; }},
+        {"fx", [](ParserContext& ctx) { ctx.strategy.fmaBoustrophedon = true; }},
+
+        // Thread Cooperation Settings
+        {"sm", [](ParserContext& ctx) { ctx.strategy.coopA = CoopSplit::MN; }},
+        {"sn", [](ParserContext& ctx) { ctx.strategy.coopB = CoopSplit::MN; }},
+        {"ska", [](ParserContext& ctx) { ctx.strategy.coopA = CoopSplit::FullK; }},
+        {"skb", [](ParserContext& ctx) { ctx.strategy.coopB = CoopSplit::FullK; }},
+
+        /* Miscellaneous Settings */
+        {"ch", [](ParserContext& ctx) { ctx.strategy.checkAdd32 = true; }},
+        {"nch", [](ParserContext& ctx) { ctx.strategy.checkAdd32 = false; }},
+        {"cc", [](ParserContext& ctx) { ctx.strategy.forceCopyC = true; }},
+        {"sf", [](ParserContext& ctx) { ctx.strategy.strictFence = true; }},
+        {"ws", [](ParserContext& ctx) { ctx.strategy.wgInSS = true; }},
+        {"wc", [](ParserContext& ctx) { ctx.strategy.C.smode = ScatterSIMD::Wide; }},
+        {"njs", [](ParserContext& ctx) { ctx.strategy.jointSplit = false; }},
+        {"up", [](ParserContext& ctx) { ctx.strategy.panelCheck = true; }},
+        {"ek", [](ParserContext& ctx) { ctx.strategy.slmEarlyKMask = true; }},
+        {"di", [](ParserContext& ctx) { ctx.strategy.delayABInc = true; }},
+        {"nq", [](ParserContext& ctx) {
+            auto &strategy = ctx.strategy;
+            strategy.A.noExtraPad = strategy.A_prefetch.noExtraPad = true;
+            strategy.B.noExtraPad = strategy.B_prefetch.noExtraPad = true;
+            strategy.C.noExtraPad = strategy.C_prefetch.noExtraPad = true;
+            strategy.CO.noExtraPad = true;
+        }},
+
+        /* Remainder Handling */
+        {"ar", [](ParserContext& ctx) { ctx.strategy.altCRemainder = true; }},
+        {"sr", [](ParserContext& ctx) {
+            ctx.strategy.altCRemainder = false;
+            ctx.gotSR = true;
+        }},
+        {"br", [](ParserContext& ctx) { ctx.strategy.block2DCRemainder = true; }},
+        {"bf", [](ParserContext& ctx) { ctx.strategy.block2DCFull = ctx.strategy.block2DCRemainder = true; }},
+
+        /* Load and Compute */
+        {"ac", [](ParserContext& ctx) { ctx.strategy.cAccumulators = true; }},
+        {"el", [](ParserContext& ctx) { ctx.strategy.cLoadAhead = true; }},
+        {"ba", [](ParserContext& ctx) { ctx.strategy.loadBFirst = true; }},
+        {"st", [](ParserContext& ctx) { ctx.strategy.stallAfterLoad = true; }},
+        {"dm", [](ParserContext& ctx) { ctx.strategy.doubleMasking = true; }},
+        {"kd", [](ParserContext& ctx) { ctx.strategy.kDescRem = true; }},
+        {"dsl", [](ParserContext& ctx) { ctx.strategy.isDSLGenerator = true; }},
+
+        /* SLM Settings */
+        {"ni", [](ParserContext& ctx) { ctx.strategy.slmUseIncrCopy = false; }},
+        {"ta", [](ParserContext& ctx) { ctx.strategy.slmATrans = true; }},
+        {"tb", [](ParserContext& ctx) { ctx.strategy.slmBTrans = true; }},
+
+        /* Padding Settings */
+        {"np", [](ParserContext& ctx) {
+            ctx.strategy.A.padded = ctx.strategy.A_prefetch.padded = false;
+            ctx.strategy.B.padded = ctx.strategy.B_prefetch.padded = false;
+        }},
+        {"pab", [](ParserContext& ctx) {
+            ctx.strategy.A.padded = ctx.strategy.A_prefetch.padded = true;
+            ctx.strategy.B.padded = ctx.strategy.B_prefetch.padded = true;
+        }},
+        {"pc", [](ParserContext& ctx) { ctx.strategy.C.padded = ctx.strategy.C_prefetch.padded = true; }},
+
+        /* Atomic Settings */
+        {"au", [](ParserContext& ctx) { ctx.strategy.C.atomic = ctx.strategy.CO.atomic = true; }},
+        {"nau", [](ParserContext& ctx) { ctx.strategy.C.atomic = ctx.strategy.CO.atomic = ctx.strategy.autoatomic = false; }},
+
+        /* Workgroup Settings */
+        {"ff", [](ParserContext& ctx) { ctx.strategy.forceWGUpdate = WGFixed; }},
+        {"ffk", [](ParserContext& ctx) { ctx.strategy.forceFixedWGK = true; }},
+        {"wg", [](ParserContext& ctx) {
+            char x;
+            ctx.s >> ctx.strategy.wg[LoopM];
+            ctx.s >> x;
+            ctx.s >> ctx.strategy.wg[LoopN];
+            ctx.strategy.wg[LoopK] = 0;
+            if (ctx.s.peek() == 'x')
+                ctx.s >> x >> ctx.strategy.wg[LoopK];
+        }},
+        {"nb", [](ParserContext& ctx) {
+            char x;
+            ctx.s >> ctx.strategy.namedBarriers[LoopM];
+            ctx.s >> std::ws >> x;
+            ctx.s >> ctx.strategy.namedBarriers[LoopN];
+        }},
+        {"fg", [](ParserContext& ctx) {
+            float fillGoal;
+            ctx.s >> fillGoal;
+            ctx.strategy.fillGoal = int(fillGoal * 16);
+        }},
+
+        /* Thread Arbitration */
+        {"of", [](ParserContext& ctx) { ctx.strategy.arbitrationMode = ThreadArbitrationMode::OldestFirst; }},
+        {"rr", [](ParserContext& ctx) { ctx.strategy.arbitrationMode = ThreadArbitrationMode::RoundRobin; }},
+        {"rrs", [](ParserContext& ctx) { ctx.strategy.arbitrationMode = ThreadArbitrationMode::RoundRobinOnStall; }},
+
+        /* Alignment and Warmup */
+        {"l2d", [](ParserContext& ctx) { ctx.strategy.optAlignAB2D = true; }},
+        {"wt", [](ParserContext& ctx) { ctx.strategy.tlbWarmup = true; }},
+    };
+
+    ParserContext ctx{strategy, problem, hw, s};
+
     while (!s.eof()) {
         std::string mod;
         s >> mod;
-        if (mod == "cs")
-            strategy.registerScheme = GEMMStrategy::CSeparate;
-        else if (mod == "acb")
-            strategy.registerScheme = GEMMStrategy::ACB;
-        else if (mod == "bca")
-            strategy.registerScheme = GEMMStrategy::BCA;
-        else if (mod == "vnc")
-            strategy.registerScheme = GEMMStrategy::VNC;
-        else if (mod == "int")
-            strategy.registerScheme = GEMMStrategy::ABInterleave;
-        else if (mod == "nse")
-            strategy.registerScheme = GEMMStrategy::NSeparate;
-        else if (mod == "vav")
-            strategy.registerScheme = GEMMStrategy::VAvoid;
-        else if (mod.substr(0, 3) == "grf") {
+
+        // Check the dispatch table first
+        auto it = parser.find(mod);
+        if (it != parser.end()) {
+            it->second(ctx);
+            continue;
+        }
+
+        if (mod.substr(0, 3) == "grf") {
             mod.erase(0,3);
             strategy.GRFs = std::stoi(mod);
-        } else if (mod == "dsl")
-            strategy.isDSLGenerator = true;
-         else if (mod.substr(0, 3) == "dot") {
+        } else if (mod.substr(0, 3) == "dot") {
             mod.erase(0,3);
             strategy.dotVL = mod.empty() ? 1 : std::stoi(mod);
         } else if (mod.substr(0, 3) == "cti") {
             mod.erase(0,3);
             strategy.cInterleaveChunk = mod.empty() ? 64 / problem.Tc_ext : std::stoi(mod);
-        } else if (mod == "sys")
-            strategy.systolic = true;
-        else if (mod == "dw")
-            strategy.dpasw = true;
-        else if (mod == "fs") {
-            strategy.fixedSystolic = strategy.systolic = true;
-            strategy.CO.base = BTS;
-        } else if (mod == "ar")
-            strategy.altCRemainder = true;
-        else if (mod == "sr") {
-            strategy.altCRemainder = false;
-            gotSR = true;
-        } else if (mod == "br")
-            strategy.block2DCRemainder = true;
-        else if (mod == "bf")
-            strategy.block2DCFull = strategy.block2DCRemainder = true;
-        else if (mod == "ac")
-            strategy.cAccumulators = true;
-        else if (mod == "el")
-            strategy.cLoadAhead = true;
-        else if (mod == "di")
-            strategy.delayABInc = true;
-        else if (mod == "ba")
-            strategy.loadBFirst = true;
-        else if (mod == "dm")
-            strategy.doubleMasking = true;
-        else if (mod == "kd")
-            strategy.kDescRem = true;
-        else if (mod == "sc")
-            strategy.splitCopy = true;
-        else if (mod == "sm")
-            strategy.coopA = CoopSplit::MN;
-        else if (mod == "ska")
-            strategy.coopA = CoopSplit::FullK;
-        else if (mod == "sn")
-            strategy.coopB = CoopSplit::MN;
-        else if (mod == "skb")
-            strategy.coopB = CoopSplit::FullK;
-        else if (mod == "ni")
-            strategy.slmUseIncrCopy = false;
-        else if (mod == "ek")
-            strategy.slmEarlyKMask = true;
-        else if (mod == "sf")
-            strategy.strictFence = true;
-        else if (mod == "ta")
-            strategy.slmATrans = true;
-        else if (mod == "tb")
-            strategy.slmBTrans = true;
-        else if (mod == "af")
-            strategy.atomicFMA = true;
-        else if (mod == "xaf")
-            strategy.atomicFMA = strategy.extendedAtomicFMA = true;
-        else if (mod == "st")
-            strategy.stallAfterLoad = true;
-        else if (mod == "fx")
-            strategy.fmaBoustrophedon = true;
-        else if (mod == "ch")
-            strategy.checkAdd32 = true;
-        else if (mod == "nch")
-            strategy.checkAdd32 = false;
-        else if (mod == "ws")
-            strategy.wgInSS = true;
-        else if (mod == "wc")
-            strategy.C.smode = ScatterSIMD::Wide;
-        else if (mod == "cc")
-            strategy.forceCopyC = true;
-        else if (mod == "njs")
-            strategy.jointSplit = false;
-        else if (mod == "np") {
-            strategy.A.padded = strategy.A_prefetch.padded = false;
-            strategy.B.padded = strategy.B_prefetch.padded = false;
-        } else if (mod == "pab") {
-            strategy.A.padded = strategy.A_prefetch.padded = true;
-            strategy.B.padded = strategy.B_prefetch.padded = true;
-        } else if (mod == "pc")
-            strategy.C.padded = strategy.C_prefetch.padded = true;
-        else if (mod == "up")
-            strategy.panelCheck = true;
-        else if (mod == "mnk") {
-            strategy.loopOrder[0] = LoopM;
-            strategy.loopOrder[1] = LoopN;
-            strategy.loopOrder[2] = LoopK;
-        } else if (mod == "nmk") {
-            strategy.loopOrder[0] = LoopN;
-            strategy.loopOrder[1] = LoopM;
-            strategy.loopOrder[2] = LoopK;
-        } else if (mod == "fm") {
-            strategy.fusedLoop = LoopM;
-            overrideFusedLoop = true;
-        } else if (mod == "fn") {
-            strategy.fusedLoop = LoopN;
-            overrideFusedLoop = true;
-        } else if (mod == "rm")
-            strategy.reverse[LoopM] = true;
-        else if (mod == "rn")
-            strategy.reverse[LoopN] = true;
-        else if (mod == "ym")
-            strategy.scramble[LoopM] = true;
-        else if (mod == "yn")
-            strategy.scramble[LoopN] = true;
-        else if (mod == "wt")
-            strategy.tlbWarmup = true;
-        else if (mod == "kb" || mod == "kv") {
-            if (mod == "kb") strategy.kParallel = true;
-            if (mod == "kv") {
-                strategy.kParallelVariable = true;
-                strategy.fuseBeta = true;
-                strategy.fusePostOps = true;
-            }
-            strategy.C.atomic = true;
-            strategy.CO.atomic = problem.sumA || problem.sumB;
-            if (strategy.CO.atomic)
-                strategy.CO.base = A64;
-        } else if (mod == "kr")
-            strategy.kParallelLocal = true;
-        else if (mod == "akr")
-            strategy.kParallelLocal = strategy.shrinkWGK = true;
-        else if (mod == "ikr")
-            strategy.kParallelLocal = strategy.kInterleave = true;
-        else if (mod == "fb")
-            strategy.fuseBeta = true;
-        else if (mod == "afb")
-            strategy.fuseBeta = strategy.altFusedBeta = true;
-        else if (mod == "fp")
-            strategy.fusePostOps = true;
-        else if (mod == "zt")
-            strategy.zeroTempC = true;
-        else if (mod == "rx")
-            strategy.relaxedAccumulation = true;
-        else if (mod == "fg") {
-            float fillGoal;
-            s >> fillGoal;
-            strategy.fillGoal = int(fillGoal * 16);
-        } else if (mod == "au")
-            strategy.C.atomic = strategy.CO.atomic = true;
-        else if (mod == "nau")
-            strategy.C.atomic = strategy.CO.atomic = strategy.autoatomic = false;
-        else if (mod == "ff")
-            strategy.forceWGUpdate = WGFixed;
-        else if (mod == "ffk")
-            strategy.forceFixedWGK = true;
-        else if (mod == "wg") {
-            char x;
-            s >> strategy.wg[LoopM];
-            s >> x;
-            s >> strategy.wg[LoopN];
-            strategy.wg[LoopK] = 0;
-            if (s.peek() == 'x')
-                s >> x >> strategy.wg[LoopK];
-        } else if (mod == "nb") {
-            char x;
-            s >> strategy.namedBarriers[LoopM];
-            s >> std::ws >> x;
-            s >> strategy.namedBarriers[LoopN];
-        } else if (mod == "bo")
-            strategy.cWalkOrder = WalkOrder::Boustrophedon;
-        else if (mod == "hi")
-            strategy.cWalkOrder = WalkOrder::Hilbertlike;
-        else if (mod == "li")
-            strategy.cWalkOrder = WalkOrder::SimpleLinear;
-        else if (mod == "nl")
-            strategy.cWalkOrder = WalkOrder::NestedLinear;
-        else if (mod == "pt")
-            strategy.persistent = true;
-        else if (mod == "of")
-            strategy.arbitrationMode = ThreadArbitrationMode::OldestFirst;
-        else if (mod == "rr")
-            strategy.arbitrationMode = ThreadArbitrationMode::RoundRobin;
-        else if (mod == "rrs")
-            strategy.arbitrationMode = ThreadArbitrationMode::RoundRobinOnStall;
-        else if (mod == "l2d")
-            strategy.optAlignAB2D = true;
-        else if (mod == "nq") {
-            strategy.A.noExtraPad = strategy.A_prefetch.noExtraPad = true;
-            strategy.B.noExtraPad = strategy.B_prefetch.noExtraPad = true;
-            strategy.C.noExtraPad = strategy.C_prefetch.noExtraPad = true;
-            strategy.CO.noExtraPad = true;
         } else if (mod.length() >= 2) {
             if (mod.substr(0, 2) == "ms")
                 strategy.mSplitThresh = stoi(mod.substr(2));
@@ -596,7 +602,7 @@ void parseStrategy(const std::string &str, HW hw, const GEMMProblem &problem, GE
             stub("Unknown strategy modifier.");
     }
 
-    if (!overrideFusedLoop) {
+    if (!ctx.overrideFusedLoop) {
         if (strategy.fused) {
             if (strategy.wg[LoopM] == 1)
                 strategy.fusedLoop = LoopN;
@@ -611,7 +617,7 @@ void parseStrategy(const std::string &str, HW hw, const GEMMProblem &problem, GE
     if (strategy.ka_pfStride == 0) strategy.ka_pfStride = strategy.ka_prefetch;
     if (strategy.kb_pfStride == 0) strategy.kb_pfStride = strategy.kb_prefetch;
 
-    if (strategy.block2DCRemainder && !gotSR) strategy.altCRemainder = true;
+    if (strategy.block2DCRemainder && !ctx.gotSR) strategy.altCRemainder = true;
 
     if (strategy.persistentLoop() && !strategy.linearOrder()) strategy.cWalkOrder = WalkOrder::SimpleLinear;
 
@@ -725,21 +731,21 @@ const char *parseLayout(const char *s, MatrixAddressing &atype)
     }
 
     if (isdigit(*s))
-        atype.crosspack = strtol(s, (char **) &s, 10);
+        atype.crosspack = (uint8_t)strtol(s, (char **) &s, 10);
     if (*s == '#') {
         s++;
-        atype.tileR = strtol(s, (char **) &s, 10);
+        atype.tileR = (uint16_t)strtol(s, (char **) &s, 10);
         if (*s != ',') throw std::runtime_error("Bad tiling syntax; expected #<rows>,<columns>.");
         s++;
-        atype.tileC = strtol(s, (char **) &s, 10);
+        atype.tileC = (uint16_t)strtol(s, (char **) &s, 10);
     }
     if (*s == '%') {
         s++;
-        atype.packSize = strtol(s, (char **) &s, 10);
+        atype.packSize = (uint32_t)strtol(s, (char **) &s, 10);
     }
     if (*s == '@') {
         s++;
-        atype.alignment = strtol(s, (char **) &s, 10);
+        atype.alignment = (uint8_t)strtol(s, (char **) &s, 10);
     }
 
     return s;
@@ -1118,8 +1124,7 @@ void unparseCaching(HW hw, std::ostream &s, const MatrixAddressingStrategy &astr
                 default:                                s << "???"; break;
             }
         }
-    } else
-    {
+    } else {
         switch (cachingR) {
             case CacheSettingsLSC::Default:   s << "dd"; break;
             case CacheSettingsLSC::L1UC_L3UC: s << "uu"; break;

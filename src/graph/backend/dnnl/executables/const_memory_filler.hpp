@@ -105,6 +105,8 @@ struct const_memory_filler_t : public op_executable_t {
     }
 #endif
 
+    bool is_initialized() const override { return true; }
+
 private:
     std::vector<target_dt> get_attr_data(
             const std::vector<attr_dt> &orig_data, std::true_type) {
@@ -112,7 +114,11 @@ private:
     }
     std::vector<target_dt> get_attr_data(
             const std::vector<attr_dt> &orig_data, std::false_type) {
-        return std::vector<target_dt>(orig_data.begin(), orig_data.end());
+        std::vector<target_dt> result;
+        result.reserve(orig_data.size());
+        for (const auto &v : orig_data)
+            result.push_back(static_cast<target_dt>(v));
+        return result;
     }
 
     const engine::kind dflt_eng_kind = engine::kind::cpu;

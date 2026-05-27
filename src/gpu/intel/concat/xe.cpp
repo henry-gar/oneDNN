@@ -43,9 +43,10 @@ std::pair<int, int> xe_t::pd_t::calculate_iter_dim_idx_chunk(
     }
     const int iter_dim_idx = max_dim_idx;
     const dim_t all_elems = utils::array_product(dst_dims, conf.ndims);
-    const dim_t max_iter_dim_chunk = 1024;
+    const int max_iter_dim_chunk = 1024;
     const int min_threads = num_threads * 4;
-    dim_t iter_dim_chunk = std::min(dst_dims[iter_dim_idx], max_iter_dim_chunk);
+    int iter_dim_chunk = static_cast<int>(
+            std::min<dim_t>(dst_dims[iter_dim_idx], max_iter_dim_chunk));
     const auto get_num_threads = [&]() {
         return utils::div_up(all_elems, iter_dim_chunk * conf.sub_group_size);
     };
@@ -123,7 +124,7 @@ status_t xe_t::pd_t::init_conf(impl::engine_t *engine) {
     conf.concat_axis = pd->concat_dim();
 
     dim_t max_elems = dst_mdw.nelems();
-    int concat_axis_end = 0;
+    dim_t concat_axis_end = 0;
     conf.scales_mask = 0;
     for (int i = 0; i < conf.n; ++i) {
         const memory_desc_wrapper src_mdw(pd->src_md(i));
@@ -170,16 +171,14 @@ status_t xe_t::pd_t::init_conf(impl::engine_t *engine) {
 
 static status_t init_kernel_ctx_common(
         compute::kernel_ctx_t &kernel_ctx, const conf_t &conf) {
-    constexpr bool with_punning = false;
-
     for (int i = 0; i < conf.n; ++i) {
         kernel_ctx.define_int(utils::format("SRC%d_END", i), conf.offset[i]);
         def_memory_desc_info(kernel_ctx, conf.src_md_infos[i],
-                utils::format("SRC%d", i).c_str(), with_punning);
+                utils::format("SRC%d", i).c_str());
     }
-    def_memory_desc_info(kernel_ctx, conf.dst_md_info, "DST", with_punning);
+    def_memory_desc_info(kernel_ctx, conf.dst_md_info, "DST");
 
-    kernel_ctx.set_data_type(conf.src_type, with_punning);
+    kernel_ctx.set_data_type(conf.src_type);
     kernel_ctx.require_stateless_addressing(conf.require_stateless_addressing);
 
     kernel_ctx.define_int("NDIMS", conf.ndims);

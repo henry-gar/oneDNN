@@ -85,7 +85,7 @@ struct ref_fwd_t : public primitive_t {
 
         const auto *desc = pd()->desc();
 
-        kernel_ctx.set_data_type(desc->src_desc.data_type, false);
+        kernel_ctx.set_data_type(desc->src_desc.data_type);
         kernel_ctx.register_buffer_size(*pd()->src_md());
         kernel_ctx.require_stateless_addressing(pd()->has_large_buffers());
 
@@ -116,7 +116,9 @@ struct ref_fwd_t : public primitive_t {
         kernel_ctx.define_int("IW", pd()->W());
 
         const dim_t round_norm_size = desc->local_size;
-        dim_t num_elements = pow(round_norm_size, nstl::max(0, ndims - 2));
+        dim_t num_elements = 1;
+        for (int i = 0; i < ndims - 2; ++i)
+            num_elements *= round_norm_size;
         if (desc->alg_kind == lrn_across_channels) {
             num_elements = round_norm_size;
         }
@@ -209,7 +211,7 @@ struct ref_bwd_t : public primitive_t {
 
         const auto *desc = pd()->desc();
 
-        kernel_ctx.set_data_type(desc->src_desc.data_type, false);
+        kernel_ctx.set_data_type(desc->src_desc.data_type);
         kernel_ctx.register_buffer_size(*pd()->src_md());
         kernel_ctx.require_stateless_addressing(pd()->has_large_buffers());
 
@@ -237,7 +239,9 @@ struct ref_bwd_t : public primitive_t {
         kernel_ctx.define_int("IW", pd()->W());
 
         const dim_t round_norm_size = desc->local_size;
-        dim_t num_elements = pow(round_norm_size, nstl::max(0, ndims - 2));
+        dim_t num_elements = 1;
+        for (int i = 0; i < ndims - 2; ++i)
+            num_elements *= round_norm_size;
         if (desc->alg_kind == lrn_across_channels) {
             num_elements = round_norm_size;
         }

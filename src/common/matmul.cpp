@@ -174,7 +174,38 @@ status_t grouped_matmul_attr_check(
             attr->has_default_values(allowed_mask, desc.dst_desc.data_type),
             VERBOSE_UNSUPPORTED_ATTR);
 
-    // Specific checks are happening in impls for now
+    // Post-ops: only eltwise and binary_mul are supported
+    const memory_desc_wrapper dst_d(&desc.dst_desc);
+    const auto &po = attr->post_ops_;
+    for (int i = 0; i < po.len(); ++i) {
+        const auto &e = po.entry_[i];
+        VCHECK_MATMUL_UNIMPL(
+                e.is_eltwise() || e.is_binary(), VERBOSE_UNSUPPORTED_POSTOP);
+
+        if (e.is_binary()) {
+            VCHECK_MATMUL_UNIMPL(e.binary.alg == alg_kind::binary_mul,
+                    VERBOSE_UNSUPPORTED_POSTOP);
+            const memory_desc_wrapper src1_d(e.binary.src1_desc);
+
+            if (src1_d.is_grouped_desc()) {
+                // Validate grouped binary post-op descriptor:
+                // group_count and variable_dim_idx must match dst
+                const auto &bin_g = src1_d.sparse_desc().grouped_desc;
+                const auto &dst_g = dst_d.sparse_desc().grouped_desc;
+                VCHECK_MATMUL_UNIMPL(bin_g.group_count == dst_g.group_count
+                                && bin_g.variable_dim_idx
+                                        == dst_g.variable_dim_idx,
+                        VERBOSE_INCONSISTENT_MDS, "binary post-op", "dst");
+            } else if (!src1_d.format_any()) {
+                // Dense binary post-op:
+                // only support N == 1 (scalar/per-row) or ab layout
+                const dim_t bin_N = src1_d.dims()[src1_d.ndims() - 1];
+                VCHECK_MATMUL_UNIMPL(
+                        bin_N == 1 || src1_d.matches_one_of_tag(format_tag::ab),
+                        VERBOSE_UNSUPPORTED_TENSOR_LAYOUT, "binary post-op");
+            }
+        }
+    }
 
     return status::success;
 }
@@ -369,7 +400,7 @@ status_t matmul_attr_check(const matmul_desc_t &desc, const engine_t *engine,
     if (!attr->zero_points_.has_default_values()) {
         const auto &zp = attr->zero_points_;
 
-        dim_t src_zero_point_group_k = 1;
+        dim_t src_zp_group_k = 1;
         if (!zp.has_default_values(DNNL_ARG_SRC)) {
             const int mask_src = zp.get_mask(DNNL_ARG_SRC);
 
@@ -379,19 +410,19 @@ status_t matmul_attr_check(const matmul_desc_t &desc, const engine_t *engine,
 
             if (!zp.get(DNNL_ARG_SRC).has_default_groups()) {
                 if (mask_src & src_qmask_K)
-                    src_zero_point_group_k = zp.get_group(DNNL_ARG_SRC, 1);
+                    src_zp_group_k = zp.get_group(DNNL_ARG_SRC, 1);
             }
 
             // Due to hardware specifics, groups, when more than 1, should be
             // multiple of 32.
-            VCHECK_MATMUL_UNIMPL(IMPLICATION(src_zero_point_group_k > 1
-                                                 && src_zero_point_group_k < K,
-                                         src_zero_point_group_k % 32 == 0),
+            VCHECK_MATMUL_UNIMPL(
+                    IMPLICATION(src_zp_group_k > 1 && src_zp_group_k < K,
+                            src_zp_group_k % 32 == 0),
                     VERBOSE_UNSUPPORTED_ZP_CFG);
         }
 
-        dim_t wei_zero_point_group_k = 1;
-        dim_t wei_zero_point_group_n = 1;
+        dim_t wei_zp_group_k = 1;
+        dim_t wei_zp_group_n = 1;
         if (!zp.has_default_values(DNNL_ARG_WEIGHTS)) {
             const int mask_wei = zp.get_mask(DNNL_ARG_WEIGHTS);
 
@@ -399,38 +430,36 @@ status_t matmul_attr_check(const matmul_desc_t &desc, const engine_t *engine,
 
             if (!zp.get(DNNL_ARG_WEIGHTS).has_default_groups()) {
                 if (mask_wei & wei_qmask_K)
-                    wei_zero_point_group_k = zp.get_group(DNNL_ARG_WEIGHTS, 0);
+                    wei_zp_group_k = zp.get_group(DNNL_ARG_WEIGHTS, 0);
                 if (mask_wei & wei_qmask_N)
-                    wei_zero_point_group_n = zp.get_group(DNNL_ARG_WEIGHTS, 1);
+                    wei_zp_group_n = zp.get_group(DNNL_ARG_WEIGHTS, 1);
             }
 
             // Groups per N are solely for weights decompression as it's
             // impossible to get performant kernel for a single `k` element in
             // chain for regular quantized case.
-            VCHECK_MATMUL_UNIMPL(IMPLICATION(wei_zero_point_group_n > 1,
+            VCHECK_MATMUL_UNIMPL(IMPLICATION(wei_zp_group_n > 1,
                                          attr->fpmath_.apply_to_int_),
                     VERBOSE_UNSUPPORTED_ZP_CFG);
 
             // Due to hardware specifics, groups, when more than 1, should be
             // multiple of 16.
-            VCHECK_MATMUL_UNIMPL(IMPLICATION(wei_zero_point_group_k > 1
-                                                 && wei_zero_point_group_k < K,
-                                         wei_zero_point_group_k % 16 == 0),
+            VCHECK_MATMUL_UNIMPL(
+                    IMPLICATION(wei_zp_group_k > 1 && wei_zp_group_k < K,
+                            wei_zp_group_k % 16 == 0),
                     VERBOSE_UNSUPPORTED_ZP_CFG);
-            VCHECK_MATMUL_UNIMPL(IMPLICATION(wei_zero_point_group_n > 1
-                                                 && wei_zero_point_group_n < N,
-                                         wei_zero_point_group_n % 16 == 0),
+            VCHECK_MATMUL_UNIMPL(
+                    IMPLICATION(wei_zp_group_n > 1 && wei_zp_group_n < N,
+                            wei_zp_group_n % 16 == 0),
                     VERBOSE_UNSUPPORTED_ZP_CFG);
 
             if (utils::one_of(zp.get_data_type(DNNL_ARG_WEIGHTS), data_type::s4,
                         data_type::u4)) {
-                dim_t k = desc.weights_desc.dims[ndims_wei - 2];
-                dim_t n = desc.weights_desc.dims[ndims_wei - 1];
                 VCHECK_MATMUL_UNIMPL(
-                        IMPLICATION(mask_wei & wei_qmask_K, k % 2 == 0),
+                        IMPLICATION(mask_wei & wei_qmask_K, K % 2 == 0),
                         VERBOSE_UNSUPPORTED_ZP_CFG);
                 VCHECK_MATMUL_UNIMPL(
-                        IMPLICATION(mask_wei & wei_qmask_N, n % 2 == 0),
+                        IMPLICATION(mask_wei & wei_qmask_N, N % 2 == 0),
                         VERBOSE_UNSUPPORTED_ZP_CFG);
             }
         }
@@ -446,9 +475,9 @@ status_t matmul_attr_check(const matmul_desc_t &desc, const engine_t *engine,
         // Check dependency between zero_points.
         // Source zero_points groups are supported for int8 source and must
         // divide or be divided by weights groups when both are greater than 1.
-        const bool groups_are_divisible = quant_groups_are_divisible(
-                src_zero_point_group_k, wei_zero_point_group_k);
-        VCHECK_MATMUL_UNIMPL(IMPLICATION(src_zero_point_group_k > 1,
+        const bool groups_are_divisible
+                = quant_groups_are_divisible(src_zp_group_k, wei_zp_group_k);
+        VCHECK_MATMUL_UNIMPL(IMPLICATION(src_zp_group_k > 1,
                                      src_is_int8 && groups_are_divisible),
                 VERBOSE_UNSUPPORTED_ZP_CFG);
     }
@@ -479,21 +508,40 @@ status_t matmul_attr_check(const matmul_desc_t &desc, const engine_t *engine,
                     pr_dt == data_type::s32, VERBOSE_UNSUPPORTED_PR_CFG);
 
             if (!pr.get(DNNL_ARG_SRC).has_default_groups()) {
+                const auto &sc = attr->scales_;
                 const dim_t src_pr_group_k = pr.get_group(DNNL_ARG_SRC, 1);
 
-                dim_t wei_zero_point_group_k = 1;
+                // Pre-computed reductions can only be used when the PR group
+                // size is the minimal amongst all group sizes along the K
+                // dimension from a mathematical point of view.
+                dim_t minimal_group = INT64_MAX;
+                dim_t wei_zp_group_k = 1;
                 if (!zp.get(DNNL_ARG_WEIGHTS).has_default_groups()) {
-                    const int mask_wei = zp.get_mask(DNNL_ARG_WEIGHTS);
-                    if (mask_wei & wei_qmask_K)
-                        wei_zero_point_group_k
-                                = zp.get_group(DNNL_ARG_WEIGHTS, 0);
+                    wei_zp_group_k = zp.get_group(DNNL_ARG_WEIGHTS, -2);
+                    minimal_group = std::min(minimal_group, wei_zp_group_k);
+                }
+                if (!zp.get(DNNL_ARG_SRC).has_default_groups()) {
+                    auto src_zp_group_k = zp.get_group(DNNL_ARG_SRC, -1);
+                    minimal_group = std::min(minimal_group, src_zp_group_k);
+                }
+                if (!sc.get(DNNL_ARG_WEIGHTS).has_default_groups()) {
+                    auto wei_sc_group_k = sc.get_group(DNNL_ARG_WEIGHTS, -2);
+                    minimal_group = std::min(minimal_group, wei_sc_group_k);
+                }
+                if (!sc.get(DNNL_ARG_SRC).has_default_groups()) {
+                    auto src_sc_group_k = sc.get_group(DNNL_ARG_SRC, -1);
+                    minimal_group = std::min(minimal_group, src_sc_group_k);
                 }
 
                 const bool groups_are_divisible = quant_groups_are_divisible(
-                        src_pr_group_k, wei_zero_point_group_k);
-                VCHECK_MATMUL_UNIMPL(
-                        IMPLICATION(src_pr_group_k > 1,
-                                src_is_int8 && groups_are_divisible),
+                        src_pr_group_k, wei_zp_group_k);
+                VCHECK_MATMUL(IMPLICATION(src_pr_group_k > 1, src_is_int8),
+                        VERBOSE_UNSUPPORTED_PR_CFG);
+                VCHECK_MATMUL(
+                        IMPLICATION(src_pr_group_k > 1, groups_are_divisible),
+                        VERBOSE_UNSUPPORTED_PR_CFG);
+                VCHECK_MATMUL(IMPLICATION(src_pr_group_k > 1,
+                                      src_pr_group_k <= minimal_group),
                         VERBOSE_UNSUPPORTED_PR_CFG);
             }
         }
@@ -609,6 +657,9 @@ status_t matmul_desc_init(matmul_desc_t *matmul_desc,
 
         int n_unit_strides = 0;
         for (int d = 0; d < ndims; d++) {
+            // This check restricts N=1 cases for subbyte types:
+            // `--wtag=abc 6x975x2080:6x2080x1` will return invalid_args.
+            // TODO: remove the check and verify the library.
             if (wei_strides[d] == 1) {
                 n_unit_strides++;
                 VCHECK_MATMUL(

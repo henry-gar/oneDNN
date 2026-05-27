@@ -32,6 +32,7 @@
 #include "opdesc.hpp"
 #include "sdpa_types.hpp"
 #include "utils.hpp"
+#include "verbose.hpp"
 
 namespace dnnl {
 namespace impl {
@@ -1102,22 +1103,22 @@ inline memory_desc_t cvt_sparse_packed2blocked(
 }
 
 /** returns true if strides are compatible with memory_desc_t */
-inline bool memory_desc_strides_check(
+inline status_t memory_desc_strides_check(
         const memory_desc_t &md, const dims_t strides) {
     if (strides == nullptr || md.ndims == 0
             || md.format_kind != format_kind::blocked)
-        return true;
+        return status::success;
 
     dims_t blocks = {0};
     int perm[DNNL_MAX_NDIMS] = {0};
     for (int d = 0; d < md.ndims; ++d) {
         // no strides check needed for empty tensor
-        if (md.padded_dims[d] == 0) return true;
+        if (md.padded_dims[d] == 0) return status::success;
 
         // no strides verification for runtime dims
         const bool has_runtime_dim
                 = any_runtime_value(strides[d], md.padded_dims[d]);
-        if (has_runtime_dim) return true;
+        if (has_runtime_dim) return status::success;
 
         perm[d] = d;
         blocks[d] = 1;
@@ -1159,10 +1160,22 @@ inline bool memory_desc_strides_check(
         if ((strides[d] == 0) || (md.padded_dims[d] == 1))
             continue;
         else if (strides[d] < min_stride)
-            return false;
+            VCONDCHECK(common, create, check, memory, false,
+                    status::invalid_arguments, VERBOSE_INTEGRAL_OVERFLOW_DIM,
+                    "strides", d);
 
         // update min_stride for next iteration
         const auto padded_dim = md.padded_dims[d];
+
+        const dim_t blocks_ratio = padded_dim / blocks[d];
+        VCONDCHECK(common, create, check, memory,
+                IMPLICATION(
+                        strides[d] > 0 && block_size > 0 && blocks_ratio > 0,
+                        strides[d] <= std::numeric_limits<dim_t>::max()
+                                        / (block_size * blocks_ratio)),
+                status::invalid_arguments, VERBOSE_INTEGRAL_OVERFLOW_DIM,
+                "strides", d);
+
         min_stride = block_size * strides[d] * (padded_dim / blocks[d]);
         if (max_stride <= strides[d]) {
             max_stride = strides[d];
@@ -1177,11 +1190,15 @@ inline bool memory_desc_strides_check(
         size_t dim_val = static_cast<size_t>(
                 md.padded_dims[max_stride_d] / blocks[max_stride_d]);
         dim_val = dim_val == (size_t)max_stride ? 1 : dim_val;
-        if (dim_val > SIZE_MAX / max_stride) return false;
-        if (dt_size && ((dim_val * max_stride) > SIZE_MAX / dt_size))
-            return false;
+        VCONDCHECK(common, create, check, memory,
+                (dim_val <= SIZE_MAX / max_stride), status::invalid_arguments,
+                VERBOSE_INTEGRAL_OVERFLOW_DIM, "padded_dims", max_stride_d);
+        VCONDCHECK(common, create, check, memory,
+                (dt_size && ((dim_val * max_stride) <= SIZE_MAX / dt_size)),
+                status::invalid_arguments, VERBOSE_INTEGRAL_OVERFLOW_DIM,
+                "padded_dims", max_stride_d);
     }
-    return true;
+    return status::success;
 }
 
 inline status_t memory_desc_init_by_strides(
@@ -1199,8 +1216,7 @@ inline status_t memory_desc_init_by_tag(
     CHECK(memory_desc_init_by_tag(
             md_tmp, md.ndims, md.dims, md.data_type, tag));
 
-    if (strides != nullptr && !memory_desc_strides_check(md_tmp, strides))
-        return status::invalid_arguments;
+    CHECK(memory_desc_strides_check(md_tmp, strides));
 
     if (is_sparse) {
         if (md.format_desc.sparse_desc.encoding != sparse_encoding::packed
@@ -1345,50 +1361,6 @@ format_tag_t memory_desc_matches_one_of_tag(
     }
     return format_tag::undef;
 }
-
-inline bool memory_desc_sanity_check(int ndims, const dims_t dims,
-        data_type_t data_type, format_kind_t format_kind) {
-    using namespace data_type;
-
-    if (ndims == 0) return true;
-
-    bool ok = dims != nullptr && 0 < ndims && ndims <= DNNL_MAX_NDIMS
-            && utils::one_of(data_type, f4_e3m0, f4_e2m1, e8m0, f8_e5m2,
-                    f8_e4m3, f16, bf16, f32, f64, s64, s32, s8, u8, s4, u4);
-    if (!ok) return false;
-
-    // A bounds check on the dimensions ensures that the tensor size
-    // computation does not trigger a overflow during memory creation.
-    dim_t prod = 1;
-    for (int d = 0; d < ndims; ++d) {
-        if (dims[d] != DNNL_RUNTIME_DIM_VAL) {
-            if (dims[d] < 0) return false;
-            if (dims[d] > 0) {
-                if (prod > std::numeric_limits<dim_t>::max() / dims[d])
-                    return false;
-                prod *= dims[d];
-            }
-        }
-    }
-
-    bool has_runtime_dims = false;
-    for (int d = 0; d < ndims; ++d) {
-        if (is_runtime_value(dims[d])) has_runtime_dims = true;
-    }
-
-    if (has_runtime_dims) {
-        // format `any` is currently not supported for run-time dims
-        if (format_kind == format_kind::any) return false;
-    }
-
-    return true;
-}
-
-inline bool memory_desc_sanity_check(const memory_desc_t &md) {
-    return memory_desc_sanity_check(
-            md.ndims, md.dims, md.data_type, format_kind::undef);
-}
-
 template <typename... Args>
 inline bool any_memory_desc_host_scalar(const memory_desc_t *md, Args... mds) {
     if (md != nullptr && md->format_kind == format_kind::host_scalar)

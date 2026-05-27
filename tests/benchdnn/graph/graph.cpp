@@ -25,6 +25,7 @@
 #include "dnnl_common.hpp"
 #include "graph.hpp"
 #include "ref_partition.hpp"
+#include "utils/parser.hpp"
 #include "utils/stream_kind.hpp"
 
 namespace {
@@ -343,6 +344,16 @@ namespace graph {
 
 using namespace dnnl::graph;
 
+prb_t::prb_t(const deserialized_graph_t &dg, const size_t &expected_n_partition)
+    : dg(dg), expected_n_partition(expected_n_partition) {
+
+    const auto &fpmath = dg.get_fpmath_mode();
+    fpmath_mode.mode_ = fpmath.first;
+    if (!fpmath.second.empty()) {
+        fpmath_mode.apply_to_int_ = parser::parsers::str2bool(fpmath.second);
+    }
+}
+
 std::string case_to_str(const std::string &json_file,
         const std::map<size_t, std::string> &in_shapes,
         const std::map<size_t, std::string> &op_attrs,
@@ -441,7 +452,7 @@ int skip_unimplemented_ops(const dnnl::graph::partition &partition,
             BENCHDNN_PRINT(
                     2, "[INFO]: Unimplemented op: %s.\n", dg_op_kind.c_str());
             res->state = SKIPPED;
-            res->reason = skip_reason::case_not_supported;
+            res->reason = reason_t::skip_not_supported;
             return OK;
         }
 
@@ -455,7 +466,7 @@ int skip_unimplemented_ops(const dnnl::graph::partition &partition,
                 BENCHDNN_PRINT(2, "[INFO]: Unimplemented op on GPU: %s.\n",
                         dg_op_kind.c_str());
                 res->state = SKIPPED;
-                res->reason = skip_reason::case_not_supported;
+                res->reason = reason_t::skip_not_supported;
                 return OK;
             }
         }
@@ -480,7 +491,7 @@ int skip_unimplemented_accumulation_mode(
                         "[INFO]: Unimplemented accumulation mode: %s.\n",
                         acc_mode.c_str());
                 res->state = SKIPPED;
-                res->reason = skip_reason::case_not_supported;
+                res->reason = reason_t::skip_not_supported;
                 return OK;
             }
         }
@@ -561,19 +572,6 @@ int skip_unimplemented_partitions(const std::vector<partition> &partitions,
         skip_unimplemented_data_type(in_out_dt, dir, res);
         if (res->state == SKIPPED) return OK;
 
-            // TODO: Temporarily skip all f16 graph tests for the RV64 backend.
-            // This patch avoids UNIMPLEMENTED, FAIL errors, as f16 is not yet implemented
-            // for most RV64 primitives (conv, matmul, etc.).
-            // This block can be removed as f16 primitives are progressively implemented.
-#if defined(DNNL_RV64) && DNNL_RV64
-        for (auto dt : in_out_dt) {
-            if (dt == dnnl_f16) {
-                res->state = SKIPPED;
-                return OK;
-            }
-        }
-#endif
-
         BENCHDNN_PRINT(3, "[INFO]: partition #%zd is unsupported!\n", i);
         return res->state = UNIMPLEMENTED, FAIL;
     }
@@ -596,7 +594,7 @@ int skip_unimplemented_memory_kind(res_t *res) {
         BENCHDNN_PRINT(2, "%s\n",
                 "[INFO]: only USM memory is supported by graph driver");
         res->state = SKIPPED;
-        res->reason = skip_reason::case_not_supported;
+        res->reason = reason_t::skip_not_supported;
     }
 
     return OK;

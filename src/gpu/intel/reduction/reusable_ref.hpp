@@ -52,7 +52,7 @@ struct ref_key_params_t : trivially_serializable_t<ref_key_params_t> {
 
     alg_kind_t alg;
     data_type_t src_dt, dst_dt;
-    int32_t threads_per_eu;
+    int32_t grf_per_thread;
 
     compute::dispatch_compile_params_t params;
 };
@@ -99,7 +99,7 @@ struct reusable_ref_t : public primitive_t {
         status_t init_conf(impl::engine_t *engine);
         void init_scratchpad();
 
-        int div = 0;
+        dim_t div = 0;
         std::vector<ref_conf_t> phases;
     };
 

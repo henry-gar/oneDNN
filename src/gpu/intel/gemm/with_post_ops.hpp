@@ -66,11 +66,11 @@ struct with_post_ops_t : public primitive_t {
         auto ret_status = create_nested_primitive(prim_, pd()->pd_, engine);
         CHECK(ret_status);
         primitive_attr_t attr;
-        int threads_per_eu = 0;
+        int grf_per_thread = 0;
         if (status::success
-                == pd()->pd_->query(query::preferred_gpu_threads_per_eu, 0,
-                        &threads_per_eu)) {
-            CHECK(attr.set_gpu_attr(gpu_primitive_attr_t(threads_per_eu)));
+                == pd()->pd_->query(query::preferred_gpu_grf_per_thread, 0,
+                        &grf_per_thread)) {
+            CHECK(attr.set_gpu_attr(gpu_primitive_attr_t(grf_per_thread)));
         }
         compute::kernel_ctx_t kernel_ctx(&attr);
         CHECK(pd()->init_kernel_ctx(kernel_ctx));
@@ -82,12 +82,12 @@ struct with_post_ops_t : public primitive_t {
             dnnl_memory_desc dst_md(*(pd()->dst_md(0)));
             dst_md.data_type = pd()->dst_type_;
             memory_desc_wrapper dst_d(dst_md);
-            def_memory_desc_info(alt_ctx, src_info, "SRC", false);
+            def_memory_desc_info(alt_ctx, src_info, "SRC");
             def_memory_desc_info(
-                    alt_ctx, memory_desc_info_t::create(dst_d), "DST", false);
+                    alt_ctx, memory_desc_info_t::create(dst_d), "DST");
             def_data_type(alt_ctx,
                     pd()->attr()->scales_.get_data_type(DNNL_ARG_DST),
-                    "DST_SCALES", false);
+                    "DST_SCALES");
             const int ndims = dst_d.ndims();
             bool runtime_dims
                     = pd()->has_runtime_dims_or_strides() || ndims > 5;

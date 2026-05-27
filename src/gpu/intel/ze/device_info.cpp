@@ -94,15 +94,16 @@ status_t device_info_t::init_attributes(impl::engine_t *engine) {
     auto *ze_engine = utils::downcast<const gpu::intel::ze::engine_t *>(engine);
     auto device = ze_engine->device();
 
+    ze_eu_count_ext_t eu_count_ext = {};
+    eu_count_ext.stype = ZE_STRUCTURE_TYPE_EU_COUNT_EXT;
+
     ze_device_properties_t device_properties = {};
     device_properties.stype = ZE_STRUCTURE_TYPE_DEVICE_PROPERTIES;
+    device_properties.pNext = &eu_count_ext;
 
     CHECK(xpu::ze::zeDeviceGetProperties(device, &device_properties));
 
-    // Note: for some reason `numTotalEUs` query is not used.
-    eu_count_ = device_properties.numSlices
-            * device_properties.numSubslicesPerSlice
-            * device_properties.numEUsPerSubslice;
+    eu_count_ = eu_count_ext.numTotalEUs;
 
     ze_device_compute_properties_t device_compute_properties = {};
     device_compute_properties.stype
@@ -131,6 +132,11 @@ status_t device_info_t::init_attributes(impl::engine_t *engine) {
             break;
         }
     }
+
+    ze_device_module_properties_t device_module_props = {};
+    device_module_props.stype = ZE_STRUCTURE_TYPE_DEVICE_MODULE_PROPERTIES;
+    CHECK(xpu::ze::zeDeviceGetModuleProperties(device, &device_module_props));
+    max_kernel_param_size_ = device_module_props.maxArgumentsSize;
 
     ze_device_memory_access_properties_t device_memory_access_properties = {};
     device_memory_access_properties.stype

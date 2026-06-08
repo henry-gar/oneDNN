@@ -149,7 +149,7 @@ struct brgemm_convolution_fwd_t : public primitive_t {
             }
             if (!zp.has_default_values(DNNL_ARG_DST)) {
                 int mask_dst = zp.get_mask(DNNL_ARG_DST);
-                const bool ok = mask_dst == 0;
+                const bool ok = utils::one_of(mask_dst, 0, (1 << 1));
                 if (!ok) return false;
             }
 

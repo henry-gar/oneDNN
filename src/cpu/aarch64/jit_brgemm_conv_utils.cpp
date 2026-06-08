@@ -1587,8 +1587,12 @@ void brg_blocking_t::calc_blocks_1x1() {
 }
 
 brgemm_broadcast_t get_zp_type(const primitive_attr_t &attr, int arg) {
-    return attr.zero_points_.has_default_values(arg)
-            ? brgemm_broadcast_t::none
+    if (attr.zero_points_.has_default_values(arg))
+        return brgemm_broadcast_t::none;
+
+    const auto mask = attr.zero_points_.get_mask(arg);
+    return arg == DNNL_ARG_DST && mask == (1 << 1)
+            ? brgemm_broadcast_t::per_n
             : brgemm_broadcast_t::per_tensor;
 }
 status_t init_jcp(jit_brgemm_conv_conf_t &jcp, cpu_isa_t isa,
@@ -1777,7 +1781,8 @@ status_t init_jcp(jit_brgemm_conv_conf_t &jcp, cpu_isa_t isa,
             VERBOSE_UNSUPPORTED_ZP_CFG);
 
     VDISPATCH_CONV_IC(
-            IMPLICATION(jcp.dst_zero_point, zp.get_mask(DNNL_ARG_DST) == 0),
+            IMPLICATION(jcp.dst_zero_point,
+                    utils::one_of(zp.get_mask(DNNL_ARG_DST), 0, (1 << 1))),
             VERBOSE_UNSUPPORTED_ZP_CFG);
 
     jcp.nthr = nthreads;

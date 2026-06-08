@@ -1362,12 +1362,17 @@ void brgemm_convolution_fwd_t<isa>::perform_outwork(
 
     brgemm_kernel_post_ops_t p;
     if (do_postwork) {
+        const auto dst_zp_vals = jcp.dst_zero_point
+                        && _pd->attr()->zero_points_.get_mask(DNNL_ARG_DST)
+                                == (1 << 1)
+                ? btc.dst_zp_vals + g_oc
+                : btc.dst_zp_vals;
         p.ptr_bias = (void *)(bias_w);
         p.ptr_scales = (void *)(&btc.oscales[jcp.is_oc_scale * g_oc]);
         p.ptr_binary_post_ops_rhs
                 = btc.brgemm_ctx.post_ops_binary_rhs_arg_vec.data();
         p.dst_orig = btc.brgemm_ctx.dst;
-        p.c_zp_values = btc.dst_zp_vals;
+        p.c_zp_values = dst_zp_vals;
         p.a_comp_val = btc.src_zp_val;
         p.ptr_dst_scales = (void *)btc.dst_scales;
     }
@@ -1443,6 +1448,11 @@ inline void brgemm_convolution_fwd_t<isa>::call_brgemm_kernel(
     const auto ptrB = btc.brg_batch[0].ptr.B;
 
     if (maybe_do_postops) {
+        const auto dst_zp_vals = jcp.dst_zero_point
+                        && _pd->attr()->zero_points_.get_mask(DNNL_ARG_DST)
+                                == (1 << 1)
+                ? btc.dst_zp_vals + g_oc
+                : btc.dst_zp_vals;
         const auto src_zp_ptr = jcp.src_zero_point
                 ? &btc.src_zp_comp_ptr[comp_ker_offs]
                 : nullptr;
@@ -1454,7 +1464,7 @@ inline void brgemm_convolution_fwd_t<isa>::call_brgemm_kernel(
                 &btc.oscales[jcp.is_oc_scale * g_oc],
                 btc.brgemm_ctx.post_ops_binary_rhs_arg_vec.data(),
                 static_cast<size_t>(g_oc), 0, btc.brgemm_ctx.dst, 0,
-                static_cast<void *>(src_zp_ptr), nullptr, btc.dst_zp_vals,
+                static_cast<void *>(src_zp_ptr), nullptr, dst_zp_vals,
                 false, btc.src_zp_val, do_only_comp, do_only_pass_comp,
                 btc.dst_scales};
 

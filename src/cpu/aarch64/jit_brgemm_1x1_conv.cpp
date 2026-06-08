@@ -390,13 +390,18 @@ void brgemm_1x1_convolution_fwd_t<isa>::exec_ker(
 
         const auto brg_ker = brg_kernels_[brg_idx];
         if (do_postops) {
+            const auto dst_zp_vals = jcp.dst_zero_point
+                            && pd()->attr()->zero_points_.get_mask(DNNL_ARG_DST)
+                                    == (1 << 1)
+                    ? dst_zero_points + g_oc
+                    : dst_zero_points;
             const brgemm_post_ops_data_t post_ops_data {
                     static_cast<const void *>(bias_w),
                     &oscales[jcp.is_oc_scale * g_oc],
                     post_ops_binary_rhs_arg_vec.data(),
                     static_cast<size_t>(g_oc), 0, dst, 0,
                     static_cast<void *>(src_zp_comp_ptr), nullptr,
-                    dst_zero_points, false, src_zp_vals, false, false,
+                    dst_zp_vals, false, src_zp_vals, false, false,
                     dst_scales};
 
             void *scratch = static_cast<void *>(s8s8_comp_ptr);

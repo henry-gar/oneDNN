@@ -62,7 +62,7 @@ status_t brgemm_1x1_convolution_fwd_t<isa>::pd_t::init(engine_t *engine) {
             && expect_data_types(src_type, wei_type, data_type::undef, dst_type,
                     data_type::undef)
             && IMPLICATION(is_int8,
-                    one_of(dst_type, u8, bf16, f32)
+                    one_of(dst_type, s8, u8, bf16, f32)
                             && one_of(bias_md_.data_type, data_type::undef, f32,
                                     s32, s8, u8))
             && IMPLICATION(!is_int8,

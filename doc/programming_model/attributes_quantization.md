@@ -9,7 +9,7 @@ both signed and unsigned, enabling reduced-precision inference on
 supported hardware.
 
 Similarly, some primitives support
-[Open Compute Project (OCP) 8-bit Floating Point (f8) data types][f8-spec]
+[Open Compute Project (OCP) 8-bit Floating Point (OFP8) data types][f8-spec]
 designed to accelerate AI workloads, including training and inference
 of large neural networks. Lowering precision to 8 bits with `f8` enables faster
 computation and reduced memory usage.
@@ -107,7 +107,7 @@ data types (e.g., `int8` to `int16` or `int32`), when those conversions do not
 impact accuracy.
 
 During execution, primitives implementations avoid integer overflows
-and maintain integer accuracy by using wider data types (e.g., `int32`)
+and maintain integer accuracy by using wider data types (e.g., `s32`)
 for intermediate values and accumulators.
 
 Results are then converted as
@@ -549,7 +549,7 @@ See examples:
 
 ## Quantization Workflows Examples
 
-### Breakdown of Convolution with INT8 Quantization
+### Breakdown of Convolution with int8 Quantization
 
 Consider a convolution with bias. The tensors are represented as:
 
@@ -558,7 +558,7 @@ Consider a convolution with bias. The tensors are represented as:
 - \f$\dst_{f32}[:] = scale_{\dst} \cdot (\dst_{int8}[:] - zp_{\dst})\f$
 
 Here the \f$\src_{f32}, \weights_{f32}, \dst_{f32}\f$ are not
-computed at all, the whole work happens with int8 tensors. So the task
+computed at all, the whole work happens with `int8` tensors. So the task
 is to compute the \f$\dst_{int8}\f$ tensor, using the \f$\src_{int8}\f$,
 \f$\weights_{int8}\f$ tensors passed at execution time, as well as the
 corresponding quantization parameters \f$scale_{\src}\f$, \f$scale_{\weights}\f$,
@@ -577,7 +577,7 @@ Mathematically, the computations are:
 where
 
 - \f$\operatorname{conv}_{s32}\f$ is just a regular convolution which takes source and
-  weights with int8 data type and compute the result in int32 data type (int32
+  weights with `int8` data type and compute the result in `s32` data type (`s32`
   is chosen to avoid overflows during the computations);
 
 - \f$comp_{s32}\f$ is a compensation term to account for
@@ -586,10 +586,10 @@ where
   during weights reorder.
 
 - \f$\operatorname{f32\_to\_s8}()\f$ converts an `f32` value to `s8` with
-  potential saturation if the values are out of the range of the int8 data
+  potential saturation if the values are out of the range of the `int8` data
   type.
 
-- \f$\operatorname{s32\_to\_f32}()\f$ converts an `int8` value to
+- \f$\operatorname{s32\_to\_f32}()\f$ converts an `s32` value to
   `f32` with potential rounding. This conversion is typically
   necessary to apply `f32` scaling factors.
 
@@ -680,7 +680,7 @@ oneDNN provides reorders that can perform per-channel scaling:
 #### Convolution with Per-output-channel Quantization
 
 Building upon the weights preparation shown above, this section shows
-the complete workflow for an int8 convolution that combines per-output-channel
+the complete workflow for an `int8` convolution that combines per-output-channel
 weight scaling with global source and destination scaling.
 
 ~~~cpp

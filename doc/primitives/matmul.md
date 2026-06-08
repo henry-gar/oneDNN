@@ -113,7 +113,7 @@ types for source, destination, weights, and bias tensors:
 | u8, s8              | u8, s8, u4, s4                         | u8, s8, s32, f32, f16, bf16         | u8, s8, s32, f32, f16, bf16 |
 
 Footnotes:
-1. f4_e3m0 is deprecated, and will be removed in a future release.
+1. `f4_e3m0` is deprecated, and will be removed in a future release.
 
 ### Data Representation
 
@@ -179,11 +179,11 @@ run-time attributes in use.
    - Supports up to 6 dimensions.
    - Source zero point mask of `0` is only supported.
    - Sum post-op doesn't support data types other than destination data type.
-   - Bias of bf16 data type is supported for configurations with bf16 source data
-     type and weights bf16 data type, and up to three-dimensional matrices.
-   - Optimized implementations for fp8 data type are available only on Intel(R)
+   - Bias of `bf16` data type is supported for configurations with `bf16` source data
+     type and weights `bf16` data type, and up to three-dimensional matrices.
+   - Optimized implementations for `f8` data type are available only on Intel(R)
      Data Center GPU Max Series and Intel(R) Xe2 Graphics.
-   - Configuration with int8 source data type, s8 weight data type and bf16
+   - Configuration with `s8`/`u8` source data type, `s8` weight data type and `bf16`
      destination data type doesn't support:
      * Destination zero point.
      * Runtime dimensions.
@@ -192,7 +192,7 @@ run-time attributes in use.
 
 
 3. **CPU**
-   - Configurations with int8 source data type, s8 weight data type and f16
+   - Configurations with `s8`/`u8` source data type, `s8` weight data type and `f16`
      destination data type aren't supported.
    - Configurations with floating point source data type, integer weights data
      type and floating point destination data type are not optimized.
@@ -488,8 +488,13 @@ The following are supported:
   - Weight Scales: column-wise (`mask = (1 << 0) | (1 << 2)`) and
     K-grouped (`mask = (1 << 0) | (1 << 1) | (1 << 2)`) with group specification
     are supported.
-  - Scale data type includes: `f32`, `bf16`, `f16`, `e8m0` for MXFP8 and MXFP4,
-    `f8_e4m3` for NVFP4 block scales.
+  - Scales are not supported when the corresponding tensor data type is
+    `f32`, `bf16`, or `f16`. Scale data type depends on tensor data type:
+
+    | Tensor data type           | Scale data type           |
+    |:---------------------------|:--------------------------|
+    | f8_e5m2, f8_e4m3, f4_e2m1  | f32, e8m0, f8_e4m3        |
+    | u8, s8, s4, u4             | f32, bf16, f16            |
 - Zero points attribute for source and weights tensors:
   - The masks must match the scales mask
   - Source zero points data types include `u8`, `s8`

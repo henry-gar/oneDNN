@@ -21,6 +21,9 @@
 #if DNNL_X64
 #include "cpu/x64/jit_uni_reduction.hpp"
 using namespace dnnl::impl::cpu::x64;
+#elif DNNL_AARCH64
+#include "cpu/aarch64/jit_uni_reduction.hpp"
+using namespace dnnl::impl::cpu::aarch64;
 #endif
 
 namespace dnnl {
@@ -33,6 +36,7 @@ using namespace dnnl::impl::data_type;
 // clang-format off
 constexpr impl_list_item_t impl_list[] = REG_REDUCTION_P({
     CPU_INSTANCE_X64(jit_uni_reduction_t)
+    CPU_INSTANCE_AARCH64(jit_uni_reduction_t)
     CPU_INSTANCE(ref_reduction_t)
     /* eol */
     nullptr,

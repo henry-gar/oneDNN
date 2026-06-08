@@ -151,10 +151,19 @@ struct jit_uni_kernel_t : public jit_uni_eltwise_kernel_t {
             // Convert F16 to F32, apply eltwise op, then convert back to F16:
             // - upcast F16 to F32 using fcvt
             // - compute eltwise alg in F32
+            // - for backward, multiply by F16 diff_dst upcasted to F32
             // - downcast F32 back to F16 using fcvt, and pack result
             unpack_fp16(vmm_src, tmp0);
             eltwise_injector_->compute_vector_range(
                     {vmm_src.getIdx(), tmp0.getIdx()});
+            if (!is_fwd) {
+                load_vector(vmm_diff_dst_f16.s, reg_diff_dst);
+                unpack_fp16(vmm_diff_dst_f16, vmm_diff_dst_f16_tmp);
+                fmul(TRegS(vmm_src.getIdx()), TRegS(vmm_src.getIdx()),
+                        TRegS(vmm_diff_dst_f16.getIdx()));
+                fmul(TRegS(tmp0.getIdx()), TRegS(tmp0.getIdx()),
+                        TRegS(vmm_diff_dst_f16_tmp.getIdx()));
+            }
             pack_fp16(vmm_src, tmp0);
         } else { // F32
             eltwise_injector_->compute_vector(vmm_src.getIdx());
@@ -196,6 +205,12 @@ struct jit_uni_kernel_t : public jit_uni_eltwise_kernel_t {
             ld1(v_f16[0], ptr(reg_src));
             unpack_fp16(vmm_src, tmp0);
             eltwise_injector_->compute_vector(vmm_src.getIdx());
+            if (!is_fwd) {
+                ld1(v_f16_diff_dst[0], ptr(reg_diff_dst));
+                unpack_fp16(vmm_diff_dst_f16, vmm_diff_dst_f16_tmp);
+                fmul(TRegS(vmm_src.getIdx()), TRegS(vmm_src.getIdx()),
+                        TRegS(vmm_diff_dst_f16.getIdx()));
+            }
             pack_fp16(vmm_src, tmp0);
         } else {
             ld1(xmm_src[0], ptr(reg_src));
@@ -248,6 +263,9 @@ private:
     TReg vmm_src {1};
     VReg4S xmm_diff_dst {2};
     TRegS vmm_diff_dst {2};
+    VReg8H v_f16_diff_dst {3};
+    TReg vmm_diff_dst_f16 {3};
+    TReg vmm_diff_dst_f16_tmp {4};
     TReg tmp0 {2};
     TReg tmp1 {7};
     std::unique_ptr<jit_uni_eltwise_injector_t<isa>> eltwise_injector_;
@@ -511,8 +529,12 @@ status_t jit_uni_eltwise_bwd_t<isa>::pd_t::init(engine_t *engine) {
             utils::everyone_is(data_md()->data_type, diff_src_md()->data_type,
                     diff_dst_md()->data_type),
             VERBOSE_INCONSISTENT_DT, data_tensor_name, "diff_src");
-    VDISPATCH_ELTWISE(((use_dst() ? dst_md()->data_type : src_md()->data_type)
-                              == data_type::f32),
+    const data_type_t data_dt
+            = use_dst() ? dst_md()->data_type : src_md()->data_type;
+    const bool is_f16_relu_bwd
+            = isa == sve && data_dt == data_type::f16 && !use_dst()
+            && desc_.alg_kind == eltwise_relu && desc_.alpha == 0.0f;
+    VDISPATCH_ELTWISE((data_dt == data_type::f32 || is_f16_relu_bwd),
             VERBOSE_UNSUPPORTED_DT);
     VDISPATCH_ELTWISE(
             !has_zero_dim_memory(), VERBOSE_EMPTY_TENSOR, data_tensor_name);
